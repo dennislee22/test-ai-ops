@@ -70,8 +70,12 @@ CRITICAL OVERRIDE: If the user mentions "database", "db", "sql", "tables", "acce
 **Services / endpoints / load balancer**:
 → get_service_status
 
-**Ingress / routing rules**:
+**Ingress / routing rules / "which pod hosts hostname X" / "which namespace serves domain Y"**:
 → get_ingress_status
+→ ALWAYS default namespace to "all" — ingresses live in app namespaces, NEVER in "default".
+→ When user gives a hostname/FQDN (e.g. "console-cdp.apps.dlee155.cldr.example"), pass it as name= — the tool searches all namespaces automatically.
+→ Example: get_ingress_status(name="console-cdp.apps.dlee155.cldr.example")
+→ The tool returns the ingress name, namespace, backend service, and path — that tells you which pod/namespace serves the hostname.
 
 **Namespaces** ("list namespaces", "how many namespaces"):
 → get_namespace_status — now includes pod count per namespace.

@@ -735,21 +735,91 @@ def get_service_status(namespace: str = "all") -> str:
         return f"K8s API error: {e.reason}"
 
 
+
 def get_ingress_status(namespace: str = "all", name: str = "") -> str:
     """
-    List ingresses in a namespace, or return full YAML-style detail for a
-    specific ingress when name is provided.
+    List ingresses in a namespace, or find an ingress by hostname (FQDN) or exact name.
+    When name contains dots it is treated as a hostname and ALL namespaces are searched.
+    When namespace is "all" and name is an exact ingress name, all namespaces are searched.
     """
+    def _fmt(ing) -> str:
+        cls   = ing.spec.ingress_class_name or "default"
+        hosts = [rule.host or "*" for rule in (ing.spec.rules or [])]
+        lb    = [
+            addr.ip or addr.hostname
+            for status in (ing.status.load_balancer.ingress or [])
+            for addr in [status] if status
+        ] if ing.status.load_balancer else []
+        ann   = ing.metadata.annotations or {}
+        out = [
+            f"Ingress: {ing.metadata.namespace}/{ing.metadata.name}",
+            f"  Class:     {cls}",
+            f"  Hosts:     {', '.join(hosts) or 'none'}",
+            f"  LB IP:     {', '.join(lb) or 'pending'}",
+        ]
+        if ann:
+            out.append("  Annotations:")
+            for k, v in ann.items():
+                out.append(f"    {k}: {v}")
+        for rule in (ing.spec.rules or []):
+            if rule.http:
+                out.append(f"  Rules ({rule.host or '*'}):")
+                for path in (rule.http.paths or []):
+                    svc = path.backend.service
+                    out.append(
+                        f"    {path.path or '/'} -> "
+                        f"{svc.name}:{svc.port.number or svc.port.name}"
+                        f"  [{path.path_type}]")
+        tls = ing.spec.tls or []
+        if tls:
+            out.append("  TLS:")
+            for t in tls:
+                out.append(f"    secret:{t.secret_name} hosts:{t.hosts}")
+        return "\n".join(out)
+
     try:
-        # ── Single ingress detail ─────────────────────────────────────────────
         if name:
-            ns = namespace if namespace != "all" else "default"
-            try:
-                ing = _net.read_namespaced_ingress(name=name, namespace=ns)
-            except ApiException as e:
-                if e.status == 404:
-                    return f"Ingress '{name}' not found in namespace '{ns}'."
-                raise
+            all_ings = _net.list_ingress_for_all_namespaces()
+
+            # ── Hostname search (name contains dots → treat as FQDN) ──────────
+            if "." in name:
+                host_lower = name.lower()
+                matches = []
+                for ing in all_ings.items:
+                    for rule in (ing.spec.rules or []):
+                        if rule.host and rule.host.lower() == host_lower:
+                            matches.append(ing)
+                            break
+                if not matches:
+                    return (
+                        f"No ingress found with hostname '{name}' in any namespace. "
+                        f"Use get_ingress_status(namespace='all') to list all ingresses."
+                    )
+                return "\n\n".join(_fmt(ing) for ing in matches)
+
+            # ── Exact ingress name search ─────────────────────────────────────
+            if namespace != "all":
+                try:
+                    ing = _net.read_namespaced_ingress(name=name, namespace=namespace)
+                    return _fmt(ing)
+                except ApiException as e:
+                    if e.status == 404:
+                        return f"Ingress '{name}' not found in namespace '{namespace}'."
+                    raise
+            else:
+                matches = [i for i in all_ings.items if i.metadata.name == name]
+                if not matches:
+                    return f"Ingress '{name}' not found in any namespace."
+                return "\n\n".join(_fmt(ing) for ing in matches)
+
+        # ── List ingresses ────────────────────────────────────────────────────
+        ings = (_net.list_ingress_for_all_namespaces()
+                if namespace == "all"
+                else _net.list_namespaced_ingress(namespace=namespace))
+        if not ings.items:
+            return f"No Ingresses in '{namespace}'."
+        out = [f"Ingresses in '{namespace}':"]
+        for ing in ings.items:
             cls   = ing.spec.ingress_class_name or "default"
             hosts = [rule.host or "*" for rule in (ing.spec.rules or [])]
             lb    = [
@@ -757,53 +827,10 @@ def get_ingress_status(namespace: str = "all", name: str = "") -> str:
                 for status in (ing.status.load_balancer.ingress or [])
                 for addr in [status] if status
             ] if ing.status.load_balancer else []
-            ann   = ing.metadata.annotations or {}
-            lines = [
-                f"Ingress: {ing.metadata.namespace}/{ing.metadata.name}",
-                f"  Class:     {cls}",
-                f"  Hosts:     {', '.join(hosts) or 'none'}",
-                f"  LB IP:     {', '.join(lb) or 'pending'}",
-            ]
-            if ann:
-                lines.append("  Annotations:")
-                for k, v in ann.items():
-                    lines.append(f"    {k}: {v}")
-            for rule in (ing.spec.rules or []):
-                if rule.http:
-                    lines.append(f"  Rules ({rule.host or '*'}):")
-                    for path in (rule.http.paths or []):
-                        svc  = path.backend.service
-                        lines.append(
-                            f"    {path.path or '/'} → "
-                            f"{svc.name}:{svc.port.number or svc.port.name}"
-                            f"  [{path.path_type}]")
-            tls = ing.spec.tls or []
-            if tls:
-                lines.append("  TLS:")
-                for t in tls:
-                    lines.append(f"    secret:{t.secret_name} hosts:{t.hosts}")
-            return "\n".join(lines)
-
-        # ── Namespace listing ─────────────────────────────────────────────────
-        ings = (_net.list_ingress_for_all_namespaces()
-                if namespace == "all"
-                else _net.list_namespaced_ingress(namespace=namespace))
-        if not ings.items:
-            return f"No Ingresses in '{namespace}'."
-        lines = [f"Ingresses in '{namespace}':"]
-        for ing in ings.items:
-            cls   = ing.spec.ingress_class_name or "default"
-            hosts = [rule.host or "*" for rule in (ing.spec.rules or [])]
-            lb    = [
-                addr.ip or addr.hostname
-                for status in (ing.status.load_balancer.ingress or [])
-                for addr in [status]
-                if status
-            ] if ing.status.load_balancer else []
-            lines.append(
+            out.append(
                 f"  {ing.metadata.namespace}/{ing.metadata.name}: "
                 f"class:{cls} hosts:{hosts} lb:{lb or 'pending'}")
-        return "\n".join(lines)
+        return "\n".join(out)
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
@@ -2645,8 +2672,27 @@ K8S_TOOLS: dict = {
     },
     "get_ingress_status": {
         "fn":          get_ingress_status,
-        "description": "List Ingress rules, hostnames, and load balancer addresses.",
-        "parameters":  {"namespace": {"type": "string", "default": "all"}},
+        "description": (
+            "List Ingress rules, hostnames, and load balancer IPs/addresses. "
+            "Can also find which ingress and namespace serve a specific hostname (FQDN). "
+            "ALWAYS search ALL namespaces when the user does not specify one. "
+            "When the user provides a hostname (e.g. 'console-cdp.apps.dlee155.cldr.example'), "
+            "pass it as name= — the tool searches all namespaces automatically. "
+            "Examples: "
+            "get_ingress_status(name='console-cdp.apps.dlee155.cldr.example') — finds ingress by hostname "
+            "get_ingress_status(namespace='cdp') — lists all ingresses in a namespace "
+            "get_ingress_status(namespace='all') — lists all ingresses cluster-wide"
+        ),
+        "parameters":  {
+            "namespace": {"type": "string", "default": "all",
+                          "description": "Namespace to list ingresses in. Default 'all' searches every namespace."},
+            "name":      {"type": "string", "default": "",
+                          "description": (
+                              "Ingress name OR hostname/FQDN. "
+                              "If it contains dots it is treated as a hostname and ALL namespaces are searched. "
+                              "Example: 'console-cdp.apps.dlee155.cldr.example'"
+                          )},
+        },
     },
 
     "get_configmap_list": {
