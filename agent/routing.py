@@ -280,7 +280,25 @@ def default_tools_for(user_msg: str) -> list:
     if any(k in lm for k in ["configmap", "config map"]):
         return [("get_configmap_list", {"namespace": ns})]
 
-    # ── Cluster-wide health check ─────────────────────────────────────────────
+    # ── DB / SQL queries ──────────────────────────────────────────────────────
+    # Must be checked BEFORE the cluster health fallback — "access database",
+    # "sql tables", "how many tables" etc. must never fall through to health check.
+    _is_db_query = any(k in lm for k in [
+        "sql", "database", "db-", " db ", "db pod",
+        "access db", "access database", "query db", "query database",
+        "how many table", "show table", "list table", "count table",
+        "show database", "list database", "mysql", "postgres",
+        "mariadb", "psql", "select ", "insert ", "update ",
+        "sql table", "sql query", "run query", "execute query",
+        "check table", "find table", "tables in",
+    ])
+    if _is_db_query:
+        # Extract pod name hint (e.g. "db-0", "model-metrics-db-0")
+        pod_hint = ""
+        m = re.search(r'\b([a-z0-9][a-z0-9-]*db[a-z0-9-]*-\d+|db-\d+)\b', lm)
+        if m:
+            pod_hint = m.group(1)
+        return [("exec_db_query", {"namespace": ns, "pod_name": pod_hint, "sql": "SHOW TABLES"})]
     # Broad questions about overall cluster health fire ALL health tools so the
     # LLM can give a comprehensive assessment across nodes, pods, deployments,
     # PVCs, and recent warning events.
