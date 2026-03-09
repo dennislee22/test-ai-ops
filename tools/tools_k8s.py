@@ -77,6 +77,41 @@ def reload_kubeconfig(yaml_content: str) -> dict:
     return {"ok": True, "server": server_url or "unknown"}
 
 
+
+def _is_high_restart(pod, restart_count: int) -> bool:
+    """
+    Return True only if the restart count is genuinely concerning.
+    Strategy: allow ~1 restart per day of pod age, with a minimum floor.
+    A pod with 18 restarts over 36 days (0.5/day) is healthy.
+    A pod with 18 restarts in the last hour is critical.
+    Floor: always flag if _is_high_restart(pod, restarts)0 regardless of age.
+    """
+    if restart_count == 0:
+        return False
+    if restart_count > 50:
+        return True
+    # Use pod start time to compute age in days
+    import datetime as _dt
+    start = None
+    # Try pod-level start time first
+    if pod.status and pod.status.start_time:
+        start = pod.status.start_time
+    # Fall back to container start time
+    if start is None:
+        for cs in (pod.status.container_statuses or []):
+            if cs.state and cs.state.running and cs.state.running.started_at:
+                start = cs.state.running.started_at
+                break
+    if start is None:
+        # No age info — flag if > 10 restarts
+        return restart_count > 10
+    now = _dt.datetime.now(_dt.timezone.utc)
+    age_days = max((now - start).total_seconds() / 86400, 0.1)
+    # Flag if more than 3 restarts per day on average
+    return (restart_count / age_days) > 3.0
+
+
+
 def get_pod_status(namespace: str = "all", show_all: bool = False, raw_output: bool = False) -> str:
     """
     List pods in a namespace.
@@ -136,7 +171,7 @@ def get_pod_status(namespace: str = "all", show_all: bool = False, raw_output: b
                         restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
                         ready    = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
                         tot      = len(pod.spec.containers)
-                        if ready < tot or restarts > 5:
+                        if ready < tot or _is_high_restart(pod, restarts):
                             non_running_phases.append(pod)
                     _cont = (page.metadata._continue
                              if page.metadata and page.metadata._continue else None)
@@ -200,7 +235,7 @@ def get_pod_status(namespace: str = "all", show_all: bool = False, raw_output: b
                         ready    = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
                         tot      = len(pod.spec.containers)
                         ns_k     = pod.metadata.namespace
-                        if ready < tot or restarts > 5:
+                        if ready < tot or _is_high_restart(pod, restarts):
                             bad = [f"{c.type}={c.status}"
                                    for c in (pod.status.conditions or []) if c.status != "True"]
                             unhealthy.append(
