@@ -108,10 +108,14 @@ CRITICAL OVERRIDE: If the user mentions "database", "db", "sql", "tables", "acce
 → ALWAYS call exec_db_query immediately. This is NON-NEGOTIABLE.
 → NEVER call get_pod_status, get_node_health, or any health tool for DB queries.
 → NEVER narrate or describe what SQL you would run — just call the tool.
-→ exec_db_query(namespace=..., pod_name=..., container=..., sql="SELECT ...")
+→ exec_db_query(namespace=..., pod_name=..., container=..., database=..., sql="SELECT ...")
 → For multi-container pods, always set container="db" as the first attempt (most common DB container name).
-→ If user says "access db-0 of cmlwb1", call: exec_db_query(namespace="cmlwb1", pod_name="db-0", container="db", sql="SHOW TABLES")
-→ If user says "how many tables", use sql="SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()" or "SHOW TABLES".
+→ If user specifies a database name (e.g. "database sense"), ALWAYS set database="sense".
+→ If user says "access db-0 of cmlwb1 and find tables in database sense":
+     exec_db_query(namespace="cmlwb1", pod_name="db-0", container="db", database="sense", sql="SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'")
+→ For PostgreSQL table count: sql="SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'"
+→ For PostgreSQL list tables: sql="SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name"
+→ NEVER use DATABASE() in SQL — that is MySQL syntax. For PostgreSQL use table_schema='public'.
 → If the tool returns an error listing available containers, immediately re-call exec_db_query with the correct container= from that list.
 → Auto-detects MySQL/MariaDB or PostgreSQL — do NOT ask the user.
 → Credentials are auto-discovered from pod env vars, Secrets, and ConfigMaps.

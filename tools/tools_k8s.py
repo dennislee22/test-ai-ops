@@ -2243,6 +2243,76 @@ def _find_db_pod(namespace: str, hint: str = "") -> tuple[str | None, str | None
     return None, None
 
 
+
+def _exec_simple_query(pod_name: str, namespace: str, container_name: str,
+                       cmd: str) -> str:
+    """Run a one-shot shell command inside a pod and return stdout, or empty string on error."""
+    from kubernetes.stream import stream as _k8s_stream
+    try:
+        kwargs = dict(stderr=False, stdin=False, stdout=True,
+                      tty=False, _preload_content=True)
+        if container_name:
+            kwargs["container"] = container_name
+        resp = _k8s_stream(
+            _core.connect_get_namespaced_pod_exec,
+            pod_name, namespace,
+            command=["/bin/sh", "-c", cmd],
+            **kwargs,
+        )
+        return resp.strip() if isinstance(resp, str) else ""
+    except Exception:
+        return ""
+
+
+_PG_SYSTEM_DBS = {"postgres", "template0", "template1"}
+
+
+def _discover_pg_database(pod_name: str, namespace: str,
+                           container_name: str, user: str,
+                           password: str) -> str:
+    """
+    Connect to the 'postgres' maintenance DB and return the first non-system
+    database found in pg_database. Falls back to 'postgres' if nothing found.
+    """
+    pg_env = ("PGPASSWORD='" + password + "' ") if password else ""
+    user_flag = ("-U " + user) if user else ""
+    inner_sql = "SELECT datname FROM pg_database WHERE datistemplate=false ORDER BY datname"
+    cmd = (
+        pg_env + "psql " + user_flag + " -d postgres --no-password -t -A "
+        "-c "" + inner_sql + "" 2>/dev/null || "
+        "psql -d postgres -t -A -c "" + inner_sql + """
+    )
+    out = _exec_simple_query(pod_name, namespace, container_name, cmd)
+    for db in out.splitlines():
+        db = db.strip()
+        if db and db.lower() not in _PG_SYSTEM_DBS:
+            return db
+    return "postgres"
+
+
+_MYSQL_SYSTEM_DBS = {"information_schema", "performance_schema", "mysql", "sys"}
+
+
+def _discover_mysql_database(pod_name: str, namespace: str,
+                              container_name: str, user: str,
+                              password: str, host: str, port: str) -> str:
+    """
+    Run SHOW DATABASES inside the pod and return the first non-system database.
+    Falls back to empty string if nothing found.
+    """
+    pass_arg = ("-p'" + password + "'") if password else ""
+    cmd = (
+        "mysql -u" + user + " " + pass_arg + " -h" + host + " -P" + port + " "
+        "--connect-timeout=5 --batch --silent -e 'SHOW DATABASES'"
+    )
+    out = _exec_simple_query(pod_name, namespace, container_name, cmd)
+    for db in out.splitlines():
+        db = db.strip()
+        if db and db.lower() not in _MYSQL_SYSTEM_DBS:
+            return db
+    return ""
+
+
 def exec_db_query(namespace: str, sql: str,
                   pod_name: str = "", database: str = "",
                   container: str = "") -> str:
@@ -2320,22 +2390,30 @@ def exec_db_query(namespace: str, sql: str,
     _log.info(f"[exec_db_query] container={container_name!r}")
 
     # ── Step 3: gather credentials ────────────────────────────────────────────
+    # ── Step 3: gather credentials ────────────────────────────────────────────
     creds = _find_db_credentials(namespace, pod_name)
+    # Explicit caller override wins; then env-var discovery; then live DB query fallback
     db_name = database or creds.get("database") or ""
 
     _log.debug(f"[exec_db_query] creds found: user={creds['user']}  "
-               f"db={db_name}  host={creds['host']}")
+               f"db={db_name!r}  host={creds['host']}")
 
-    # ── Step 4: build the exec command ───────────────────────────────────────
+    # ── Step 4: build the exec command ───────────────────────────────────────────
     from kubernetes.stream import stream as _k8s_stream
 
-    safe_sql = sql.replace("'", "'\\''")  # escape single quotes for shell
+    safe_sql = sql.replace("'", "'\\''")
 
     if db_type == "mysql":
         user     = creds["user"] or "root"
         password = creds["password"] or ""
         host     = creds["host"] or "127.0.0.1"
         port     = creds["port"] or "3306"
+
+        # Auto-discover the application database if not found from env vars
+        if not db_name:
+            db_name = _discover_mysql_database(
+                pod_name, namespace, container_name, user, password, host, port)
+            _log.info(f"[exec_db_query] mysql db auto-discovered: {db_name!r}")
 
         pass_arg = f"-p'{password}'" if password else ""
         db_arg   = db_name if db_name else ""
@@ -2349,29 +2427,55 @@ def exec_db_query(namespace: str, sql: str,
     elif db_type == "postgres":
         user     = creds["user"] or "postgres"
         password = creds["password"] or ""
-        db_name  = db_name or user  # postgres default db = username
+
+        # Auto-discover the application database if not found from env vars.
+        # NEVER default to the username — that almost always points to the wrong db.
+        if not db_name:
+            db_name = _discover_pg_database(
+                pod_name, namespace, container_name, user, password)
+            _log.info(f"[exec_db_query] postgres db auto-discovered: {db_name!r}")
+
+        # MySQL: table_schema=DATABASE()  →  PostgreSQL: table_schema='public'
+        # (information_schema.tables covers the connected database only)
+        pg_sql = re.sub(
+            r"table_schema\s*=\s*DATABASE\s*\(\s*\)",
+            "table_schema='public'",
+            safe_sql,
+            flags=re.IGNORECASE,
+        )
+        # MySQL: SHOW TABLES  →  list tables in connected db
+        if re.match(r"^\s*SHOW\s+TABLES\s*$", pg_sql, re.IGNORECASE):
+            pg_sql = (
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema='public' ORDER BY table_name"
+            )
+        # MySQL: SHOW DATABASES  →  PostgreSQL equivalent
+        if re.match(r"^\s*SHOW\s+DATABASES\s*$", pg_sql, re.IGNORECASE):
+            pg_sql = "SELECT datname FROM pg_database ORDER BY datname"
+
+        safe_sql = pg_sql  # use the rewritten SQL from here on
 
         # Try local Unix socket first (peer/trust auth — most common inside containers).
         # If host is explicitly set in env vars, use TCP instead.
         host = creds.get("host") or ""
         port = creds.get("port") or "5432"
 
+        pg_env    = f"PGPASSWORD='{password}' " if password else ""
+        db_flag   = f"-d {db_name}" if db_name else ""
+        user_flag = f"-U {user}" if user else ""
+
         if host and host not in ("localhost", "127.0.0.1", "::1"):
             # Remote TCP connection
-            pg_env  = f"PGPASSWORD='{password}' " if password else ""
             cmd = (
-                f"{pg_env}psql -U {user} -h {host} -p {port} "
-                f"-d {db_name} --no-password -t -A -c '{safe_sql}'"
+                f"{pg_env}psql {user_flag} -h {host} -p {port} "
+                f"{db_flag} --no-password -t -A -c '{safe_sql}'"
             )
         else:
-            # Local socket — try peer auth first; PGPASSWORD set in case password auth is needed
-            pg_env  = f"PGPASSWORD='{password}' " if password else ""
-            db_flag = f"-d {db_name}" if db_name else ""
-            user_flag = f"-U {user}" if user else ""
+            # Local socket — peer/trust auth; PGPASSWORD set as fallback
             cmd = (
                 f"{pg_env}psql {user_flag} {db_flag} "
                 f"--no-password -t -A -c '{safe_sql}' 2>&1 || "
-                # fallback: try without -U (use OS user inside container)
+                # fallback: drop -U (use OS user inside the container)
                 f"psql {db_flag} -t -A -c '{safe_sql}'"
             )
         exec_cmd = ["/bin/sh", "-c", cmd]
@@ -2670,13 +2774,17 @@ K8S_TOOLS["exec_db_query"] = {
         "table data, or schema inspection. "
         "ONLY read-only SQL is permitted (SELECT, SHOW, DESCRIBE, EXPLAIN). "
         "INSERT / UPDATE / DELETE / DROP / ALTER / TRUNCATE are blocked. "
-        "WORKFLOW for 'access db-0 of cmlwb1 and find tables': "
-        "  exec_db_query(namespace='cmlwb1', pod_name='db-0', container='db', sql='SHOW TABLES') "
+        "WORKFLOW for 'access db-0 of cmlwb1 and find tables in database sense': "
+        "  exec_db_query(namespace='cmlwb1', pod_name='db-0', container='db', database='sense', "
+        "sql=\"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'\") "
         "If the tool returns an error listing available containers, re-call with the correct container= value. "
-        "Example queries: "
-        "\"SHOW TABLES\", \"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()\", "
-        "\"SELECT user, authentication_string FROM mysql.user WHERE user='x'\", "
-        "\"SELECT usename, passwd FROM pg_shadow WHERE usename='x'\""
+        "PostgreSQL SQL examples (NEVER use DATABASE() — that is MySQL-only): "
+        "\"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'\", "
+        "\"SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name\", "
+        "\"SELECT usename, passwd FROM pg_shadow WHERE usename='x'\", "
+        "\"SELECT datname FROM pg_database\" "
+        "MySQL/MariaDB SQL examples: "
+        "\"SHOW TABLES\", \"SELECT user, host FROM mysql.user\", \"SHOW DATABASES\""
     ),
     "parameters": {
         "namespace": {
