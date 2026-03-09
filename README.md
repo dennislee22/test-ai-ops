@@ -6,7 +6,57 @@ An air-gapped Kubernetes operations chatbot for Cloudera ECS, powered by a local
 
 ## Architecture
 
-<img src="web/static/ecs-ai-ops.gif" width="700" alt="ECS AI Ops Architecture"/>
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Browser (UI)                             │
+│                   Single-file index.html                        │
+│         SSE streaming · AGENT STATUS loop timeline              │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │ HTTP / SSE
+┌──────────────────────────▼──────────────────────────────────────┐
+│                    FastAPI  (app.py)                             │
+│   POST /chat/stream   ·   GET /api/*   ·   POST /api/tool       │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────────────┐
+│              LangGraph  —  Agentic ReAct Loop                   │
+│                                                                 │
+│   ┌─────────────┐   tool_calls?  ┌──────────────────────────┐  │
+│   │  llm_node   │ ─────yes──────▶│       tool_node          │  │
+│   │             │                │  executes K8s API calls  │  │
+│   │  Qwen3-8B   │ ◀──results─────│  enforces decode toggle  │  │
+│   │             │                │  bypass for list queries │  │
+│   │ reads Tool  │                └──────────────────────────┘  │
+│   │ Selection   │                                               │
+│   │ Guide from  │   no tool_calls → END (final answer)         │
+│   │ sys prompt  │                                               │
+│   └─────────────┘                                               │
+│                                                                 │
+│   itr cap: 6   ·   fallback routing only on complete failure    │
+└──────────────┬───────────────────────────┬──────────────────────┘
+               │                           │
+┌──────────────▼──────────┐   ┌────────────▼────────────────────┐
+│   K8s Tools (22 total)  │   │   RAG  (ChromaDB + nomic-embed) │
+│   kubernetes Python SDK │   │   runbooks · known-issues · SOPs│
+│   read-only by default  │   │   rag_search tool               │
+│                         │   └─────────────────────────────────┘
+│  get_pod_status         │
+│  describe_pod           │   ┌─────────────────────────────────┐
+│  get_node_health        │   │   config/system_prompt.txt      │
+│  get_events             │   │   · Tool Selection Guide        │
+│  get_deployment_status  │   │   · Multi-hop Reasoning rules   │
+│  get_pvc_status         │   │   · Never Narrate — Always Act  │
+│  get_secrets            │   │   · Site-specific CUSTOM_RULES  │
+│  describe_pod  …        │   └─────────────────────────────────┘
+└─────────────────────────┘
+
+Multi-hop example — "why is my vault pod crashing?":
+  Loop 1 → get_pod_status          sees: OOMKilled, 28 restarts
+  Loop 2 → describe_pod            sees: memory limit 256Mi
+         + get_resource_quotas     sees: namespace quota 512Mi total
+  Loop 3 → get_events              sees: repeated OOMKilled warnings
+  Loop 4 → synthesise final answer (no tool calls → END)
+```
 
 ### How it works
 
