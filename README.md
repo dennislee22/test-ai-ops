@@ -159,6 +159,10 @@ k8s-ai-ops-agentic/
 
 ## Quick Start
 
+### Prerequisites
+
+- **Python 3.12** is required.
+
 ### 1. Install dependencies
 
 ```bash
@@ -211,11 +215,10 @@ Open `http://localhost:9000` in your browser.
 
 ## Customising the System Prompt
 
-The LLM's tool selection behaviour, multi-hop reasoning rules, and persona all live in **`config/system_prompt.txt`**. This is the primary place to tune the assistant without touching Python code.
+The LLM's tool selection behaviour and persona all live in **`config/system_prompt.txt`**. This is the primary place to tune the assistant without touching Python code.
 
 Key sections in the prompt:
 - **Tool Selection Guide** — tells the LLM which tools to call for each query type
-- **Multi-hop Reasoning** — tells the LLM when to chain tool calls (e.g. OOMKilled → check quotas)
 - **CRITICAL: Never Narrate** — prevents the LLM from describing what it *would* do instead of doing it
 
 Hot-reload after editing (no restart needed):
@@ -253,8 +256,8 @@ Interactive docs: **[/docs](http://localhost:9000/docs)** (Swagger) · **[/redoc
 
 | Setting | Controls | Default |
 |---|---|---|
-| `KUBECTL_MAX_CHARS` | Characters of cluster data the LLM reads per tool call | 20 000 |
-| `MAX_NEW_TOKENS` | Tokens the LLM writes per response (~4 chars/token) | 4 096 |
+| `KUBECTL_MAX_CHARS` | Characters of cluster data the LLM reads per tool call | 20000 |
+| `MAX_NEW_TOKENS` | Tokens the LLM writes per response (~4 chars/token) | 4096 |
 | `LLM_TIMEOUT` | Hard timeout per request (seconds) | 300 |
 
 Adjust at runtime via ⚙ Settings → LLM Input/Output, or via API:
@@ -271,7 +274,7 @@ curl -s -X POST http://localhost:9000/api/config \
 | Setup | RAM | VRAM | Speed |
 |---|---|---|---|
 | CPU only, 8-core | 32 GB | — | ~6–10 tok/s |
-| GPU (recommended) | 32 GB | ~20 GB | ~30–60 tok/s |
+| GPU (recommended) — **Qwen3-8B** (tested and recommended for its tool invocation capability) | 32 GB | ~20 GB | ~30–60 tok/s |
 
 Qwen3-8B in bfloat16 uses ~16–20 GB VRAM. In CPU-only mode the model loads into system RAM.
 

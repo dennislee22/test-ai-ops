@@ -346,8 +346,9 @@ button{cursor:pointer;font-family:inherit}
   color:var(--accent2);
   font-style:italic;
 }
-.ai-elapsed{font-size:10px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;margin-top:4px}
-.ai-copy-row{display:flex;justify-content:flex-end;margin-top:6px}
+.ai-meta-row{display:flex;align-items:center;justify-content:space-between;margin-top:5px}
+.ai-elapsed{font-size:10px;color:var(--dimText);font-family:'IBM Plex Mono',monospace}
+.ai-copy-row{display:flex;justify-content:flex-end}
 .copy-btn{
   display:inline-flex;align-items:center;gap:5px;padding:3px 10px;
   border-radius:6px;font-size:10px;font-family:'IBM Plex Mono',monospace;
@@ -556,7 +557,7 @@ button{cursor:pointer;font-family:inherit}
           </div>
         </div>
         <div id="chat-refresh-note">
-          💡 <strong>Tip:</strong> Each question is treated independently — there is <strong>no conversation history</strong>. Every query must be self-contained. For best results, always specify a namespace (e.g. <em>"show running pods in the <strong>cdp</strong> namespace"</em>) to get faster and more accurate responses.
+          💡 <strong>Tip:</strong> Each question is treated independently (no conversation history). For best results, always narrow the query (e.g. <em>"show running pods in the <strong>cdp</strong> namespace"</em>) to get faster and more accurate responses.
         </div>
         <div id="input-bar">
           <textarea id="chat-input" rows="2"
@@ -573,27 +574,16 @@ button{cursor:pointer;font-family:inherit}
 
         <div class="tip">&#128161; <strong>Quick start:</strong> Type a question in the <strong>ECS AI Ops</strong> tab — e.g. <em>"is my cluster having any issues?"</em> — and press <strong>Enter</strong>.</div>
 
+        <div class="tip" style="border-left-color:var(--accent2)">&#128214; <strong>Prerequisites:</strong> Python 3.12 is required.</div>
+
         <!-- ── How it works ───────────────────────────────────────────── -->
         <h2>How it works</h2>
         <p>Each query runs through an <strong>agentic ReAct loop</strong> driven by the LLM — not by hardcoded rules. The LLM reads a Tool Selection Guide in its system prompt, picks the right tools, observes the results, and decides whether to call more tools or synthesise a final answer.</p>
-
-        <h3>Multi-hop reasoning</h3>
-        <p>For complex queries the LLM chains tool calls automatically. For example, "why is my vault pod crashing?" triggers:</p>
-        <ol>
-          <li><strong>Loop 1</strong> — LLM calls <code>get_pod_status</code>, sees OOMKilled</li>
-          <li><strong>Loop 2</strong> — LLM calls <code>describe_pod</code> + <code>get_resource_quotas</code>, confirms 256Mi limit</li>
-          <li><strong>Loop 3</strong> — LLM calls <code>get_events</code>, sees repeated OOM warnings</li>
-          <li><strong>Loop 4</strong> — LLM synthesises: <em>"vault-0 is OOMKilled due to a 256Mi memory limit…"</em></li>
-        </ol>
-        <p>You can watch each loop stage live in the <strong>AGENT STATUS</strong> panel during processing.</p>
 
         <div class="warn">&#9888; The assistant is <strong>read-only by default</strong>. It will never restart, delete, or modify cluster resources.</div>
 
         <h3>Example queries</h3>
         <ul>
-          <li>Is my cluster having any issues?</li>
-          <li>Which pod is OOMKilled recently and what could be the cause?</li>
-          <li>What is the resource limit for cdp/dp-cadence-worker?</li>
           <li>Which node has GPUs available and in use?</li>
           <li>Which secret in cdp has user credentials?</li>
           <li>List all PVCs not bound across all namespaces</li>
@@ -661,8 +651,8 @@ python3 app.py --ingest ./docs --force   # re-ingest all</code></pre>
         <h2>Tuning Output Length</h2>
         <table>
           <tr><th>Setting</th><th>Controls</th><th>Default</th></tr>
-          <tr><td><code>KUBECTL_MAX_CHARS</code></td><td>Characters of cluster data the LLM <strong>reads</strong></td><td>20 000</td></tr>
-          <tr><td><code>MAX_NEW_TOKENS</code></td><td>Tokens the LLM <strong>writes</strong> (~4 chars/token)</td><td>4 096</td></tr>
+          <tr><td><code>KUBECTL_MAX_CHARS</code></td><td>Characters of cluster data the LLM <strong>reads</strong></td><td>20000</td></tr>
+          <tr><td><code>MAX_NEW_TOKENS</code></td><td>Tokens the LLM <strong>writes</strong> (~4 chars/token)</td><td>4096</td></tr>
         </table>
         <p>Adjust at runtime via ⚙ Settings → LLM Input/Output, or via API:</p>
         <pre><code>curl -s -X POST http://localhost:9000/api/config \
@@ -691,7 +681,7 @@ python3 app.py --ingest ./docs --force   # re-ingest all</code></pre>
         <table>
           <tr><th>Setup</th><th>RAM</th><th>VRAM</th><th>Speed</th></tr>
           <tr><td>CPU only, 8-core</td><td>32 GB</td><td>—</td><td>~6–10 tok/s</td></tr>
-          <tr><td>GPU (recommended)</td><td>32 GB</td><td>~20 GB</td><td>~30–60 tok/s</td></tr>
+          <tr><td>GPU (recommended) — <strong>Qwen3-8B</strong> (tested and recommended for its tool invocation capability)</td><td>32 GB</td><td>~20 GB</td><td>~30–60 tok/s</td></tr>
         </table>
 
         <!-- ── Security ───────────────────────────────────────────────── -->
@@ -1561,10 +1551,12 @@ function appendAi(text, tools, iters, elapsed, statusUpdates, isClarification){
     +'</svg></div>'
     +'<div class="ai-body">'
     +'<div class="'+bubbleCls+'">'+esc(clean)+'</div>'
-    +(elapsed!=null && !isClarification ?'<div class="ai-elapsed">&#8987; '+elapsed+'s</div>':'')
     +toolRow
     +cmdLog
+    +'<div class="ai-meta-row">'
+    +(elapsed!=null && !isClarification ?'<div class="ai-elapsed">&#8987; '+elapsed+'s</div>':'<div></div>')
     +'<div class="ai-copy-row"><button class="copy-btn" title="Copy response">⎘ Copy</button></div>'
+    +'</div>'
     +'</div>';
   msgsEl.appendChild(d);
   // wire copy button
