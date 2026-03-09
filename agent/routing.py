@@ -58,7 +58,10 @@ def default_tools_for(user_msg: str) -> list:
         or (any(k in lm for k in ["namespace", "namespaces"])
             and any(k in lm for k in ["how many", "list", "count", "stuck",
                                        "terminating", "active", "phase"])
-            and "pod" not in lm)
+            and "pod" not in lm
+            # Exclude queries where "namespace" is only used as a location word
+            # e.g. "list the foo-secret in cdp namespace" → not a namespace query
+            and not re.search(r'\b(in|for|from|within)\s+\w+\s+namespace\b', lm))
     )
     if is_ns_query:
         return [("get_namespace_status", {})]
@@ -218,10 +221,9 @@ def default_tools_for(user_msg: str) -> list:
                               "username", "password", "user credential"]
     _is_secret_query = (
         any(k in lm for k in _secret_trigger_words)
-        # Also trigger if user says "show me <k8s-resource-name>" with no other tool match
-        or ("show" in lm and _k8s_name_candidate and len(_k8s_name_candidate) > 8)
-        or ("get" in lm and _k8s_name_candidate and len(_k8s_name_candidate) > 8)
-        or ("display" in lm and _k8s_name_candidate and len(_k8s_name_candidate) > 8)
+        # Also trigger if user references a k8s resource name with any action verb
+        or (any(v in lm for v in ["show", "get", "display", "list", "fetch", "describe"])
+            and _k8s_name_candidate and len(_k8s_name_candidate) > 8)
     )
     if _is_secret_query:
         # Detect specific secret name — must look like a k8s resource name.
