@@ -50,6 +50,19 @@ def default_tools_for(user_msg: str) -> list:
     lm = user_msg.lower()
     ns = resolve_namespace(lm)
 
+    # ── How-to / capability / self-referential queries ────────────────────────
+    # "teach me how you ...", "show me how you ...", "how do you ...", "what can you do"
+    # These must be answered conversationally — never trigger live cluster tools.
+    _is_howto = (
+        re.search(r'\b(teach|explain|show)\s+(me\s+)?(how\s+(you|to|do\s+you)|step\s+by\s+step)', lm)
+        or re.search(r'\bhow\s+do\s+you\b', lm)
+        or re.search(r'\bhow\s+(can|does)\s+(you|the\s+(bot|assistant|chatbot))\b', lm)
+        or re.search(r'\bwhat\s+(can|do)\s+you\s+(do|support|handle|know)\b', lm)
+        or re.search(r'\b(demonstrate|walkthrough|walk\s+me\s+through)\b', lm)
+    )
+    if _is_howto:
+        return [("__conversational__", {})]
+
     # ── Namespace queries ─────────────────────────────────────────────────────
     is_ns_query = (
         any(k in lm for k in ["how many namespace", "list namespace", "how many ns",
@@ -209,9 +222,9 @@ def default_tools_for(user_msg: str) -> list:
         return [("get_cluster_role_bindings", {}), ("get_service_accounts", {"namespace": ns})]
 
     # ── Secrets ───────────────────────────────────────────────────────────────
-    # Trigger on: "secret" keyword, OR any long hyphenated k8s-style name
-    # that looks like a secret resource name (e.g. cdp-private-installer-db-root-cert)
-    _k8s_name_in_query = re.search(r'\b([a-z][a-z0-9]+-[a-z0-9-]{4,})\b', lm)
+    # Trigger on: secret-related keywords, OR the presence of a long hyphenated
+    # k8s resource name in the query — no verb matching needed.
+    _k8s_name_in_query = re.search(r'\b([a-z][a-z0-9]*(?:-[a-z0-9]+){2,})\b', lm)
     _k8s_name_candidate = _k8s_name_in_query.group(1) if _k8s_name_in_query else ""
 
     _secret_trigger_words = ["secret", "credential", "tls cert", "ssl cert",
@@ -221,9 +234,7 @@ def default_tools_for(user_msg: str) -> list:
                               "username", "password", "user credential"]
     _is_secret_query = (
         any(k in lm for k in _secret_trigger_words)
-        # Also trigger if user references a k8s resource name with any action verb
-        or (any(v in lm for v in ["show", "get", "display", "list", "fetch", "describe"])
-            and _k8s_name_candidate and len(_k8s_name_candidate) > 8)
+        or len(_k8s_name_candidate) > 8
     )
     if _is_secret_query:
         # Detect specific secret name — must look like a k8s resource name.

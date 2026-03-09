@@ -870,10 +870,35 @@ def build_agent():
             user_msg = next((m.content for m in reversed(msgs) if isinstance(m, HumanMessage)), "")
             _log_ag.warning(f"[llm_node itr={itr}] complete failure — fallback routing for: {user_msg!r}")
             import uuid
+            fallback = _default_tools_for(user_msg)
+
+            # ── Conversational / how-to sentinel — no tool needed ─────────────
+            if fallback and fallback[0][0] == "__conversational__":
+                _log_ag.info("[llm_node] how-to query — injecting conversational prompt")
+                # Re-run LLM with a focused conversational prompt instead of tool calls
+                conv_msgs = msgs + [HumanMessage(content=(
+                    f"The user asked: {user_msg!r}\n\n"
+                    "Answer this as the ECS Operations Assistant — explain step by step "
+                    "how you would handle this using your available tools and capabilities. "
+                    "Be specific: name the exact tool you call, the parameters you pass, "
+                    "and what the output looks like. Do NOT call any tool — just explain."
+                ))]
+                conv_resp = llm_pipeline.invoke(conv_msgs)
+                conv_content = (conv_resp.content if hasattr(conv_resp, "content")
+                                else str(conv_resp)).strip()
+                if conv_content:
+                    return {
+                        "messages":        [AIMessage(content=conv_content, tool_calls=[])],
+                        "tool_calls_made": state.get("tool_calls_made", []),
+                        "iteration":       itr,
+                        "status_updates":  updates,
+                        "direct_answer":   conv_content,
+                    }
+
             tcs = [
                 {"name": tname, "args": targs,
                  "id": f"fallback_{uuid.uuid4().hex[:8]}", "type": "tool_call"}
-                for tname, targs in _default_tools_for(user_msg)
+                for tname, targs in fallback
                 if tname in tool_names
             ]
             if tcs:
