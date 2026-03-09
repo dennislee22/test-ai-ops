@@ -556,7 +556,7 @@ button{cursor:pointer;font-family:inherit}
           </div>
         </div>
         <div id="chat-refresh-note">
-          💡 <strong>Tip:</strong> Each question is treated independently — there is <strong>no conversation history</strong>. Every query must be self-contained. For best results, always specify a namespace (e.g. <em>"show warning events in the <strong>cdp</strong> namespace"</em>) to get faster and more accurate responses.
+          💡 <strong>Tip:</strong> Each question is treated independently — there is <strong>no conversation history</strong>. Every query must be self-contained. For best results, always specify a namespace (e.g. <em>"show running pods in the <strong>cdp</strong> namespace"</em>) to get faster and more accurate responses.
         </div>
         <div id="input-bar">
           <textarea id="chat-input" rows="2"
@@ -1385,9 +1385,7 @@ fetchHealth(10);
 // CHAT
 // ═══════════════════════════════════════════════════════════════════════════
 let loading  = false;
-// Conversation history — sent to the server so the LLM has context from prior turns.
-// Stores {role, content} pairs. Capped at 6 entries (3 exchanges) before sending.
-let conversationHistory = [];
+// Each request is stateless — no conversation history is sent to the LLM.
 const msgsEl = document.getElementById('messages');
 const inpEl  = document.getElementById('chat-input');
 const sndBtn = document.getElementById('send-btn');
@@ -1614,16 +1612,13 @@ async function sendMessage(override){
   }
   _startElapsedCounter();
 
-  // Send history as prior turns (capped at last 6 turns = 3 exchanges)
-  // so the LLM has context like namespace/pod mentioned moments ago.
-  const MAX_HISTORY = 6;
-  const historyToSend = conversationHistory.slice(-MAX_HISTORY);
+  // No conversation history — each request is fully independent.
 
   try{
     const res = await fetch('/chat/stream', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({message: q, decode_secrets: decodeSecrets, history: historyToSend}),
+      body: JSON.stringify({message: q, decode_secrets: decodeSecrets, history: []}),
     });
     if(!res.ok){
       const e = await res.json().catch(()=>({}));
@@ -1686,9 +1681,7 @@ async function sendMessage(override){
             payload.status_updates,
             payload.clarification_needed
           );
-          // Store this exchange in conversation history for follow-up context
-          conversationHistory.push({role: 'user',      content: q});
-          conversationHistory.push({role: 'assistant', content: payload.response || ''});
+          // (history not stored — each request is stateless)
 
         } else if(payload.type === 'error'){
           _stopElapsedCounter();
