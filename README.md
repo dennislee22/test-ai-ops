@@ -1,6 +1,6 @@
-<h1><img src="web/static/chatbot-icon.svg" width="30" height="30"><img src="web/static/k8s-logo.svg" width="30" height="30"> Cloudera ECS AI Ops Chatbot</h1>
+<h1><img src="web/static/chatbot-icon.svg" width="30" height="30"> <img src="web/static/k8s-logo.svg" width="30" height="30"> Cloudera ECS AI Ops Chatbot</h1>
 
-An air-gapped Kubernetes operations chatbot for ECS, powered by a local LLM and ChromaDB.
+An air-gapped Kubernetes operations chatbot for Cloudera ECS, powered by a local LLM (Qwen3-8B), LangGraph agentic loop, and ChromaDB RAG.
 
 ---
 
@@ -8,35 +8,53 @@ An air-gapped Kubernetes operations chatbot for ECS, powered by a local LLM and 
 
 <img src="web/static/ecs-ai-ops.gif" width="700" alt="ECS AI Ops Architecture"/>
 
+### How it works
+
+Each user query runs through an **agentic ReAct loop** driven entirely by the LLM:
+
+```
+User query
+    ↓
+Loop itr=1: LLM reads Tool Selection Guide → decides which tools to call
+    ↓
+Tool execution (K8s API calls)
+    ↓
+Loop itr=2: LLM sees results → decides: call more tools OR synthesise answer
+    ↓  (multi-hop: repeats if more data needed, e.g. OOMKilled → check quotas → check events)
+Final answer streamed to UI
+```
+
+The LLM controls how many loop iterations to take. For a broad health check it calls 5 tools at once. For a crash diagnosis it chains calls — pod status → describe pod → resource quotas → events — stopping when it has enough to answer. The iteration count is visible live in the AGENT STATUS panel.
+
 ---
 
 ## Project Structure
 
 ```
-ecs-ai-ops/
-├── app.py
+k8s-ai-ops-agentic/
+├── app.py                    # FastAPI server + LangGraph agent
 │
 ├── config/
-│   └── system_prompt.txt
+│   └── system_prompt.txt     # LLM persona, Tool Selection Guide, multi-hop rules
+│
+├── agent/
+│   ├── routing.py            # Namespace resolution + emergency fallback routing
+│   └── bypass.py             # LLM synthesis bypass for simple list queries
 │
 ├── tools/
-│   ├── __init__.py
-│   └── tools_k8s.py
+│   └── tools_k8s.py          # All K8s tool implementations + TOOL_REGISTRY
 │
 ├── web/
-│   ├── index.html
+│   ├── index.html            # Single-file UI (served by FastAPI)
 │   └── static/
 │       ├── k8s-logo.svg
-│       └── rancher-logo.svg
+│       ├── rancher-logo.svg
+│       ├── chatbot-icon.svg
+│       └── ecs-ai-ops.gif
 │
-├── docs/
-│   ├── API.md
-│   ├── known-issues.md
-│   ├── dos-and-donts.md
-│   └── longhorn.md
-│
+├── docs/                     # Ingested into ChromaDB for RAG
 ├── requirements.txt
-├── chromadb/
+├── chromadb/                 # Auto-created on first ingest
 └── logs/
     └── app.log
 ```
@@ -47,15 +65,13 @@ ecs-ai-ops/
 
 | Layer | Technology | Notes |
 |---|---|---|
-| LLM | HuggingFace Transformers | `Qwen/Qwen3-8B` recommended — it excels in tool invocation, which is important for this agentic AI solution |
-| Embeddings | SentenceTransformers | `nomic-ai/nomic-embed-text-v1.5` (local, GPU-accelerated if available) |
+| LLM | HuggingFace Transformers | `Qwen/Qwen3-8B` — excellent tool-calling, works on CPU and GPU |
+| Agent | LangGraph | ReAct loop: LLM selects tools → executes → observes → repeats or answers |
+| Embeddings | SentenceTransformers | `nomic-ai/nomic-embed-text-v1.5` (local) |
 | Vector DB | ChromaDB (embedded) | Zero external dependencies |
-| Agent | LangGraph | Fully local |
-| K8s typed tools | kubernetes Python client | Structured, read-only |
-| K8s exec tool | kubernetes Python client | `kubectl_exec` — parses kubectl-style commands via Python API, no binary needed |
-| Doc parsing | pypdf + markdown-it-py | |
-| API | FastAPI | REST + SSE streaming + CORS |
-| Frontend | Single-file HTML/JS | Served directly by FastAPI (`FileResponse` at `/`) |
+| K8s tools | kubernetes Python client | Typed, read-only tools — no kubectl binary needed |
+| API | FastAPI | REST + SSE streaming |
+| Frontend | Single-file HTML/JS | Served by FastAPI at `/` |
 
 ---
 
@@ -69,41 +85,25 @@ ecs-ai-ops/
 | Workloads | `get_deployment_status`, `get_daemonset_status`, `get_statefulset_status`, `get_job_status`, `get_hpa_status` |
 | Storage | `get_pvc_status`, `get_persistent_volumes` |
 | Networking | `get_service_status`, `get_ingress_status` |
-| Config | `get_configmap_list`, `get_resource_quotas`, `get_limit_ranges` |
+| Config | `get_configmap_list`, `get_secrets`, `get_resource_quotas`, `get_limit_ranges` |
 | RBAC | `get_service_accounts`, `get_cluster_role_bindings` |
 | Namespaces | `get_namespace_status` |
-| **kubectl exec** | **`kubectl_exec`** — accepts kubectl-style command strings, routed via the Kubernetes Python API (no binary needed) |
-
-`kubectl_exec` parses kubectl command strings and calls the appropriate Kubernetes Python API
-client methods directly. No `kubectl` binary or PATH configuration is required — everything
-goes over HTTPS to the cluster API server using your kubeconfig credentials.
-
-Supported verbs: `get`, `describe`, `logs`, `top`, `rollout`, `auth can-i`, `api-resources`, `version`.
-
-| Check | Behaviour |
-|---|---|
-| Shell operators | `\|`, `&&`, `awk`, `grep` etc. — always rejected; use a typed tool instead |
-| Interactive commands | `exec -it`, `port-forward`, `attach` — always blocked |
-| Write operations | Blocked by default; set `KUBECTL_ALLOW_WRITES=true` to enable |
-| Output limit | 20 000 chars (override with `KUBECTL_MAX_CHARS`) |
+| kubectl exec | `kubectl_exec` — parses kubectl-style commands via K8s Python API (no binary needed) |
+| RAG | `rag_search` — searches ingested runbooks and known-issues docs |
 
 ---
 
 ## Example Queries
 
-The ECS AI Ops Chatbot understands natural language questions about your cluster:
-
 - Is the Vault doing ok?
-- Show me all the nodes' status
-- Any pod is currently not Running?
-- What storage class is Vault using?
-- List all storage types (RWO/RWX) used by pods in cdp namespace
-- Check all namespaces — which PVC is not bound?
+- Is my cluster having any issues?
+- Which pod is OOMKilled recently and what could be the cause?
 - Which node has GPUs available and in use?
-- List all Persistent Volume Claims in the longhorn-system namespace
-- Show warning events in cdp-drs namespace
+- What is the resource limit for cdp/dp-cadence-worker pod?
+- List all PVCs not bound across all namespaces
+- Show warning events in cdp namespace
+- Which secret in cdp has user credentials?
 - How many nodes are in the cluster?
-- List all namespaces
 
 ---
 
@@ -122,7 +122,7 @@ pip install torch --index-url https://download.pytorch.org/whl/cu121
 
 ### 2. Configure environment
 
-Create an `env` file next to `app.py` (not included in the repo — create it manually):
+Create an `env` file next to `app.py`:
 
 ```ini
 KUBECONFIG_PATH=~/kubeconfig
@@ -130,20 +130,14 @@ KUBECONFIG_PATH=~/kubeconfig
 LLM_MODEL=Qwen/Qwen3-8B
 EMBED_MODEL=nomic-ai/nomic-embed-text-v1.5
 
-NUM_GPU=1          # 0 = CPU only
-
-LOG_LEVEL=INFO
-# Set LOG_LEVEL=DEBUG to trace LLM tool selection, raw responses, and tool schemas.
-# Key log lines to watch at INFO level:
-#   [llm_node itr=1] tool_calls resolved: [...]   <- what tools LLM picked
-#   [llm_node itr=1] LLM returned no tool_calls   <- why fallback fired
-#   [tool_node] calling tool=... args=...          <- what args were passed
+NUM_GPU=1           # 0 = CPU only
+LOG_LEVEL=DEBUG     # DEBUG shows full agentic loop: tool selection, raw LLM output, multi-hop decisions
 CHROMA_DIR=./chromadb
 
 KUBECTL_ALLOW_WRITES=false
-KUBECTL_MAX_CHARS=20000  # max chars of K8s tool output fed into the LLM (input)
-MAX_NEW_TOKENS=4096      # max tokens the LLM can generate per response (output)
-LLM_TIMEOUT=300          # hard timeout (seconds) per request
+KUBECTL_MAX_CHARS=20000
+MAX_NEW_TOKENS=4096
+LLM_TIMEOUT=300
 ```
 
 ### 3. Ingest documents
@@ -156,10 +150,9 @@ python3 app.py --ingest ./docs --force   # re-ingest all
 ### 4. Start the server
 
 ```bash
-python3 app.py                                              # default  http://0.0.0.0:9000
+python3 app.py                                          # http://0.0.0.0:9000
 python3 app.py --port 9000 --host 0.0.0.0
-python3 app.py --model-dir /models/Qwen2.5-7B-Instruct     # local model path
-python3 app.py --reload                                     # dev auto-reload
+python3 app.py --model-dir /models/Qwen3-8B             # local model path
 ```
 
 Open `http://localhost:9000` in your browser.
@@ -168,90 +161,53 @@ Open `http://localhost:9000` in your browser.
 
 ## Customising the System Prompt
 
-The LLM system prompt lives in **`config/system_prompt.txt`** — a plain text file
-you can edit without touching any Python code.
+The LLM's tool selection behaviour, multi-hop reasoning rules, and persona all live in **`config/system_prompt.txt`**. This is the primary place to tune the assistant without touching Python code.
 
-Two placeholders are required and must remain in the file:
+Key sections in the prompt:
+- **Tool Selection Guide** — tells the LLM which tools to call for each query type
+- **Multi-hop Reasoning** — tells the LLM when to chain tool calls (e.g. OOMKilled → check quotas)
+- **CRITICAL: Never Narrate** — prevents the LLM from describing what it *would* do instead of doing it
 
-| Placeholder | Replaced with |
-|---|---|
-| `{custom_rules}` | Value of `CUSTOM_RULES` env variable |
-
-After editing the file, hot-reload without restarting:
-
+Hot-reload after editing (no restart needed):
 ```bash
 curl -s -X POST http://localhost:9000/api/reload-prompt
 ```
-
-Or push a new prompt entirely via the API — see [docs/API.md](docs/API.md).
 
 ---
 
 ## REST API
 
-A full curl-friendly REST API is available at `/api`.  See **[docs/API.md](docs/API.md)**
-for the complete reference.
-
-Quick examples:
-
 ```bash
+# Ask the AI
 curl -s -X POST http://localhost:9000/api/ask \
      -H 'Content-Type: application/json' \
-     -d '{"q":"are there any pods with problems?"}'
+     -d '{"q":"are there any failing pods?"}'
 
-# List all available tools
+# Call a tool directly
+curl -s -X POST http://localhost:9000/api/tool \
+     -H 'Content-Type: application/json' \
+     -d '{"name":"get_node_health","args":{}}'
+
+# List all tools
 curl -s http://localhost:9000/api/tools
-
-# Live pod table  (kubectl get pods style)
-curl -s 'http://localhost:9000/api/pods/raw?ns=longhorn-system'
 
 # System metrics
 curl -s http://localhost:9000/api/system
 ```
 
-FastAPI also auto-generates interactive docs:
-- **Swagger UI** — http://localhost:9000/docs
-- **ReDoc** — http://localhost:9000/redoc
+Interactive docs: **[/docs](http://localhost:9000/docs)** (Swagger) · **[/redoc](http://localhost:9000/redoc)**
 
 ---
 
-## Adding Your Own Documents
+## Runtime Tuning
 
-Drop `.md`, `.pdf`, or `.txt` files into `docs/` and run:
-
-```bash
-python3 app.py --ingest ./docs
-```
-
-Document type is auto-detected from filename keywords:
-
-| Keyword in filename | Tagged as |
-|---|---|
-| `known`, `issue`, `bug`, `error` | `known_issue` |
-| `runbook`, `playbook`, `procedure` | `runbook` |
-| `dos`, `donts`, `guidelines` | `dos_donts` |
-| anything else | `general` |
-
----
-
-## Runtime Tuning — Truncation
-
-If responses appear cut off, two independent settings control output length:
-
-| Setting | Controls | Where to adjust |
+| Setting | Controls | Default |
 |---|---|---|
-| `KUBECTL_MAX_CHARS` | How much raw cluster data the LLM **reads** (characters) | ⚙ Settings → LLM Input/Output → MAX INPUT CHARS slider |
-| `MAX_NEW_TOKENS` | How many tokens the LLM **writes** per response (~4 chars/token) | ⚙ Settings → LLM Input/Output → MAX RESPONSE TOKENS slider |
+| `KUBECTL_MAX_CHARS` | Characters of cluster data the LLM reads per tool call | 20 000 |
+| `MAX_NEW_TOKENS` | Tokens the LLM writes per response (~4 chars/token) | 4 096 |
+| `LLM_TIMEOUT` | Hard timeout per request (seconds) | 300 |
 
-Both can independently cause truncation. Typical fix for a large cluster:
-
-```
-KUBECTL_MAX_CHARS=50000
-MAX_NEW_TOKENS=6144
-```
-
-Changes apply immediately without restarting — use the Settings UI or the API:
-
+Adjust at runtime via ⚙ Settings → LLM Input/Output, or via API:
 ```bash
 curl -s -X POST http://localhost:9000/api/config \
      -H 'Content-Type: application/json' \
@@ -262,38 +218,19 @@ curl -s -X POST http://localhost:9000/api/config \
 
 ## Hardware Sizing
 
-| Setup | RAM | VRAM | Model | Speed |
-|---|---|---|---|---|
-| CPU only, 8-core | 32 GB | — ¹ | Qwen/Qwen3-8B | ~6–10 tok/s |
-| GPU (recommended) | 32 GB | ~20 GB ² | Qwen/Qwen3-8B | ~30–60 tok/s |
+| Setup | RAM | VRAM | Speed |
+|---|---|---|---|
+| CPU only, 8-core | 32 GB | — | ~6–10 tok/s |
+| GPU (recommended) | 32 GB | ~20 GB | ~30–60 tok/s |
 
-> ¹ **CPU RAM shows `—`** in the GPU MONITOR panel because VRAM is a GPU-specific metric. In CPU-only mode the model is loaded into system RAM — monitor usage via the RAM MONITOR in the CPU panel instead.
->
-> ² VRAM usage depends on model quantisation and batch size. Qwen3-8B in bfloat16 uses approximately 16–20 GB VRAM.
-
----
-
-## Environment Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `LLM_MODEL` | `Qwen/Qwen3-8B` | HuggingFace model ID or local path |
-| `EMBED_MODEL` | `nomic-ai/nomic-embed-text-v1.5` | SentenceTransformers model ID or local path |
-| `NUM_GPU` | auto-detected | GPU count (0 = CPU only) |
-| `KUBECONFIG_PATH` | `~/kubeconfig` | Path to kubeconfig (blank = in-cluster) |
-| `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
-| `CHROMA_DIR` | `./chromadb` | ChromaDB persistent storage path |
-| `CUSTOM_RULES` | see env | Site-specific rules injected into the system prompt |
-| `KUBECTL_ALLOW_WRITES` | `false` | Allow write operations via `kubectl_exec` |
-| `KUBECTL_MAX_CHARS` | `20000` | Max characters of K8s tool output fed into the LLM (input). Adjustable at runtime via ⚙ Settings → LLM Input/Output. |
-| `MAX_NEW_TOKENS` | `4096` | Max tokens the LLM can generate per response (output). Adjustable at runtime via ⚙ Settings → LLM Input/Output. |
-| `LLM_TIMEOUT` | `300` | Hard timeout (seconds) per request. Increase for large clusters where tool calls take >60 s. |
+Qwen3-8B in bfloat16 uses ~16–20 GB VRAM. In CPU-only mode the model loads into system RAM.
 
 ---
 
 ## Security Notes
 
-- All typed K8s SDK tools are **read-only** by design.
-- `kubectl_exec` is **read-only by default**. Write operations require `KUBECTL_ALLOW_WRITES=true`.
-- Never expose this service publicly — it has direct cluster access.
+- All typed K8s tools are **read-only** by design.
+- `kubectl_exec` is **read-only by default**. Set `KUBECTL_ALLOW_WRITES=true` to enable write ops.
+- Secret values are hidden by default. Toggle in ⚙ Settings → Security. The toggle state persists in browser localStorage per user.
+- Never expose this service publicly — it has direct cluster read access.
 - Restrict the env file: `chmod 600 env`

@@ -568,136 +568,103 @@ button{cursor:pointer;font-family:inherit}
       <!-- ── README pane ───────────────────────────────────────────────── -->
       <div id="readme-pane">
 
-        <h1>Cloudera ECS AI Ops Chatbot</h1>
-        <p>An air-gapped Kubernetes operations chatbot for ECS, powered by a local LLM and ChromaDB.</p>
+        <h1><img src="/static/chatbot-icon.svg" width="26" height="26" style="vertical-align:middle;margin-right:6px"><img src="/static/k8s-logo.svg" width="24" height="24" style="vertical-align:middle;margin-right:8px">Cloudera ECS AI Ops Chatbot</h1>
+        <p>An air-gapped Kubernetes operations assistant for Cloudera ECS, powered by a local LLM (Qwen3-8B), LangGraph agentic loop, and ChromaDB RAG.</p>
 
-        <div class="tip">&#128161; <strong>Quick start:</strong> Type a question in the <strong>ECS AI Ops Chatbot</strong> tab — e.g. <em>"are there any pods with problems?"</em> — and press <strong>Enter</strong>.</div>
+        <div class="tip">&#128161; <strong>Quick start:</strong> Type a question in the <strong>ECS AI Ops</strong> tab — e.g. <em>"is my cluster having any issues?"</em> — and press <strong>Enter</strong>.</div>
 
-        <!-- ── Using the Chatbot ───────────────────────────────────────── -->
-        <h2>Using the Chatbot</h2>
-        <p>The assistant connects to your live Kubernetes cluster and answers questions in plain English. It calls the right tools automatically — you never need to write kubectl commands yourself.</p>
+        <!-- ── How it works ───────────────────────────────────────────── -->
+        <h2>How it works</h2>
+        <p>Each query runs through an <strong>agentic ReAct loop</strong> driven by the LLM — not by hardcoded rules. The LLM reads a Tool Selection Guide in its system prompt, picks the right tools, observes the results, and decides whether to call more tools or synthesise a final answer.</p>
+
+        <h3>Multi-hop reasoning</h3>
+        <p>For complex queries the LLM chains tool calls automatically. For example, "why is my vault pod crashing?" triggers:</p>
+        <ol>
+          <li><strong>Loop 1</strong> — LLM calls <code>get_pod_status</code>, sees OOMKilled</li>
+          <li><strong>Loop 2</strong> — LLM calls <code>describe_pod</code> + <code>get_resource_quotas</code>, confirms 256Mi limit</li>
+          <li><strong>Loop 3</strong> — LLM calls <code>get_events</code>, sees repeated OOM warnings</li>
+          <li><strong>Loop 4</strong> — LLM synthesises: <em>"vault-0 is OOMKilled due to a 256Mi memory limit…"</em></li>
+        </ol>
+        <p>You can watch each loop stage live in the <strong>AGENT STATUS</strong> panel during processing.</p>
+
+        <div class="warn">&#9888; The assistant is <strong>read-only by default</strong>. It will never restart, delete, or modify cluster resources.</div>
 
         <h3>Example queries</h3>
         <ul>
-          <li>Is the Vault doing ok?</li>
-          <li>Any pod is currently not Running?</li>
+          <li>Is my cluster having any issues?</li>
+          <li>Which pod is OOMKilled recently and what could be the cause?</li>
+          <li>What is the resource limit for cdp/dp-cadence-worker?</li>
           <li>Which node has GPUs available and in use?</li>
+          <li>Which secret in cdp has user credentials?</li>
+          <li>List all PVCs not bound across all namespaces</li>
+          <li>Show warning events in cdp namespace</li>
         </ul>
-
-        <h3>How it works</h3>
-        <p>Each query goes through a <strong>Reason → Tool → Observe → Synthesise</strong> loop. The AI picks the right Kubernetes tools, calls them against your live cluster, then summarises the results. You can see which tools were called and how long it took beneath each response.</p>
-
-        <div class="warn">&#9888; The assistant is <strong>read-only by default</strong>. It will never restart, delete, or modify resources unless you explicitly enable write operations.</div>
 
         <!-- ── Configuring the Cluster ─────────────────────────────────── -->
         <h2>Configuring the Cluster</h2>
-        <p>Click the <strong>&#9881; gear icon</strong> in the top-right corner to open Settings, then select the <strong>Cluster</strong> tab.</p>
-        <ol>
-          <li>Paste your kubeconfig YAML into the text area.</li>
-          <li>Click <strong>Apply</strong>.</li>
-          <li>On success the cluster host (e.g. <code>10.0.0.1:6443</code>) appears next to the <em>ready</em> indicator in the header.</li>
-        </ol>
-        <p>The kubeconfig is applied at runtime — no restart needed. You can switch clusters at any time by pasting a new kubeconfig.</p>
+        <p>Click the <strong>&#9881; gear icon</strong> → <strong>Cluster</strong> tab. Paste your kubeconfig YAML and click <strong>Apply</strong>. The cluster host appears in the header on success. No restart needed — you can switch clusters at any time.</p>
 
         <pre><code>curl -s -X POST http://localhost:9000/api/kubeconfig \
      -H 'Content-Type: application/json' \
      -d "{\"kubeconfig\": \"$(cat ~/.kube/config | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')\"}"</code></pre>
 
         <!-- ── Injecting Documents ─────────────────────────────────────── -->
-        <h2>Injecting Documents into the Knowledge Base</h2>
-        <p>The assistant uses <strong>RAG (Retrieval-Augmented Generation)</strong> to cross-reference live cluster data with your runbooks, known-issues docs, and SOPs. You can add documents at any time.</p>
+        <h2>Knowledge Base (RAG)</h2>
+        <p>The assistant cross-references live cluster data with your runbooks, known-issues docs, and SOPs via <strong>ChromaDB RAG</strong>.</p>
 
         <h3>Via the Settings UI</h3>
         <ol>
           <li>Click &#9881; → <strong>Knowledge Base</strong> tab.</li>
-          <li>Drag and drop files onto the drop zone, or click to browse. Supported: <code>.md</code>, <code>.pdf</code>, <code>.txt</code>.</li>
-          <li>Optionally tick <em>Force re-ingest</em> to overwrite files already in the database.</li>
-          <li>Click <strong>Ingest</strong>. A results table shows each file's status and chunk count.</li>
+          <li>Drop <code>.md</code>, <code>.pdf</code>, or <code>.txt</code> files onto the drop zone.</li>
+          <li>Optionally tick <em>Force re-ingest</em> to overwrite existing entries.</li>
+          <li>Click <strong>Ingest</strong>.</li>
         </ol>
-
-        <h3>Via curl</h3>
-        <pre><code>curl -s -X POST http://localhost:9000/api/ingest/upload \
-     -F 'files=@runbook.md' \
-     -F 'files=@known-issues.pdf' \
-     -F 'force=false'</code></pre>
 
         <h3>Via server-side directory</h3>
         <pre><code>python3 app.py --ingest ./docs
 python3 app.py --ingest ./docs --force   # re-ingest all</code></pre>
 
-        <p>Document type is auto-detected from the filename:</p>
-        <table>
-          <tr><th>Keyword in filename</th><th>Tagged as</th></tr>
-          <tr><td><code>known</code>, <code>issue</code>, <code>bug</code>, <code>error</code></td><td>known_issue</td></tr>
-          <tr><td><code>runbook</code>, <code>playbook</code>, <code>procedure</code></td><td>runbook</td></tr>
-          <tr><td><code>dos</code>, <code>donts</code>, <code>guidelines</code></td><td>dos_donts</td></tr>
-          <tr><td>anything else</td><td>general</td></tr>
-        </table>
+        <!-- ── System Prompt ───────────────────────────────────────────── -->
+        <h2>Customising the System Prompt</h2>
+        <p>The LLM's tool selection, multi-hop behaviour, and persona are all controlled by <code>config/system_prompt.txt</code>. Key sections:</p>
+        <ul>
+          <li><strong>Tool Selection Guide</strong> — which tools to call for each query type</li>
+          <li><strong>Multi-hop Reasoning</strong> — when to chain calls (e.g. OOMKilled → check quotas)</li>
+          <li><strong>CRITICAL: Never Narrate</strong> — prevents the LLM from suggesting tools instead of calling them</li>
+        </ul>
+        <p>Hot-reload after editing — no restart needed:</p>
+        <pre><code>curl -s -X POST http://localhost:9000/api/reload-prompt</code></pre>
 
         <!-- ── REST API ───────────────────────────────────────────────── -->
         <h2>REST API</h2>
-        <p>Every capability of the assistant is available over HTTP — useful for scripting, CI checks, or integrating with other tools. All endpoints return JSON.</p>
+        <div class="tip">&#128196; Interactive docs at <a href="/docs" target="_blank">/docs</a> (Swagger) &nbsp;·&nbsp; <a href="/redoc" target="_blank">/redoc</a></div>
 
-        <div class="tip">&#128196; Interactive API docs (Swagger UI) are at <a href="/docs" target="_blank">/docs</a> &nbsp;·&nbsp; ReDoc at <a href="/redoc" target="_blank">/redoc</a></div>
-
-        <h3>Ask the AI</h3>
-        <pre><code>curl -s -X POST http://localhost:9000/api/ask \
-     -H 'Content-Type: application/json' \
-     -d '{"q":"are there any failing pods?"}'</code></pre>
-
-        <h3>Call a specific tool directly</h3>
-        <pre><code>curl -s -X POST http://localhost:9000/api/tool \
-     -H 'Content-Type: application/json' \
-     -d '{"name":"get_node_health","args":{}}'</code></pre>
-
-        <h3>Cluster data endpoints</h3>
         <table>
           <tr><th>Method</th><th>Path</th><th>Description</th></tr>
           <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/info</code></td><td>Model, GPU, cluster status</td></tr>
           <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/pods?ns=X</code></td><td>Pod health summary</td></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/pods/raw?ns=X</code></td><td>kubectl-style pod table</td></tr>
           <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/nodes</code></td><td>Node health + GPU info</td></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/events?warn=1</code></td><td>Cluster events (warn=1 for warnings only)</td></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/deployments?ns=X</code></td><td>Deployment replica health</td></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/pvcs?ns=X</code></td><td>PVC / storage status</td></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/namespaces</code></td><td>All namespaces</td></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/tools</code></td><td>List all 22 registered tools</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/events?warn=1</code></td><td>Cluster events</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/tools</code></td><td>List all registered tools</td></tr>
           <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/system</code></td><td>Live CPU / RAM / GPU metrics</td></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/rag/stats</code></td><td>ChromaDB chunk statistics</td></tr>
-          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/ask</code></td><td>Ask the AI a question</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/ask</code></td><td>Ask the AI (blocking)</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/chat/stream</code></td><td>Ask the AI (SSE streaming)</td></tr>
           <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/tool</code></td><td>Call a tool directly</td></tr>
           <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/kubeconfig</code></td><td>Apply a new kubeconfig</td></tr>
-          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/ingest/upload</code></td><td>Upload documents to ChromaDB</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/ingest/upload</code></td><td>Upload docs to ChromaDB</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/reload-prompt</code></td><td>Hot-reload system_prompt.txt</td></tr>
           <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/prompt</code></td><td>Read current system prompt</td></tr>
           <tr><td><span class="badge badge-put">PUT</span></td><td><code>/api/prompt</code></td><td>Update system prompt</td></tr>
-          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/reload-prompt</code></td><td>Hot-reload system_prompt.txt</td></tr>
         </table>
-
-        <!-- ── System Prompt ───────────────────────────────────────────── -->
-        <h2>Customising the System Prompt</h2>
-        <p>The LLM's behaviour is controlled by <code>config/system_prompt.txt</code>. Edit it freely — one placeholder must remain:</p>
-        <ul>
-          <li><code>{custom_rules}</code> — injected from the <code>CUSTOM_RULES</code> env variable</li>
-        </ul>
-        <p>After editing, hot-reload without restarting:</p>
-        <pre><code>curl -s -X POST http://localhost:9000/api/reload-prompt</code></pre>
 
         <!-- ── Runtime Tuning ─────────────────────────────────────────── -->
         <h2>Tuning Output Length</h2>
-        <p>Two independent settings control how much data flows through the pipeline. Either can cause truncated responses if too low.</p>
         <table>
           <tr><th>Setting</th><th>Controls</th><th>Default</th></tr>
           <tr><td><code>KUBECTL_MAX_CHARS</code></td><td>Characters of cluster data the LLM <strong>reads</strong></td><td>20 000</td></tr>
           <tr><td><code>MAX_NEW_TOKENS</code></td><td>Tokens the LLM <strong>writes</strong> (~4 chars/token)</td><td>4 096</td></tr>
         </table>
-        <p>Adjust at runtime — no restart needed:</p>
-        <ol>
-          <li>Click the ⚙ gear icon → <strong>LLM Input/Output</strong> tab.</li>
-          <li>Use the <strong>MAX INPUT CHARS</strong> slider to control how much cluster data the LLM reads.</li>
-          <li>Use the <strong>MAX RESPONSE TOKENS</strong> slider to control how long the LLM response can be.</li>
-          <li>Click <strong>Apply</strong>.</li>
-        </ol>
-        <p>Or via the API:</p>
+        <p>Adjust at runtime via ⚙ Settings → LLM Input/Output, or via API:</p>
         <pre><code>curl -s -X POST http://localhost:9000/api/config \
      -H 'Content-Type: application/json' \
      -d '{"kubectl_max_chars": 50000, "max_new_tokens": 6144}'</code></pre>
@@ -710,33 +677,34 @@ python3 app.py --ingest ./docs --force   # re-ingest all</code></pre>
           <tr><td><code>EMBED_MODEL</code></td><td>nomic-ai/nomic-embed-text-v1.5</td><td>SentenceTransformers model ID or local path</td></tr>
           <tr><td><code>NUM_GPU</code></td><td>auto</td><td>GPU count (0 = CPU only)</td></tr>
           <tr><td><code>KUBECONFIG_PATH</code></td><td>~/kubeconfig</td><td>Path to kubeconfig (blank = in-cluster)</td></tr>
-          <tr><td><code>LOG_LEVEL</code></td><td>INFO</td><td>DEBUG / INFO / WARNING / ERROR</td></tr>
+          <tr><td><code>LOG_LEVEL</code></td><td>DEBUG</td><td>DEBUG shows full agentic loop trace</td></tr>
           <tr><td><code>CHROMA_DIR</code></td><td>./chromadb</td><td>ChromaDB persistent storage path</td></tr>
-          <tr><td><code>CUSTOM_RULES</code></td><td>—</td><td>Site-specific rules injected into the prompt</td></tr>
+          <tr><td><code>CUSTOM_RULES</code></td><td>—</td><td>Site-specific rules injected into the system prompt</td></tr>
           <tr><td><code>KUBECTL_ALLOW_WRITES</code></td><td>false</td><td>Allow write operations via kubectl_exec</td></tr>
-          <tr><td><code>KUBECTL_MAX_CHARS</code></td><td>20000</td><td>Max chars of K8s tool output fed into the LLM (input). Runtime-adjustable via ⚙ Settings.</td></tr>
-          <tr><td><code>MAX_NEW_TOKENS</code></td><td>4096</td><td>Max tokens the LLM can generate per response (output). Runtime-adjustable via ⚙ Settings.</td></tr>
-          <tr><td><code>LLM_TIMEOUT</code></td><td>300</td><td>Hard timeout (seconds) per request. Increase for large clusters.</td></tr>
+          <tr><td><code>KUBECTL_MAX_CHARS</code></td><td>20000</td><td>Max chars of K8s tool output fed into LLM. Runtime-adjustable.</td></tr>
+          <tr><td><code>MAX_NEW_TOKENS</code></td><td>4096</td><td>Max tokens the LLM generates per response. Runtime-adjustable.</td></tr>
+          <tr><td><code>LLM_TIMEOUT</code></td><td>300</td><td>Hard timeout (seconds) per request.</td></tr>
         </table>
 
         <!-- ── Hardware ───────────────────────────────────────────────── -->
         <h2>Hardware Sizing</h2>
         <table>
-          <tr><th>Setup</th><th>RAM</th><th>VRAM</th><th>Model</th><th>Speed</th></tr>
-          <tr><td>CPU only, 8-core</td><td>32 GB</td><td>—</td><td>Qwen/Qwen3-8B</td><td>~6–10 tok/s</td></tr>
-          <tr><td>GPU (recommended)</td><td>32 GB</td><td>~20 GB</td><td>Qwen/Qwen3-8B</td><td>~30–60 tok/s</td></tr>
+          <tr><th>Setup</th><th>RAM</th><th>VRAM</th><th>Speed</th></tr>
+          <tr><td>CPU only, 8-core</td><td>32 GB</td><td>—</td><td>~6–10 tok/s</td></tr>
+          <tr><td>GPU (recommended)</td><td>32 GB</td><td>~20 GB</td><td>~30–60 tok/s</td></tr>
         </table>
 
         <!-- ── Security ───────────────────────────────────────────────── -->
         <h2>Security Notes</h2>
         <ul>
-          <li>All typed K8s SDK tools are <strong>read-only</strong> by design.</li>
-          <li><code>kubectl_exec</code> is <strong>read-only by default</strong>. It uses the Kubernetes Python API — no local kubectl binary needed. Set <code>KUBECTL_ALLOW_WRITES=true</code> to enable write operations.</li>
-          <li>Never expose this service publicly — it has direct cluster access.</li>
+          <li>All typed K8s tools are <strong>read-only</strong> by design.</li>
+          <li><code>kubectl_exec</code> is read-only by default. Set <code>KUBECTL_ALLOW_WRITES=true</code> to enable write ops.</li>
+          <li>Secret values are hidden by default — toggle in ⚙ Settings → Security. Preference persists per browser.</li>
+          <li>Never expose this service publicly — it has direct cluster read access.</li>
           <li>Restrict the env file: <code>chmod 600 env</code></li>
         </ul>
 
-        <div class="tip">&#9993; For feedback and questions contact <a href="mailto:dennislee@cloudera.com">dennislee@cloudera.com</a></div>
+        <div class="tip">&#9993; Contact <a href="mailto:dennislee@cloudera.com">dennislee@cloudera.com</a> for feedback and questions.</div>
 
       </div><!-- #readme-pane -->
 
