@@ -1,0 +1,1860 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<!-- Disable Cloudflare email obfuscation for this app -->
+<meta name="cf-2fa-verify" content="no-obfuscate"/>
+<title>ECS AI Ops</title>
+<link rel="icon" type="image/svg+xml" href="/static/k8s-logo.svg"/>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{font-family:'IBM Plex Sans',sans-serif}
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+textarea:focus{outline:none}
+button{cursor:pointer;font-family:inherit}
+
+/* ── Theme variables (Midnight defaults) ─────────────────────────────────── */
+:root{
+  --bg:#030712;--headerBg:#070d1a;--border:#0f1f35;
+  --accent:#38bdf8;--accent2:#7dd3fc;
+  --msgBg:#070d1a;--inputBg:#0a0f1e;
+  --userBg:#0f172a;--userBorder:#1e293b;
+  --statusBg:#040b14;--dimText:#475569;--bodyText:#cbd5e1;
+  --tooltipBg:#0a1628;--tooltipText:#94a3b8;
+  --panelBg:#020a14;--panelBorder:#0f1f35;--panelLabel:#7dd3fc;--panelDim:#475569;
+  --textMain:#e2e8f0;--inputText:#e2e8f0;
+  --shimmer:linear-gradient(90deg,#38bdf8 0%,#818cf8 25%,#c084fc 50%,#38bdf8 75%,#00C1DE 100%);
+}
+
+/* ── Animations ──────────────────────────────────────────────────────────── */
+@keyframes pls{0%,100%{opacity:1}50%{opacity:.2}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes shimmer{0%{background-position:-500px 0}100%{background-position:500px 0}}
+@keyframes dotPulse{0%,80%,100%{opacity:.2}40%{opacity:1}}
+@keyframes inferPulse{0%,100%{opacity:1}50%{opacity:.5}}
+
+/* ── Title shimmer ───────────────────────────────────────────────────────── */
+.shiny{
+  background:var(--shimmer);background-size:500px 100%;
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  background-clip:text;animation:shimmer 4s linear infinite;
+}
+.shiny-solid{
+  -webkit-text-fill-color:unset !important;background:none !important;
+  animation:none !important;color:var(--solidTitle,#f96702) !important;
+}
+.fade-up{animation:fadeUp .25s ease}
+
+/* ── App layout ──────────────────────────────────────────────────────────── */
+#app{height:100vh;display:flex;flex-direction:column;background:var(--bg);color:var(--textMain)}
+
+/* Header */
+#hdr{
+  padding:10px 20px;border-bottom:1px solid var(--border);
+  background:var(--headerBg);display:flex;align-items:center;gap:12px;flex-shrink:0;
+  position:relative;z-index:100;
+}
+#logos{display:flex;align-items:center;gap:8px;flex-shrink:0}
+#logos img{object-fit:contain;display:block}
+#title-block{display:flex;flex-direction:column;gap:2px}
+#ttl{font-size:19px;font-weight:700;font-family:'IBM Plex Sans',sans-serif;letter-spacing:-.02em;line-height:1}
+#subtitle{font-size:11px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;display:flex;align-items:center;gap:8px;max-width:600px;overflow:hidden}
+#hdr-right{margin-left:auto;display:flex;align-items:center;gap:14px}
+#email-link{font-size:11px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;text-decoration:none;transition:color .2s}
+#email-link:hover{color:var(--accent2)}
+
+/* Theme dots */
+#theme-row{display:flex;align-items:center;gap:5px}
+#theme-label{font-size:10px;color:var(--dimText);font-family:'IBM Plex Mono',monospace}
+.tdot{
+  width:20px;height:20px;border-radius:50%;border:2px solid transparent;
+  cursor:pointer;padding:0;transition:border-color .15s,transform .12s;flex-shrink:0;
+}
+.tdot:hover{transform:scale(1.25)}
+.tdot.active{border-color:var(--accent)}
+#theme-name{font-size:10px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;min-width:56px}
+
+/* Ready dot */
+#rdot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+@keyframes rdotPulse{0%,100%{opacity:1}50%{opacity:.3}}
+#rdot.ready{animation:rdotPulse 1.6s ease-in-out infinite}
+#rtxt{font-size:11px;color:var(--dimText);font-family:'IBM Plex Mono',monospace}
+
+/* Settings gear button — no circle, slow rotation */
+@keyframes gearSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+#settings-btn{
+  background:none;border:none;
+  display:flex;align-items:center;justify-content:center;
+  cursor:pointer;font-size:26px;color:var(--accent);
+  padding:0;flex-shrink:0;
+  animation:gearSpin 8s linear infinite;
+  transition:color .2s,font-size .2s;
+}
+#settings-btn:hover{color:var(--accent2);animation-duration:1.5s;}
+
+/* Settings modal */
+#settings-overlay{
+  position:fixed;inset:0;background:#0009;z-index:9000;
+  display:none;align-items:center;justify-content:center;
+}
+#settings-overlay.open{display:flex}
+#settings-modal{
+  background:var(--tooltipBg);border:1px solid var(--border);
+  border-radius:16px;width:620px;max-height:92vh;overflow:hidden;
+  font-family:'IBM Plex Sans',sans-serif;color:var(--textMain);
+  box-shadow:0 20px 60px #0008,0 0 40px var(--accent)22;display:flex;flex-direction:column;
+}
+#settings-modal h3{
+  font-size:16px;font-weight:700;color:var(--accent2);
+  font-family:'IBM Plex Mono',monospace;letter-spacing:.06em;
+  padding:22px 24px 0;flex-shrink:0;display:flex;align-items:center;gap:10px;
+}
+#settings-modal h3 .modal-gear{font-size:26px;color:var(--accent);filter:drop-shadow(0 0 6px var(--accent)99);}
+.stab-row{
+  display:flex;gap:0;padding:14px 24px 0;border-bottom:1px solid var(--border);
+  flex-shrink:0;
+}
+.stab{
+  padding:8px 18px;font-size:12px;font-weight:600;font-family:'IBM Plex Mono',monospace;
+  border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;
+  cursor:pointer;color:var(--dimText);background:none;
+  margin-bottom:-1px;transition:color .15s,background .15s;
+}
+.stab.active{
+  color:var(--accent2);background:var(--tooltipBg);
+  border-color:var(--border);
+}
+.stab-pane{display:none;flex-direction:column;gap:12px;padding:20px 24px 22px;overflow-y:auto;flex:1}
+.stab-pane.active{display:flex}
+.stab-pane p{font-size:12px;color:var(--textMain);font-family:'IBM Plex Mono',monospace;margin:0}
+#kube-textarea,.stab-textarea{
+  width:100%;height:180px;resize:vertical;
+  background:var(--inputBg);border:1px solid var(--border);
+  border-radius:8px;padding:12px;font-size:12px;
+  font-family:'IBM Plex Mono',monospace;color:var(--inputText);
+  line-height:1.5;transition:border-color .18s;
+}
+#kube-textarea:focus,.stab-textarea:focus{outline:none;border-color:var(--accent)}
+.stab-status{font-size:12px;font-family:'IBM Plex Mono',monospace;min-height:18px}
+.modal-btns{display:flex;gap:8px;justify-content:flex-end}
+.modal-btn{
+  padding:9px 20px;border-radius:8px;font-size:13px;font-weight:600;
+  font-family:'IBM Plex Mono',monospace;cursor:pointer;transition:all .15s;border:none;
+}
+.modal-btn-primary{background:var(--accent);color:#000}
+.modal-btn-primary:hover{filter:brightness(1.15)}
+.modal-btn-cancel{background:var(--border);color:var(--dimText)}
+.modal-btn-cancel:hover{color:var(--textMain)}
+/* Drop zone */
+#drop-zone{
+  border:2px dashed var(--accent2);border-radius:10px;
+  padding:20px;text-align:center;cursor:pointer;
+  font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--accent2);
+  transition:border-color .18s,background .18s;
+}
+#drop-zone.drag-over{border-color:var(--accent);background:var(--inputBg)}
+#drop-zone input[type=file]{display:none}
+#drop-zone-label{font-size:12px;color:var(--accent2);margin-bottom:4px;display:block;font-weight:600}
+/* Ingest results table */
+#ingest-results{
+  font-family:'IBM Plex Mono',monospace;font-size:11px;
+  border:1px solid var(--border);border-radius:8px;overflow:hidden;max-height:160px;overflow-y:auto;
+}
+.ir-row{
+  display:grid;grid-template-columns:1fr 70px 55px;gap:4px;
+  padding:5px 10px;border-bottom:1px solid var(--border)22;align-items:center;
+}
+.ir-row:last-child{border-bottom:none}
+.ir-row.hdr{background:var(--inputBg);color:var(--panelLabel);font-weight:700;font-size:10px;letter-spacing:.05em}
+.ir-status-ok{color:#22c55e}.ir-status-skip{color:#f59e0b}.ir-status-err{color:#ef4444}
+/* RAG stats bar */
+#rag-stats-bar{
+  display:flex;gap:12px;font-family:'IBM Plex Mono',monospace;font-size:12px;
+  color:var(--textMain);background:var(--inputBg);border-radius:6px;padding:7px 10px;
+}
+.rs-val{color:var(--accent2);font-weight:700;margin-left:3px}
+
+/* ── Tech Preview inline banner (replaces ⚡ GPU subtitle row) ──────────── */
+@keyframes headerTicker{
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+#header-ticker-wrap{
+  overflow:hidden;white-space:nowrap;flex:1;min-width:0;
+  mask-image:linear-gradient(to right,transparent 0%,black 6%,black 94%,transparent 100%);
+  -webkit-mask-image:linear-gradient(to right,transparent 0%,black 6%,black 94%,transparent 100%);
+}
+#header-ticker{
+  display:inline-block;
+  animation:headerTicker 28s linear infinite;
+  font-family:'IBM Plex Mono',monospace;font-size:10px;
+  color:var(--accent2);padding-right:120px;
+}
+#header-ticker:hover{animation-play-state:paused;cursor:default;}
+#header-ticker a{color:var(--accent);text-decoration:none;}
+#header-ticker a:hover{text-decoration:underline;}
+
+/* ── Body (chat + panels) ────────────────────────────────────────────────── */
+#body{flex:1;display:flex;overflow:hidden}
+#chat-col{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+
+/* Main tab bar (AI Ops | README) */
+#main-tabs{
+  display:flex;align-items:center;gap:0;
+  border-bottom:1px solid var(--border);background:var(--headerBg);
+  padding:0 22px;flex-shrink:0;
+}
+.mtab{
+  padding:9px 16px;font-size:12px;font-weight:600;
+  font-family:'IBM Plex Mono',monospace;color:var(--dimText);
+  border:none;background:none;cursor:pointer;
+  border-bottom:2px solid transparent;margin-bottom:-1px;
+  transition:color .15s,border-color .15s;
+}
+.mtab:hover{color:var(--accent2)}
+.mtab.active{color:var(--accent2);border-bottom-color:var(--accent)}
+
+/* Chat pane */
+#chat-pane{flex:1;display:flex;flex-direction:column;overflow:hidden}
+#messages{flex:1;overflow-y:auto;padding:18px 22px}
+
+/* README pane */
+#readme-pane{
+  flex:1;overflow-y:auto;display:none;
+  padding:28px 36px;
+  font-family:'IBM Plex Sans',sans-serif;font-size:14px;
+  color:var(--bodyText);line-height:1.75;
+}
+#readme-pane.active{display:block}
+#readme-pane h1{
+  font-size:22px;font-weight:700;color:var(--accent2);margin-bottom:6px;
+  font-family:'IBM Plex Sans',sans-serif;
+}
+#readme-pane h2{
+  font-size:15px;font-weight:700;color:var(--panelLabel);
+  font-family:'IBM Plex Mono',monospace;letter-spacing:.04em;
+  margin:28px 0 10px;padding-bottom:5px;border-bottom:1px solid var(--border);
+}
+#readme-pane h3{
+  font-size:13px;font-weight:700;color:var(--accent2);
+  font-family:'IBM Plex Mono',monospace;margin:18px 0 6px;
+}
+#readme-pane p{margin-bottom:12px}
+#readme-pane a{color:var(--accent);text-decoration:none}
+#readme-pane a:hover{text-decoration:underline}
+#readme-pane code{
+  font-family:'IBM Plex Mono',monospace;font-size:12px;
+  background:var(--inputBg);border:1px solid var(--border);
+  border-radius:4px;padding:1px 5px;color:var(--accent2);
+}
+#readme-pane pre{
+  background:var(--inputBg);border:1px solid var(--border);
+  border-radius:10px;padding:14px 16px;overflow-x:auto;
+  font-family:'IBM Plex Mono',monospace;font-size:12px;
+  color:var(--bodyText);line-height:1.6;margin:10px 0 16px;
+}
+#readme-pane pre code{background:none;border:none;padding:0;color:inherit}
+#readme-pane table{
+  border-collapse:collapse;font-size:12.5px;font-family:'IBM Plex Mono',monospace;
+  margin:10px 0 18px;width:100%;
+}
+#readme-pane th{
+  background:var(--inputBg);color:var(--panelLabel);
+  font-weight:700;padding:7px 12px;border:1px solid var(--border);
+  text-align:left;font-size:11px;letter-spacing:.04em;
+}
+#readme-pane td{
+  padding:6px 12px;border:1px solid var(--border);
+  color:var(--bodyText);vertical-align:top;
+}
+#readme-pane tr:nth-child(even) td{background:var(--headerBg)55}
+#readme-pane ul,#readme-pane ol{padding-left:20px;margin-bottom:12px}
+#readme-pane li{margin-bottom:5px}
+#readme-pane .rd-section{margin-bottom:8px}
+#readme-pane .badge{
+  display:inline-block;font-size:10px;font-weight:700;
+  font-family:'IBM Plex Mono',monospace;padding:2px 7px;border-radius:4px;
+  margin-right:4px;vertical-align:middle;
+}
+#readme-pane .badge-get{background:#14532d;color:#86efac}
+#readme-pane .badge-post{background:#1e3a5f;color:#93c5fd}
+#readme-pane .badge-put{background:#451a03;color:#fed7aa}
+#readme-pane .tip{
+  background:var(--inputBg);border-left:3px solid var(--accent);
+  border-radius:0 8px 8px 0;padding:10px 14px;margin:10px 0 16px;
+  font-size:13px;
+}
+#readme-pane .warn{
+  background:#1c1200;border-left:3px solid #f59e0b;
+  border-radius:0 8px 8px 0;padding:10px 14px;margin:10px 0 16px;
+  font-size:13px;
+}
+#ex-label{font-size:11px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;letter-spacing:.1em}
+#ex-btns{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
+.ex-btn{
+  background:var(--headerBg);border:1px solid var(--border);
+  border-radius:8px;padding:6px 12px;font-size:12px;
+  color:var(--dimText);font-family:'IBM Plex Mono',monospace;transition:all .18s;
+}
+.ex-btn:hover{border-color:var(--accent);color:var(--accent2)}
+
+/* Input bar */
+#input-bar{padding:4px 22px 12px;background:var(--headerBg);display:flex;gap:10px}
+#chat-refresh-note{padding:8px 22px 4px;font-size:11.5px;color:var(--accent);background:var(--headerBg);font-weight:500;letter-spacing:.01em;border-top:1px solid var(--border)}
+#chat-input{
+  flex:1;background:var(--inputBg);border:1px solid var(--border);
+  border-radius:10px;padding:10px 14px;color:var(--inputText);
+  font-size:14px;resize:none;transition:border-color .2s;line-height:1.5;
+}
+#chat-input:focus{border-color:var(--accent)}
+#send-btn{
+  background:var(--msgBg);border:1px solid var(--accent);border-radius:10px;
+  padding:10px 18px;color:var(--accent2);font-size:13px;
+  font-family:'IBM Plex Mono',monospace;font-weight:700;
+  transition:all .2s;align-self:stretch;min-width:82px;
+}
+#send-btn:disabled{background:var(--headerBg);border-color:var(--border);color:var(--dimText);cursor:not-allowed}
+
+/* ── Chat messages ───────────────────────────────────────────────────────── */
+.msg-user{display:flex;justify-content:flex-end;margin-bottom:14px}
+.msg-user-bubble{
+  max-width:72%;background:var(--userBg);border:1px solid var(--userBorder);
+  border-radius:14px 14px 2px 14px;padding:10px 15px;
+  font-size:14px;color:var(--bodyText);line-height:1.6;
+}
+.msg-ai{display:flex;gap:10px;align-items:flex-start;margin-bottom:18px}
+.ai-icon{
+  width:27px;height:27px;border-radius:7px;background:var(--headerBg);
+  border:1px solid var(--accent);display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;margin-top:2px;
+}
+.ai-body{flex:1;min-width:0}
+.ai-bubble{
+  background:var(--msgBg);border:1px solid var(--border);
+  border-radius:2px 14px 14px 14px;padding:13px 17px;
+  font-size:14px;color:var(--bodyText);line-height:1.75;
+  white-space:pre-wrap;word-break:break-word;
+}
+.ai-bubble.clarification{
+  border-color:var(--accent)66;
+  background:var(--statusBg);
+  color:var(--accent2);
+  font-style:italic;
+}
+.ai-elapsed{font-size:10px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;margin-top:4px}
+.ai-copy-row{display:flex;justify-content:flex-end;margin-top:6px}
+.copy-btn{
+  display:inline-flex;align-items:center;gap:5px;padding:3px 10px;
+  border-radius:6px;font-size:10px;font-family:'IBM Plex Mono',monospace;
+  background:var(--headerBg);border:1px solid var(--border);
+  color:var(--dimText);cursor:pointer;transition:color .15s,border-color .15s;
+}
+.copy-btn:hover{color:var(--accent2);border-color:var(--accent)88}
+.copy-btn.copied{color:#22c55e;border-color:#22c55e88}
+.ai-tools{margin-top:5px;display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.tbadge{
+  display:inline-flex;align-items:center;gap:4px;padding:2px 8px;
+  border-radius:999px;font-size:10px;background:var(--headerBg);
+  border:1px solid var(--accent)44;color:var(--accent2);
+  font-family:'IBM Plex Mono',monospace;font-weight:700;
+}
+.tmeta{font-size:10px;color:var(--dimText);font-family:'IBM Plex Mono',monospace}
+.kubectl-log{
+  margin-top:6px;font-family:'IBM Plex Mono',monospace;font-size:10px;
+  color:var(--dimText);background:var(--panelBg);border:1px solid var(--border);
+  border-radius:6px;padding:6px 10px;display:flex;flex-direction:column;gap:2px;
+}
+.kubectl-cmd{color:#7dd3fc;white-space:pre-wrap;word-break:break-all}
+
+/* Thinking status */
+.status-box{
+  background:var(--statusBg);border:1px solid var(--border);
+  border-radius:12px;padding:12px 15px;margin-bottom:4px;
+  font-family:'IBM Plex Mono',monospace;font-size:12px;
+  display:flex;flex-direction:column;gap:5px;
+}
+.s-label{color:var(--accent);font-size:10px;letter-spacing:.12em;margin-bottom:2px}
+.s-line{display:flex;align-items:center;gap:8px;color:var(--dimText)}
+.s-line.cur{color:var(--accent2)}
+.sdots{display:flex;gap:4px;margin-top:2px}
+.sdot{width:4px;height:4px;border-radius:50%;background:var(--dimText);animation:dotPulse 1.2s infinite}
+
+/* ── Right panels ────────────────────────────────────────────────────────── */
+#panels{display:flex;flex-shrink:0;flex-direction:column}
+/* Dashboard header banner at top of right panel */
+#panel-dashboard-hdr{
+  width:288px;flex-shrink:0;
+  background:linear-gradient(135deg,var(--accent)22,var(--accent2)11);
+  border-left:1px solid var(--panelBorder);
+  border-bottom:2px solid var(--accent)66;
+  padding:9px 12px;
+  display:flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;
+}
+#panel-dashboard-hdr .pdh-icon svg{flex-shrink:0;}
+#panel-dashboard-hdr .pdh-title{
+  font-size:10px;font-weight:700;letter-spacing:.06em;
+  color:var(--accent2);text-transform:uppercase;line-height:1.2;
+}
+#panel-dashboard-hdr .pdh-sub{font-size:9px;color:var(--panelDim);margin-top:1px}
+.panel{
+  width:288px;flex-shrink:0;
+  background:var(--panelBg);border-left:1px solid var(--panelBorder);
+  display:flex;flex-direction:column;font-family:'IBM Plex Mono',monospace;overflow:hidden;
+}
+/* GPU panel above CPU, CPU takes remaining space */
+#gpu-panel{flex-shrink:0;border-top:1px solid var(--panelBorder)}
+#cpu-panel{flex:1;min-height:0}
+.ph{  /* panel header */
+  padding:8px 12px 6px;border-bottom:1px solid var(--panelBorder);
+  display:flex;justify-content:space-between;align-items:center;flex-shrink:0;
+}
+.ph-title{color:var(--panelLabel);font-weight:700;font-size:12px;letter-spacing:.04em}
+.ph-sub{color:var(--panelDim);font-size:11px}
+.pf{ /* panel footer */
+  padding:7px 12px;border-top:1px solid var(--panelBorder);
+  display:flex;justify-content:space-between;align-items:center;flex-shrink:0;
+}
+
+/* Inference badge (footer) */
+.infer-badge{
+  display:flex;align-items:center;gap:5px;
+  font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;
+}
+.infer-dot{
+  width:7px;height:7px;border-radius:50%;flex-shrink:0;
+  animation:inferPulse 2s ease-in-out infinite;
+}
+
+/* Sparkline */
+.spark-wrap{
+  background:var(--headerBg);border:1px solid var(--panelBorder);
+  border-radius:4px;margin-bottom:6px;overflow:hidden;position:relative;
+}
+.spark-lbl{position:absolute;top:3px;right:5px;font-size:10px;color:var(--panelDim)}
+
+/* Section inside panel */
+.psec{padding:8px 12px 4px;flex-shrink:0}
+
+/* Utilisation bar (generic) */
+.util-row{display:flex;align-items:center;gap:6px;margin-bottom:3px}
+.util-lbl{font-size:11px;color:var(--panelLabel);min-width:24px}
+.util-pct{font-size:12px;font-weight:700;min-width:38px;text-align:right}
+.ubar-wrap{flex:1;position:relative;height:8px;border-radius:2px;overflow:hidden;background:var(--panelBorder)33}
+.ubar-fill{position:absolute;top:0;left:0;bottom:0;border-radius:2px;transition:width .9s ease}
+.ubar-dots{
+  position:absolute;inset:0;
+  background-image:repeating-linear-gradient(90deg,transparent,transparent 4px,var(--panelBg)66 4px,var(--panelBg)66 5px);
+}
+
+/* Dotbar (CPU total) */
+#cpu-dotbar{display:flex;gap:1px;align-items:center;overflow:hidden;flex:1}
+
+/* Cores grid */
+#cores-grid{flex:1;overflow-y:auto;padding:0 12px;display:flex;gap:8px}
+.core-col{flex:1;display:flex;flex-direction:column;gap:2px}
+.core-row{display:flex;align-items:center;gap:3px}
+.core-lbl{color:var(--panelDim);min-width:20px;font-size:10px}
+.core-track{flex:1;position:relative;height:7px}
+.core-bg{position:absolute;inset:0;background:var(--panelBorder)33;border-radius:2px}
+.core-fill{position:absolute;top:0;left:0;bottom:0;border-radius:2px;transition:width .8s ease}
+.core-dots{
+  position:absolute;inset:0;border-radius:2px;
+  background-image:repeating-linear-gradient(90deg,transparent,transparent 4px,var(--panelBg)66 4px,var(--panelBg)66 5px);
+}
+.core-pct{min-width:28px;text-align:right;font-size:10px;color:var(--panelDim)}
+
+/* Load avg section */
+.load-sec{padding:5px 12px 7px;border-top:1px solid var(--panelBorder);flex-shrink:0;display:flex;justify-content:space-between;align-items:center}
+.load-title{color:var(--panelLabel);font-weight:700;font-size:11px}
+#load-avg{color:var(--panelDim);font-size:11px;letter-spacing:.06em}
+
+/* GPU card */
+.gpu-cards-wrap{flex:1;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:12px}
+.gpu-card{
+  background:var(--headerBg);border:1px solid var(--panelBorder);
+  border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:7px;
+}
+.gpu-chdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:2px}
+.gpu-idx{color:var(--panelLabel);font-weight:700;font-size:12px}
+.gpu-name{color:var(--panelDim);font-size:10px;max-width:165px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.g-bar-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}
+.g-bar-lbl{color:var(--panelDim);font-size:11px}
+.g-bar-val{font-size:12px;font-weight:700}
+.g-track{height:9px;background:var(--panelBorder)33;border-radius:3px;position:relative;overflow:hidden}
+.g-fill{position:absolute;top:0;left:0;bottom:0;border-radius:3px;transition:width 1s ease}
+.g-stripe{
+  position:absolute;inset:0;
+  background-image:repeating-linear-gradient(90deg,transparent,transparent 4px,var(--panelBg)55 4px,var(--panelBg)55 5px);
+}
+.vram-track{height:7px;background:var(--panelBorder)33;border-radius:3px;position:relative;overflow:hidden}
+.vram-fill{position:absolute;top:0;left:0;bottom:0;border-radius:3px;transition:width 1s ease}
+.gpu-meta{display:flex;gap:10px;font-size:11px}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ═══ HEADER ══════════════════════════════════════════════════════════ -->
+  <div id="hdr">
+    <div id="logos">
+      <img src="/static/rancher-logo.svg" alt="Rancher" width="36" height="36"/>
+      <img src="/static/k8s-logo.svg"     alt="K8s"     width="32" height="32"/>
+    </div>
+    <div id="title-block">
+      <div id="ttl" class="shiny">Cloudera ECS AI Ops</div>
+      <div id="subtitle">
+        <div id="header-ticker-wrap">
+          <span id="header-ticker">This Agentic ECS AI Ops Chatbot is in Tech Preview. Please contact <a href="mailto:dennislee@cloudera.com">dennislee@cloudera.com</a> for feedback and comments.&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;This Agentic ECS AI Ops Chatbot is in Tech Preview. Please contact <a href="mailto:dennislee@cloudera.com">dennislee@cloudera.com</a> for feedback and comments.</span>
+        </div>
+      </div>
+    </div>
+    <div id="hdr-right">
+      <a id="email-link" href="mailto:dennislee@cloudera.com">&#9993; dennislee&#64;cloudera.com</a>
+      <div id="theme-row">
+        <span id="theme-label">THEME</span>
+        <button class="tdot active" data-theme="midnight"
+          style="background:linear-gradient(135deg,#38bdf8,#818cf8)" title="Midnight"></button>
+        <button class="tdot" data-theme="singapore"
+          style="background:linear-gradient(135deg,#EF3340,#b31a27)" title="Singapore"></button>
+        <button class="tdot" data-theme="cloudera"
+          style="background:transparent;display:flex;align-items:center;justify-content:center;overflow:hidden" title="Cloudera">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="#F96702" xmlns="http://www.w3.org/2000/svg" style="display:block;flex-shrink:0">
+            <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm.344 20.251a8.25 8.25 0 1 1 0-16.502 8.21 8.21 0 0 1 5.633 2.234L15.519 8.53a4.686 4.686 0 0 0-3.175-1.239 4.709 4.709 0 1 0 3.284 8.081l2.657 2.346a8.224 8.224 0 0 1-5.941 2.533z"/>
+          </svg>
+        </button>
+        <span id="theme-name">Midnight</span>
+      </div>
+      <span id="cluster-host" style="font-size:10px;color:var(--accent);font-family:'IBM Plex Mono',monospace">· Connected ECS: unknown</span>
+      <!-- Settings gear -->
+      <button id="settings-btn" title="Settings">&#9881;</button>
+    </div>
+  </div>
+
+  <!-- ═══ BODY ═════════════════════════════════════════════════════════════ -->
+  <div id="body">
+
+    <!-- Chat column -->
+    <div id="chat-col">
+
+      <!-- ── Main tab bar ───────────────────────────────────────────────── -->
+      <div id="main-tabs">
+        <button class="mtab active" data-pane="chat-pane"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:4px"><path d="M18 3a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-4.724l-4.762 2.857a1 1 0 0 1 -1.508 -.743l-.006 -.114v-2h-1a4 4 0 0 1 -3.995 -3.8l-.005 -.2v-8a4 4 0 0 1 4 -4zm-2.8 9.286a1 1 0 0 0 -1.414 .014a2.5 2.5 0 0 1 -3.572 0a1 1 0 0 0 -1.428 1.4a4.5 4.5 0 0 0 6.428 0a1 1 0 0 0 -.014 -1.414m-5.69 -4.286h-.01a1 1 0 1 0 0 2h.01a1 1 0 0 0 0 -2m5 0h-.01a1 1 0 0 0 0 2h.01a1 1 0 0 0 0 -2" /></svg> ECS AI Ops Chatbot</button>
+        <button class="mtab" data-pane="readme-pane">&#128214; README</button>
+      </div>
+
+      <!-- ── Chat pane ─────────────────────────────────────────────────── -->
+      <div id="chat-pane">
+        <div id="messages">
+          <div id="examples">
+            <div id="ex-label">EXAMPLE QUERIES</div>
+            <div id="ex-btns"></div>
+          </div>
+        </div>
+        <div id="chat-refresh-note">
+          💡 <strong>Tip:</strong> Refresh the page to start a new conversation and prevent hallucination from long context. For large clusters, narrow queries to a specific namespace for faster and more complete responses.
+        </div>
+        <div id="input-bar">
+          <textarea id="chat-input" rows="2"
+            placeholder="Ask about cluster health, Longhorn storage, pod issues, logs, events&hellip; (Enter to send)"></textarea>
+          <button id="send-btn">&#8594; Send</button>
+        </div>
+      </div>
+
+      <!-- ── README pane ───────────────────────────────────────────────── -->
+      <div id="readme-pane">
+
+        <h1>Cloudera ECS AI Ops Chatbot</h1>
+        <p>An air-gapped Kubernetes operations chatbot for ECS, powered by a local LLM and ChromaDB.</p>
+
+        <div class="tip">&#128161; <strong>Quick start:</strong> Type a question in the <strong>ECS AI Ops Chatbot</strong> tab — e.g. <em>"are there any pods with problems?"</em> — and press <strong>Enter</strong>.</div>
+
+        <!-- ── Using the Chatbot ───────────────────────────────────────── -->
+        <h2>Using the Chatbot</h2>
+        <p>The assistant connects to your live Kubernetes cluster and answers questions in plain English. It calls the right tools automatically — you never need to write kubectl commands yourself.</p>
+
+        <h3>Example queries</h3>
+        <ul>
+          <li>Is the Vault doing ok?</li>
+          <li>Any pod is currently not Running?</li>
+          <li>Which node has GPUs available and in use?</li>
+        </ul>
+
+        <h3>How it works</h3>
+        <p>Each query goes through a <strong>Reason → Tool → Observe → Synthesise</strong> loop. The AI picks the right Kubernetes tools, calls them against your live cluster, then summarises the results. You can see which tools were called and how long it took beneath each response.</p>
+
+        <div class="warn">&#9888; The assistant is <strong>read-only by default</strong>. It will never restart, delete, or modify resources unless you explicitly enable write operations.</div>
+
+        <!-- ── Configuring the Cluster ─────────────────────────────────── -->
+        <h2>Configuring the Cluster</h2>
+        <p>Click the <strong>&#9881; gear icon</strong> in the top-right corner to open Settings, then select the <strong>Cluster</strong> tab.</p>
+        <ol>
+          <li>Paste your kubeconfig YAML into the text area.</li>
+          <li>Click <strong>Apply</strong>.</li>
+          <li>On success the cluster host (e.g. <code>10.0.0.1:6443</code>) appears next to the <em>ready</em> indicator in the header.</li>
+        </ol>
+        <p>The kubeconfig is applied at runtime — no restart needed. You can switch clusters at any time by pasting a new kubeconfig.</p>
+
+        <pre><code>curl -s -X POST http://localhost:9000/api/kubeconfig \
+     -H 'Content-Type: application/json' \
+     -d "{\"kubeconfig\": \"$(cat ~/.kube/config | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')\"}"</code></pre>
+
+        <!-- ── Injecting Documents ─────────────────────────────────────── -->
+        <h2>Injecting Documents into the Knowledge Base</h2>
+        <p>The assistant uses <strong>RAG (Retrieval-Augmented Generation)</strong> to cross-reference live cluster data with your runbooks, known-issues docs, and SOPs. You can add documents at any time.</p>
+
+        <h3>Via the Settings UI</h3>
+        <ol>
+          <li>Click &#9881; → <strong>Knowledge Base</strong> tab.</li>
+          <li>Drag and drop files onto the drop zone, or click to browse. Supported: <code>.md</code>, <code>.pdf</code>, <code>.txt</code>.</li>
+          <li>Optionally tick <em>Force re-ingest</em> to overwrite files already in the database.</li>
+          <li>Click <strong>Ingest</strong>. A results table shows each file's status and chunk count.</li>
+        </ol>
+
+        <h3>Via curl</h3>
+        <pre><code>curl -s -X POST http://localhost:9000/api/ingest/upload \
+     -F 'files=@runbook.md' \
+     -F 'files=@known-issues.pdf' \
+     -F 'force=false'</code></pre>
+
+        <h3>Via server-side directory</h3>
+        <pre><code>python3 app.py --ingest ./docs
+python3 app.py --ingest ./docs --force   # re-ingest all</code></pre>
+
+        <p>Document type is auto-detected from the filename:</p>
+        <table>
+          <tr><th>Keyword in filename</th><th>Tagged as</th></tr>
+          <tr><td><code>known</code>, <code>issue</code>, <code>bug</code>, <code>error</code></td><td>known_issue</td></tr>
+          <tr><td><code>runbook</code>, <code>playbook</code>, <code>procedure</code></td><td>runbook</td></tr>
+          <tr><td><code>dos</code>, <code>donts</code>, <code>guidelines</code></td><td>dos_donts</td></tr>
+          <tr><td>anything else</td><td>general</td></tr>
+        </table>
+
+        <!-- ── REST API ───────────────────────────────────────────────── -->
+        <h2>REST API</h2>
+        <p>Every capability of the assistant is available over HTTP — useful for scripting, CI checks, or integrating with other tools. All endpoints return JSON.</p>
+
+        <div class="tip">&#128196; Interactive API docs (Swagger UI) are at <a href="/docs" target="_blank">/docs</a> &nbsp;·&nbsp; ReDoc at <a href="/redoc" target="_blank">/redoc</a></div>
+
+        <h3>Ask the AI</h3>
+        <pre><code>curl -s -X POST http://localhost:9000/api/ask \
+     -H 'Content-Type: application/json' \
+     -d '{"q":"are there any failing pods?"}'</code></pre>
+
+        <h3>Call a specific tool directly</h3>
+        <pre><code>curl -s -X POST http://localhost:9000/api/tool \
+     -H 'Content-Type: application/json' \
+     -d '{"name":"get_node_health","args":{}}'</code></pre>
+
+        <h3>Cluster data endpoints</h3>
+        <table>
+          <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/info</code></td><td>Model, GPU, cluster status</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/pods?ns=X</code></td><td>Pod health summary</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/pods/raw?ns=X</code></td><td>kubectl-style pod table</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/nodes</code></td><td>Node health + GPU info</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/events?warn=1</code></td><td>Cluster events (warn=1 for warnings only)</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/deployments?ns=X</code></td><td>Deployment replica health</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/pvcs?ns=X</code></td><td>PVC / storage status</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/namespaces</code></td><td>All namespaces</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/tools</code></td><td>List all 22 registered tools</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/system</code></td><td>Live CPU / RAM / GPU metrics</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/rag/stats</code></td><td>ChromaDB chunk statistics</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/ask</code></td><td>Ask the AI a question</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/tool</code></td><td>Call a tool directly</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/kubeconfig</code></td><td>Apply a new kubeconfig</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/ingest/upload</code></td><td>Upload documents to ChromaDB</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/prompt</code></td><td>Read current system prompt</td></tr>
+          <tr><td><span class="badge badge-put">PUT</span></td><td><code>/api/prompt</code></td><td>Update system prompt</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/reload-prompt</code></td><td>Hot-reload system_prompt.txt</td></tr>
+        </table>
+
+        <!-- ── System Prompt ───────────────────────────────────────────── -->
+        <h2>Customising the System Prompt</h2>
+        <p>The LLM's behaviour is controlled by <code>config/system_prompt.txt</code>. Edit it freely — one placeholder must remain:</p>
+        <ul>
+          <li><code>{custom_rules}</code> — injected from the <code>CUSTOM_RULES</code> env variable</li>
+        </ul>
+        <p>After editing, hot-reload without restarting:</p>
+        <pre><code>curl -s -X POST http://localhost:9000/api/reload-prompt</code></pre>
+
+        <!-- ── Runtime Tuning ─────────────────────────────────────────── -->
+        <h2>Tuning Output Length</h2>
+        <p>Two independent settings control how much data flows through the pipeline. Either can cause truncated responses if too low.</p>
+        <table>
+          <tr><th>Setting</th><th>Controls</th><th>Default</th></tr>
+          <tr><td><code>KUBECTL_MAX_CHARS</code></td><td>Characters of cluster data the LLM <strong>reads</strong></td><td>20 000</td></tr>
+          <tr><td><code>MAX_NEW_TOKENS</code></td><td>Tokens the LLM <strong>writes</strong> (~4 chars/token)</td><td>4 096</td></tr>
+        </table>
+        <p>Adjust at runtime — no restart needed:</p>
+        <ol>
+          <li>Click the ⚙ gear icon → <strong>LLM Input/Output</strong> tab.</li>
+          <li>Use the <strong>MAX INPUT CHARS</strong> slider to control how much cluster data the LLM reads.</li>
+          <li>Use the <strong>MAX RESPONSE TOKENS</strong> slider to control how long the LLM response can be.</li>
+          <li>Click <strong>Apply</strong>.</li>
+        </ol>
+        <p>Or via the API:</p>
+        <pre><code>curl -s -X POST http://localhost:9000/api/config \
+     -H 'Content-Type: application/json' \
+     -d '{"kubectl_max_chars": 50000, "max_new_tokens": 6144}'</code></pre>
+
+        <!-- ── Configuration ──────────────────────────────────────────── -->
+        <h2>Environment Variables</h2>
+        <table>
+          <tr><th>Variable</th><th>Default</th><th>Description</th></tr>
+          <tr><td><code>LLM_MODEL</code></td><td>Qwen/Qwen3-8B</td><td>HuggingFace model ID or local path</td></tr>
+          <tr><td><code>EMBED_MODEL</code></td><td>nomic-ai/nomic-embed-text-v1.5</td><td>SentenceTransformers model ID or local path</td></tr>
+          <tr><td><code>NUM_GPU</code></td><td>auto</td><td>GPU count (0 = CPU only)</td></tr>
+          <tr><td><code>KUBECONFIG_PATH</code></td><td>~/kubeconfig</td><td>Path to kubeconfig (blank = in-cluster)</td></tr>
+          <tr><td><code>LOG_LEVEL</code></td><td>INFO</td><td>DEBUG / INFO / WARNING / ERROR</td></tr>
+          <tr><td><code>CHROMA_DIR</code></td><td>./chromadb</td><td>ChromaDB persistent storage path</td></tr>
+          <tr><td><code>CUSTOM_RULES</code></td><td>—</td><td>Site-specific rules injected into the prompt</td></tr>
+          <tr><td><code>KUBECTL_ALLOW_WRITES</code></td><td>false</td><td>Allow write operations via kubectl_exec</td></tr>
+          <tr><td><code>KUBECTL_MAX_CHARS</code></td><td>20000</td><td>Max chars of K8s tool output fed into the LLM (input). Runtime-adjustable via ⚙ Settings.</td></tr>
+          <tr><td><code>MAX_NEW_TOKENS</code></td><td>4096</td><td>Max tokens the LLM can generate per response (output). Runtime-adjustable via ⚙ Settings.</td></tr>
+          <tr><td><code>LLM_TIMEOUT</code></td><td>300</td><td>Hard timeout (seconds) per request. Increase for large clusters.</td></tr>
+        </table>
+
+        <!-- ── Hardware ───────────────────────────────────────────────── -->
+        <h2>Hardware Sizing</h2>
+        <table>
+          <tr><th>Setup</th><th>RAM</th><th>VRAM</th><th>Model</th><th>Speed</th></tr>
+          <tr><td>CPU only, 8-core</td><td>32 GB</td><td>—</td><td>Qwen/Qwen3-8B</td><td>~6–10 tok/s</td></tr>
+          <tr><td>GPU (recommended)</td><td>32 GB</td><td>~20 GB</td><td>Qwen/Qwen3-8B</td><td>~30–60 tok/s</td></tr>
+        </table>
+
+        <!-- ── Security ───────────────────────────────────────────────── -->
+        <h2>Security Notes</h2>
+        <ul>
+          <li>All typed K8s SDK tools are <strong>read-only</strong> by design.</li>
+          <li><code>kubectl_exec</code> is <strong>read-only by default</strong>. It uses the Kubernetes Python API — no local kubectl binary needed. Set <code>KUBECTL_ALLOW_WRITES=true</code> to enable write operations.</li>
+          <li>Never expose this service publicly — it has direct cluster access.</li>
+          <li>Restrict the env file: <code>chmod 600 env</code></li>
+        </ul>
+
+        <div class="tip">&#9993; For feedback and questions contact <a href="mailto:dennislee@cloudera.com">dennislee@cloudera.com</a></div>
+
+      </div><!-- #readme-pane -->
+
+    </div><!-- #chat-col -->
+
+    <!-- Right panels -->
+    <div id="panels">
+
+      <!-- ── Chatbot Monitoring Dashboard header ───────────────────────────── -->
+      <div id="panel-dashboard-hdr">
+        <div class="pdh-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="12" width="4" height="9" rx="1"/><rect x="10" y="7" width="4" height="14" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/>
+          </svg>
+        </div>
+        <div>
+          <div class="pdh-title">Chatbot Monitoring Dashboard</div>
+        </div>
+      </div>
+
+      <!-- ── Inference section ─────────────────────────────────────────────── -->
+      <div class="panel" id="infer-panel" style="flex-shrink:0;border-bottom:1px solid var(--panelBorder)">
+        <div class="ph" style="gap:6px">
+          <span class="ph-title">INFERENCE</span>
+          <div id="rdot" style="background:#ef4444;box-shadow:0 0 8px #ef444488;margin-left:4px"></div>
+          <span id="rtxt" style="font-size:10px;color:var(--dimText);font-family:'IBM Plex Mono',monospace">connecting</span>
+          <div class="infer-badge" id="cpu-infer-badge" style="margin-left:auto">
+            <span id="infer-txt-cpu" style="color:var(--panelDim)">detecting&hellip;</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── GPU Panel ─────────────────────────────────────────────────────── -->
+      <div class="panel" id="gpu-panel" style="display:flex;flex-direction:column">
+        <div class="ph">
+          <span class="ph-title">GPU MONITOR</span>
+          <span class="ph-sub" id="gpu-count-lbl" style="display:none"></span>
+        </div>
+        <div class="gpu-cards-wrap" id="gpu-cards"></div>
+        <div id="gpu-none-msg" style="display:none;padding:10px 12px;font-size:11px;color:var(--panelDim);font-family:'IBM Plex Mono',monospace;text-align:center">
+          No NVIDIA GPU detected &mdash; CPU inference mode
+        </div>
+      </div>
+
+      <!-- ── CPU Panel ─────────────────────────────────────────────────────── -->
+      <div class="panel" id="cpu-panel">
+        <div class="ph">
+          <span class="ph-title">CPU MONITOR</span>
+          <span class="ph-sub" id="cpu-freq-lbl">&mdash; GHz</span>
+        </div>
+
+        <!-- Sparkline + dotbar -->
+        <div class="psec">
+          <div class="spark-wrap">
+            <svg id="sparkline" width="264" height="28" style="display:block"></svg>
+            <span class="spark-lbl">60s</span>
+          </div>
+          <!-- CPU utilisation row with dotbar -->
+          <div class="util-row" style="margin-bottom:8px">
+            <span class="util-lbl">Utilisation</span>
+            <div id="cpu-dotbar"></div>
+            <span id="cpu-total-pct" class="util-pct">&mdash;</span>
+          </div>
+        </div>
+
+        <!-- Per-core grid -->
+        <div id="cores-grid"></div>
+
+        <!-- Load avg — between CPU and RAM -->
+        <div class="load-sec">
+          <span class="load-title">LOAD AVG</span>
+          <span id="load-avg">&mdash;</span>
+        </div>
+
+        <!-- Memory utilisation -->
+        <div class="psec" style="border-top:1px solid var(--panelBorder);padding-top:8px">
+          <div style="color:var(--panelLabel);font-weight:700;font-size:11px;letter-spacing:.04em;margin-bottom:6px">RAM MONITOR</div>
+          <div class="util-row">
+            <span class="util-lbl">Utilisation</span>
+            <div class="ubar-wrap" id="mem-bar-wrap">
+              <div id="mem-fill" class="ubar-fill"></div>
+              <div class="ubar-dots"></div>
+            </div>
+            <span id="mem-pct" class="util-pct">&mdash;</span>
+          </div>
+          <div style="text-align:right;font-size:10px;color:var(--panelDim);margin-top:2px" id="mem-gb">&mdash;</div>
+        </div>
+
+      </div><!-- #cpu-panel -->
+
+    </div><!-- #panels -->
+  </div><!-- #body -->
+  <!-- ═══ SETTINGS MODAL ══════════════════════════════════════════════════ -->
+  <div id="settings-overlay">
+    <div id="settings-modal">
+      <h3><span class="modal-gear">&#9881;</span> SETTINGS</h3>
+
+      <!-- Tab bar -->
+      <div class="stab-row">
+        <button class="stab active" data-tab="tab-cluster">Kubeconfig</button>
+        <button class="stab" data-tab="tab-kb">RAG Documents</button>
+        <button class="stab" data-tab="tab-output">LLM Input/Output</button>
+        <button class="stab" data-tab="tab-security">Security</button>
+      </div>
+
+      <!-- ── Tab: Cluster ── -->
+      <div class="stab-pane active" id="tab-cluster">
+        <p>Paste the kubeconfig for the target Kubernetes cluster.</p>
+        <textarea id="kube-textarea" placeholder="apiVersion: v1&#10;kind: Config&#10;clusters:&#10;- cluster:&#10;    server: https://&lt;host&gt;:6443&#10;  ..."></textarea>
+        <div id="kube-status" class="stab-status"></div>
+        <div class="modal-btns">
+          <button class="modal-btn modal-btn-cancel" id="settings-cancel">Close</button>
+          <button class="modal-btn modal-btn-primary" id="settings-apply">Apply</button>
+        </div>
+      </div>
+
+      <!-- ── Tab: Knowledge Base ── -->
+      <div class="stab-pane" id="tab-kb">
+        <p>Upload .md, .pdf, or .txt documents to inject into the vector database for RAG retrieval.</p>
+
+        <!-- RAG stats -->
+        <div id="rag-stats-bar">
+          <span>Chunks:<span class="rs-val" id="rs-chunks">—</span></span>
+          <span>Files:<span class="rs-val" id="rs-files">—</span></span>
+          <span>By type:<span class="rs-val" id="rs-types">—</span></span>
+        </div>
+
+        <!-- Drop zone -->
+        <div id="drop-zone">
+          <input type="file" id="doc-file-input" multiple accept=".md,.pdf,.txt"/>
+          <span id="drop-zone-label">Drop files here or click to browse</span>
+          <span>.md &nbsp;·&nbsp; .pdf &nbsp;·&nbsp; .txt</span>
+        </div>
+
+        <!-- Selected files list -->
+        <div id="selected-files" style="font-size:11px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;min-height:14px"></div>
+
+        <!-- Options row -->
+        <div style="display:flex;align-items:center;gap:10px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--dimText)">
+          <label style="display:flex;align-items:center;gap:5px;cursor:pointer">
+            <input type="checkbox" id="force-reingest" style="accent-color:var(--accent)"/>
+            <span style="font-size:12px;color:var(--textMain);font-family:'IBM Plex Mono',monospace">Force re-ingest (overwrite existing)</span>
+          </label>
+        </div>
+
+        <!-- Results table (shown after ingest) -->
+        <div id="ingest-results" style="display:none">
+          <div class="ir-row hdr"><span>File</span><span>Status</span><span>Chunks</span></div>
+          <div id="ir-body"></div>
+        </div>
+
+        <div id="kb-status" class="stab-status"></div>
+
+        <div class="modal-btns">
+          <button class="modal-btn modal-btn-cancel" id="kb-cancel">Close</button>
+          <button class="modal-btn modal-btn-primary" id="kb-ingest-btn" disabled>Ingest</button>
+        </div>
+      </div>
+
+      <!-- ── Tab: Output ── -->
+      <div class="stab-pane" id="tab-output">
+        <div class="tip" style="border-left:3px solid #ef4444;color:var(--textMain);font-family:'IBM Plex Mono',monospace;font-size:12px;padding:8px 10px;background:var(--tooltipBg);border-radius:0 4px 4px 0;margin-bottom:14px">
+          💡 <strong style="color:#ef4444">Tip:</strong>
+          <strong>Max Input Chars</strong> controls how much cluster data the LLM <em>reads</em>.
+          <strong>Max Response Tokens</strong> controls how much the LLM <em>writes</em> (~4 chars/token).
+          Both can independently cause truncation — increase both if responses are cut off.
+        </div>
+        <div style="display:flex;flex-direction:column;gap:18px;padding:4px 0">
+
+          <!-- Slider 1: KUBECTL_MAX_CHARS -->
+          <div>
+            <label style="font-size:12px;color:var(--panelLabel);font-family:'IBM Plex Mono',monospace;letter-spacing:.05em;display:block;margin-bottom:6px">
+              MAX INPUT CHARS (tool → LLM) &nbsp;<span style="color:var(--accent);font-size:14px;font-weight:700" id="max-chars-val">20,000</span>
+            </label>
+            <input type="range" id="max-chars-slider"
+              min="5000" max="100000" step="5000" value="20000"
+              style="width:100%;accent-color:var(--accent);cursor:pointer;height:6px"/>
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--panelDim);font-family:'IBM Plex Mono',monospace;margin-top:4px">
+              <span>5 000</span><span>50 000</span><span>100 000</span>
+            </div>
+            <p style="font-size:11px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;margin-top:4px">
+              <code>KUBECTL_MAX_CHARS</code> — raw K8s tool output characters fed into the LLM context window.
+            </p>
+          </div>
+
+          <!-- Slider 2: MAX_NEW_TOKENS -->
+          <div>
+            <label style="font-size:12px;color:var(--panelLabel);font-family:'IBM Plex Mono',monospace;letter-spacing:.05em;display:block;margin-bottom:6px">
+              MAX RESPONSE TOKENS (LLM output) &nbsp;<span style="color:var(--accent);font-size:14px;font-weight:700" id="max-tokens-val">4,096</span>
+            </label>
+            <input type="range" id="max-tokens-slider"
+              min="512" max="8192" step="512" value="4096"
+              style="width:100%;accent-color:var(--accent);cursor:pointer;height:6px"/>
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--panelDim);font-family:'IBM Plex Mono',monospace;margin-top:4px">
+              <span>512</span><span>4 096</span><span>8 192</span>
+            </div>
+            <p style="font-size:11px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;margin-top:4px">
+              <code>MAX_NEW_TOKENS</code> — tokens the LLM can generate per response (~4 chars/token). Higher = longer answers but more VRAM and slower.
+            </p>
+          </div>
+
+          <!-- Slider 3: LLM_TIMEOUT -->
+          <div>
+            <label style="font-size:12px;color:var(--panelLabel);font-family:'IBM Plex Mono',monospace;letter-spacing:.05em;display:block;margin-bottom:6px">
+              LLM TIMEOUT (seconds) &nbsp;<span style="color:var(--accent);font-size:14px;font-weight:700" id="llm-timeout-val">300</span>
+            </label>
+            <input type="range" id="llm-timeout-slider"
+              min="60" max="900" step="30" value="300"
+              style="width:100%;accent-color:var(--accent);cursor:pointer;height:6px"/>
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--panelDim);font-family:'IBM Plex Mono',monospace;margin-top:4px">
+              <span>60s</span><span>5 min</span><span>15 min</span>
+            </div>
+            <p style="font-size:11px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;margin-top:4px">
+              <code>LLM_TIMEOUT</code> — hard timeout per request. Increase for very large clusters or complex multi-tool queries. A <em>Still processing…</em> heartbeat appears every 15s while waiting.
+            </p>
+          </div>
+
+        </div>
+        <div id="output-status" class="stab-status"></div>
+        <div class="modal-btns">
+          <button class="modal-btn modal-btn-cancel" id="output-cancel">Close</button>
+          <button class="modal-btn modal-btn-primary" id="output-apply">Apply</button>
+        </div>
+      </div>
+
+      <!-- ── Tab: Security ── -->
+      <div class="stab-pane" id="tab-security">
+        <div style="border-left:3px solid #f59e0b;color:var(--textMain);font-family:'IBM Plex Mono',monospace;font-size:12px;padding:8px 10px;background:var(--tooltipBg);border-radius:0 4px 4px 0;margin-bottom:14px">
+          ⚠️ <strong style="color:#f59e0b">Warning:</strong>
+          Enabling this option will show decoded secret values — including passwords, tokens, and certificates — directly in the chat. Only enable in a secure, private session.
+        </div>
+        <div style="display:flex;flex-direction:column;gap:18px;padding:4px 0">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+            <div>
+              <div style="font-size:12px;color:var(--panelLabel);font-family:'IBM Plex Mono',monospace;letter-spacing:.05em;margin-bottom:4px">SHOW SECRET VALUES</div>
+              <div style="font-size:11px;color:var(--dimText);font-family:'IBM Plex Mono',monospace">
+                When enabled, K8s secret data (passwords, tokens, certs) are base64-decoded and shown in responses. Default: off.
+              </div>
+            </div>
+            <!-- Toggle switch -->
+            <label id="secret-toggle-label" style="position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0;cursor:pointer">
+              <input type="checkbox" id="secret-decode-toggle" style="opacity:0;width:0;height:0">
+              <span id="secret-toggle-track" style="position:absolute;inset:0;background:var(--border);border-radius:24px;transition:background .2s"></span>
+              <span id="secret-toggle-thumb" style="position:absolute;left:3px;top:3px;width:18px;height:18px;background:#fff;border-radius:50%;transition:transform .2s;box-shadow:0 1px 3px #0006"></span>
+            </label>
+          </div>
+          <div id="secret-toggle-status" style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);min-height:16px">
+            🔒 Secret values are hidden (safe mode)
+          </div>
+        </div>
+        <div class="modal-btns" style="margin-top:auto">
+          <button class="modal-btn modal-btn-cancel" id="security-cancel">Close</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div><!-- #app -->
+
+<script>
+
+(function(){
+'use strict';
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAIN TABS — AI Ops | README
+// ═══════════════════════════════════════════════════════════════════════════
+document.querySelectorAll('.mtab').forEach(btn => {
+  btn.addEventListener('click', function() {
+    const target = this.dataset.pane;
+    document.querySelectorAll('.mtab').forEach(b => b.classList.toggle('active', b.dataset.pane === target));
+    document.getElementById('chat-pane').style.display   = (target === 'chat-pane')   ? 'flex' : 'none';
+    document.getElementById('readme-pane').style.display = (target === 'readme-pane') ? 'block' : 'none';
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THEMES
+// ═══════════════════════════════════════════════════════════════════════════
+const THEMES = {
+  midnight:{
+    name:'Midnight', shimmer:true,
+    '--bg':'#030712','--headerBg':'#070d1a','--border':'#0f1f35',
+    '--accent':'#38bdf8','--accent2':'#7dd3fc',
+    '--msgBg':'#070d1a','--inputBg':'#0a0f1e',
+    '--userBg':'#0f172a','--userBorder':'#1e293b',
+    '--statusBg':'#040b14','--dimText':'#475569','--bodyText':'#cbd5e1',
+    '--tooltipBg':'#0a1628','--tooltipText':'#94a3b8',
+    '--panelBg':'#020a14','--panelBorder':'#0f1f35','--panelLabel':'#7dd3fc','--panelDim':'#475569',
+    '--textMain':'#e2e8f0','--inputText':'#e2e8f0',
+    '--shimmer':'linear-gradient(90deg,#38bdf8 0%,#818cf8 25%,#c084fc 50%,#38bdf8 75%,#00C1DE 100%)',
+  },
+  singapore:{
+    // #EF3340 accent on white background
+    name:'Singapore', shimmer:false, solidTitle:'#EF3340',
+    '--bg':'#ffffff','--headerBg':'#ffffff','--border':'#fbd0d3',
+    '--accent':'#EF3340','--accent2':'#b31a27',
+    '--msgBg':'#fff5f5','--inputBg':'#ffffff',
+    '--userBg':'#fff0f0','--userBorder':'#fbd0d3',
+    '--statusBg':'#fff5f5','--dimText':'#9b1c1c','--bodyText':'#1a0000',
+    '--tooltipBg':'#ffffff','--tooltipText':'#1a0000',
+    '--panelBg':'#fff5f5','--panelBorder':'#fbd0d3','--panelLabel':'#EF3340','--panelDim':'#9b1c1c',
+    '--textMain':'#1a0000','--inputText':'#1a0000',
+    '--shimmer':'linear-gradient(90deg,#EF3340 0%,#ff6b74 40%,#EF3340 80%)',
+  },
+  cloudera:{
+    // Cloudera brand: deep navy #100045 bg, orange #F96702 accents, white/light text
+    name:'Cloudera', shimmer:true, solidTitle:'#F96702',
+    '--bg':'#100045',           // Cloudera deep navy
+    '--headerBg':'#0c0038',     // slightly darker navy for header
+    '--border':'#2d1a7a',
+    '--accent':'#F96702',       // Cloudera orange
+    '--accent2':'#ff8c2a',
+    '--msgBg':'#1a0a5e','--inputBg':'#1e1070',
+    '--userBg':'#2a0f00','--userBorder':'#F9670266',
+    '--statusBg':'#0c0038','--dimText':'#b8a9e8','--bodyText':'#e8e0ff',
+    '--tooltipBg':'#2d1a7a','--tooltipText':'#fff',
+    '--panelBg':'#160850','--panelBorder':'#2d1a7a',
+    '--panelLabel':'#F96702','--panelDim':'#9080cc',
+    '--textMain':'#f0ecff','--inputText':'#f0ecff',
+    '--shimmer':'linear-gradient(90deg,#F96702 0%,#c084fc 35%,#F96702 65%,#c084fc 100%)',
+  },
+};
+
+let curTheme = 'midnight';
+
+function applyTheme(name){
+  const t = THEMES[name];
+  if(!t) return;
+  const root = document.documentElement;
+  Object.entries(t).forEach(([k,v])=>{ if(k.startsWith('--')) root.style.setProperty(k,v); });
+  curTheme = name;
+  document.getElementById('theme-name').textContent = t.name;
+  const ttl = document.getElementById('ttl');
+  if(t.shimmer){
+    ttl.className = 'shiny';
+  } else {
+    root.style.setProperty('--solidTitle', t.solidTitle||'#333');
+    ttl.className = 'shiny-solid';
+  }
+  document.querySelectorAll('.tdot').forEach(b=>{
+    b.classList.toggle('active', b.dataset.theme === name);
+  });
+}
+
+document.querySelectorAll('.tdot').forEach(btn=>{
+  btn.onclick = function(){ applyTheme(this.dataset.theme); };
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SETTINGS MODAL — tabbed: Kubeconfig | RAG Documents
+// ═══════════════════════════════════════════════════════════════════════════
+const settingsBtn     = document.getElementById('settings-btn');
+const settingsOverlay = document.getElementById('settings-overlay');
+const clusterHostEl   = document.getElementById('cluster-host');
+
+function openSettings(tab){
+  settingsOverlay.classList.add('open');
+  if(tab) switchTab(tab);
+  if(tab === 'tab-kb') loadRagStats();
+}
+
+function switchTab(tabId){
+  document.querySelectorAll('.stab').forEach(b => b.classList.toggle('active', b.dataset.tab === tabId));
+  document.querySelectorAll('.stab-pane').forEach(p => p.classList.toggle('active', p.id === tabId));
+}
+
+document.querySelectorAll('.stab').forEach(btn => {
+  btn.onclick = () => {
+    switchTab(btn.dataset.tab);
+    if(btn.dataset.tab === 'tab-kb') loadRagStats();
+    if(btn.dataset.tab === 'tab-output') loadOutputConfig();
+  };
+});
+
+settingsBtn.onclick = () => openSettings('tab-cluster');
+document.getElementById('settings-cancel').onclick = () => settingsOverlay.classList.remove('open');
+document.getElementById('kb-cancel').onclick        = () => settingsOverlay.classList.remove('open');
+document.getElementById('output-cancel').onclick    = () => settingsOverlay.classList.remove('open');
+document.getElementById('security-cancel').onclick  = () => settingsOverlay.classList.remove('open');
+settingsOverlay.onclick = (e) => { if(e.target === settingsOverlay) settingsOverlay.classList.remove('open'); };
+
+// ── Security toggle ───────────────────────────────────────────────────────────
+// Persisted in localStorage so it survives page refreshes.
+// Default: OFF (secure — values hidden until user explicitly enables).
+const _DECODE_KEY = 'ecs_decode_secrets';
+let decodeSecrets = localStorage.getItem(_DECODE_KEY) === 'true';  // false unless explicitly saved as true
+
+const secretToggle  = document.getElementById('secret-decode-toggle');
+const toggleTrack   = document.getElementById('secret-toggle-track');
+const toggleThumb   = document.getElementById('secret-toggle-thumb');
+const toggleStatus  = document.getElementById('secret-toggle-status');
+
+function applySecretToggleUI(on){
+  toggleTrack.style.background = on ? 'var(--accent)' : 'var(--border)';
+  toggleThumb.style.transform  = on ? 'translateX(20px)' : 'translateX(0)';
+  toggleStatus.innerHTML = on
+    ? '🔓 <span style="color:#f87171">Secret values will be shown in responses</span>'
+    : '🔒 Secret values are hidden (safe mode)';
+}
+
+// Restore saved state on page load
+secretToggle.checked = decodeSecrets;
+applySecretToggleUI(decodeSecrets);
+
+secretToggle.addEventListener('change', () => {
+  decodeSecrets = secretToggle.checked;
+  localStorage.setItem(_DECODE_KEY, decodeSecrets);
+  applySecretToggleUI(decodeSecrets);
+});
+
+// load current config when Output tab opens
+async function loadOutputConfig(){
+  try {
+    const r = await fetch('/api/config');
+    if(!r.ok) return;
+    const d = await r.json();
+    const v = d.kubectl_max_chars || 20000;
+    const sl = document.getElementById('max-chars-slider');
+    const vl = document.getElementById('max-chars-val');
+    if(sl){ sl.value = v; vl.textContent = v.toLocaleString(); }
+    const t = d.max_new_tokens || 4096;
+    const tsl = document.getElementById('max-tokens-slider');
+    const tvl = document.getElementById('max-tokens-val');
+    if(tsl){ tsl.value = t; tvl.textContent = t.toLocaleString(); }
+    const to = d.llm_timeout || 300;
+    const tosl = document.getElementById('llm-timeout-slider');
+    const tovl = document.getElementById('llm-timeout-val');
+    if(tosl){ tosl.value = to; tovl.textContent = to; }
+  } catch(_){}
+}
+
+// slider live update
+const maxCharsSlider = document.getElementById('max-chars-slider');
+const maxCharsVal    = document.getElementById('max-chars-val');
+if(maxCharsSlider){
+  maxCharsSlider.oninput = () => {
+    maxCharsVal.textContent = parseInt(maxCharsSlider.value).toLocaleString();
+  };
+}
+const maxTokensSlider = document.getElementById('max-tokens-slider');
+const maxTokensVal    = document.getElementById('max-tokens-val');
+if(maxTokensSlider){
+  maxTokensSlider.oninput = () => {
+    maxTokensVal.textContent = parseInt(maxTokensSlider.value).toLocaleString();
+  };
+}
+const llmTimeoutSlider = document.getElementById('llm-timeout-slider');
+const llmTimeoutVal    = document.getElementById('llm-timeout-val');
+if(llmTimeoutSlider){
+  llmTimeoutSlider.oninput = () => {
+    llmTimeoutVal.textContent = parseInt(llmTimeoutSlider.value);
+  };
+}
+
+// ── Tab 3: Output ─────────────────────────────────────────────────────────
+document.getElementById('output-apply').onclick = async () => {
+  const outputStatus = document.getElementById('output-status');
+  const charsVal   = parseInt(document.getElementById('max-chars-slider').value);
+  const tokensVal  = parseInt(document.getElementById('max-tokens-slider').value);
+  const timeoutVal = parseInt(document.getElementById('llm-timeout-slider').value);
+  outputStatus.style.color = '#60a5fa';
+  outputStatus.textContent = '⏳ Applying…';
+  try {
+    const res  = await fetch('/api/config', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({kubectl_max_chars: charsVal, max_new_tokens: tokensVal, llm_timeout: timeoutVal})
+    });
+    const data = await res.json();
+    if(res.ok && data.ok){
+      outputStatus.style.color = '#22c55e';
+      outputStatus.textContent = `✓ Input: ${charsVal.toLocaleString()} chars · Output: ${tokensVal.toLocaleString()} tokens · Timeout: ${timeoutVal}s`;
+      setTimeout(() => settingsOverlay.classList.remove('open'), 1400);
+    } else {
+      outputStatus.style.color = '#ef4444';
+      outputStatus.textContent = '✗ ' + (data.error || 'Failed to update config.');
+    }
+  } catch(err){ outputStatus.style.color='#ef4444'; outputStatus.textContent='✗ Network error: '+err.message; }
+};
+
+// ── Tab 1: Cluster ────────────────────────────────────────────────────────
+const kubeTextarea = document.getElementById('kube-textarea');
+const kubeStatus   = document.getElementById('kube-status');
+
+function extractClusterServer(yaml){
+  const m = yaml.match(/server\s*:\s*(https?:\/\/[^\s\n]+)/i);
+  return m ? m[1].trim() : null;
+}
+function serverToLabel(url){
+  try { return new URL(url).host; } catch(_){ return url; }
+}
+
+document.getElementById('settings-apply').onclick = async () => {
+  const yaml = kubeTextarea.value.trim();
+  if(!yaml){ kubeStatus.style.color='#ef4444'; kubeStatus.textContent='✗ Please paste a kubeconfig first.'; return; }
+  const serverUrl = extractClusterServer(yaml);
+  if(!serverUrl){ kubeStatus.style.color='#ef4444'; kubeStatus.textContent='✗ Could not find a server: URL in the kubeconfig.'; return; }
+  kubeStatus.style.color='#60a5fa'; kubeStatus.textContent='⏳ Applying kubeconfig…';
+  try {
+    const res  = await fetch('/api/kubeconfig', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({kubeconfig:yaml})});
+    const data = await res.json();
+    if(res.ok && data.ok){
+      const label = serverToLabel(serverUrl);
+      clusterHostEl.textContent = '· Connected ECS: ' + label;
+      clusterHostEl.style.color = 'var(--accent)';
+      const ecsNode = document.getElementById('ecs-node');
+      if(ecsNode) ecsNode.textContent = '· ECS: ' + label;
+      kubeStatus.style.color='#22c55e'; kubeStatus.textContent='✓ Connected: ' + label;
+      setTimeout(()=> settingsOverlay.classList.remove('open'), 1200);
+    } else {
+      kubeStatus.style.color='#ef4444'; kubeStatus.textContent='✗ ' + (data.error||'Failed to apply kubeconfig.');
+    }
+  } catch(err){ kubeStatus.style.color='#ef4444'; kubeStatus.textContent='✗ Network error: '+err.message; }
+};
+
+// ── Tab 2: Knowledge Base ─────────────────────────────────────────────────
+const dropZone      = document.getElementById('drop-zone');
+const fileInput     = document.getElementById('doc-file-input');
+const selectedFiles = document.getElementById('selected-files');
+const kbStatus      = document.getElementById('kb-status');
+const kbIngestBtn   = document.getElementById('kb-ingest-btn');
+const ingestResults = document.getElementById('ingest-results');
+const irBody        = document.getElementById('ir-body');
+let pendingFiles    = [];
+
+async function loadRagStats(){
+  try {
+    const d = await fetch('/api/rag/stats').then(r=>r.json());
+    document.getElementById('rs-chunks').textContent = d.total_chunks ?? '—';
+    document.getElementById('rs-files').textContent  = d.files        ?? '—';
+    const types = d.by_type ? Object.entries(d.by_type).map(([k,v])=>`${k}:${v}`).join(', ') : '—';
+    document.getElementById('rs-types').textContent  = types;
+  } catch(_){}
+}
+
+function setFileList(files){
+  pendingFiles = Array.from(files).filter(f => /\.(md|pdf|txt)$/i.test(f.name));
+  const rejected = Array.from(files).length - pendingFiles.length;
+  selectedFiles.textContent = pendingFiles.length
+    ? '📎 ' + pendingFiles.map(f=>f.name).join(', ') + (rejected ? `  (${rejected} unsupported skipped)` : '')
+    : 'No valid files selected.';
+  kbIngestBtn.disabled = pendingFiles.length === 0;
+  kbStatus.textContent = '';
+  ingestResults.style.display = 'none';
+}
+
+dropZone.onclick = () => fileInput.click();
+fileInput.onchange = (e) => setFileList(e.target.files);
+dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); };
+dropZone.ondragleave = ()  => dropZone.classList.remove('drag-over');
+dropZone.ondrop = (e) => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  setFileList(e.dataTransfer.files);
+};
+
+kbIngestBtn.onclick = async () => {
+  if(!pendingFiles.length) return;
+  kbIngestBtn.disabled = true;
+  kbStatus.style.color = '#60a5fa';
+  kbStatus.textContent = `⏳ Ingesting ${pendingFiles.length} file(s)…`;
+  ingestResults.style.display = 'none';
+
+  const form = new FormData();
+  pendingFiles.forEach(f => form.append('files', f, f.name));
+  form.append('force', document.getElementById('force-reingest').checked ? 'true' : 'false');
+
+  try {
+    const res  = await fetch('/api/ingest/upload', {method:'POST', body:form});
+    const data = await res.json();
+    if(!res.ok){ kbStatus.style.color='#ef4444'; kbStatus.textContent='✗ '+(data.error||'Upload failed.'); kbIngestBtn.disabled=false; return; }
+
+    irBody.innerHTML = '';
+    (data.results||[]).forEach(r => {
+      const row = document.createElement('div');
+      row.className = 'ir-row';
+      const cls = r.status==='ingested' ? 'ir-status-ok' : r.status==='skipped' ? 'ir-status-skip' : 'ir-status-err';
+      row.innerHTML = `<span title="${r.file}">${r.file.length>28 ? r.file.slice(0,26)+'…' : r.file}</span>`
+        + `<span class="${cls}">${r.status}</span><span>${r.chunks}</span>`;
+      irBody.appendChild(row);
+    });
+    ingestResults.style.display = 'block';
+
+    const ok  = (data.results||[]).filter(r=>r.status==='ingested').length;
+    const sk  = (data.results||[]).filter(r=>r.status==='skipped').length;
+    const err = (data.results||[]).filter(r=>r.status==='error').length;
+    kbStatus.style.color = err ? '#f59e0b' : '#22c55e';
+    kbStatus.textContent = `✓ ${ok} ingested · ${sk} skipped · ${err} error(s) · ${data.total_chunks} new chunks`;
+    pendingFiles = [];
+    selectedFiles.textContent = '';
+    kbIngestBtn.disabled = true;
+    fileInput.value = '';
+    loadRagStats();
+  } catch(err){ kbStatus.style.color='#ef4444'; kbStatus.textContent='✗ Network error: '+err.message; kbIngestBtn.disabled=false; }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXAMPLE QUERIES
+// ═══════════════════════════════════════════════════════════════════════════
+const EXAMPLES = [
+  'Is the Vault doing ok?',
+  'Show me all the nodes\' status',
+  'Any pod is currently not Running?',
+  'What storage class is Vault using?',
+  'List all storage types (RWO/RWX) used by pods in cdp namespace',
+  'Check all namespaces, which pvc is not bound?',
+  'Which node has GPUs available and in use?',
+];
+const exBtns = document.getElementById('ex-btns');
+EXAMPLES.forEach(ex=>{
+  const b = document.createElement('button');
+  b.className   = 'ex-btn';
+  b.textContent = ex;
+  b.onclick     = ()=> sendMessage(ex);
+  exBtns.appendChild(b);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HEALTH — populate subtitle + tooltip
+// ═══════════════════════════════════════════════════════════════════════════
+let modelName = 'qwen3:8b';
+let isGpu     = false;
+
+function updateInferenceBadge(){
+  const txt = document.getElementById('infer-txt-cpu');
+  if(!txt) return;
+  if(isGpu){
+    txt.textContent = '⚡ GPU';
+    txt.style.color = '#60a5fa';
+  } else {
+    txt.textContent = '⚙️ CPU';
+    txt.style.color = '#a78bfa';
+  }
+}
+
+async function fetchHealth(retries){
+  try{
+    const r = await fetch('/health');
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const d = await r.json();
+    modelName = d.model || 'unknown';
+    isGpu     = (d.num_gpu || 0) > 0;
+
+    const rdot = document.getElementById('rdot');
+    const rtxt = document.getElementById('rtxt');
+    rdot.style.background  = '#22c55e';
+    rdot.style.boxShadow   = '0 0 8px #22c55e88';
+    rdot.classList.add('ready');
+    rtxt.textContent = 'ready';
+
+    const el = document.getElementById('cluster-host');
+    const srv = (d.cluster_server || '').replace(/^https?:\/\//,'').trim();
+    if(srv){
+      el.textContent = '· Connected ECS: ' + srv;
+      el.style.color = 'var(--accent)';
+    } else {
+      el.textContent = '· Connected ECS: unknown';
+      el.style.color = 'var(--dimText)';
+    }
+
+    updateInferenceBadge();
+  } catch(e){
+    const rdot = document.getElementById('rdot');
+    const rtxt = document.getElementById('rtxt');
+    rdot.style.background = '#ef4444';
+    rdot.style.boxShadow  = '0 0 8px #ef444488';
+    rdot.classList.remove('ready');
+    rtxt.textContent = 'offline';
+    if(retries > 0){ setTimeout(()=>fetchHealth(retries-1), 3000); }
+  }
+}
+
+fetchHealth(10);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CHAT
+// ═══════════════════════════════════════════════════════════════════════════
+let loading  = false;
+const msgsEl = document.getElementById('messages');
+const inpEl  = document.getElementById('chat-input');
+const sndBtn = document.getElementById('send-btn');
+const rdot   = document.getElementById('rdot');
+const rtxt   = document.getElementById('rtxt');
+const exDiv  = document.getElementById('examples');
+
+function setLoading(v){
+  loading = v;
+  sndBtn.disabled   = v;
+  sndBtn.textContent = v ? '...' : '\u2192 Send';
+  if(v){
+    rdot.style.cssText = 'background:#f59e0b;box-shadow:0 0 8px #f59e0b88;width:7px;height:7px;border-radius:50%;flex-shrink:0;animation:pls 1s infinite';
+    rtxt.textContent   = 'thinking';
+  } else {
+    rdot.style.cssText = 'background:#22c55e;box-shadow:0 0 8px #22c55e88;width:7px;height:7px;border-radius:50%;flex-shrink:0;animation:none';
+    rtxt.textContent   = 'ready';
+  }
+}
+
+function esc(s){
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function scrollBot(){ msgsEl.scrollTop = msgsEl.scrollHeight; }
+
+function appendUser(text){
+  exDiv.style.display = 'none';
+  const d = document.createElement('div');
+  d.className = 'msg-user fade-up';
+  d.innerHTML = '<div class="msg-user-bubble">'+esc(text)+'</div>';
+  msgsEl.appendChild(d);
+  scrollBot();
+}
+
+let thinkEl = null;
+
+function showThinking(updates){
+  removeThinking();
+  thinkEl = document.createElement('div');
+  thinkEl.className = 'status-box fade-up';
+  _renderThinkingContent(updates, true);
+  msgsEl.appendChild(thinkEl);
+  scrollBot();
+}
+
+function _renderThinkingContent(updates, showDots){
+  if(!thinkEl) return;
+  let h = '<div class="s-label">AGENT STATUS — processing</div>';
+  updates.forEach((u,i)=>{
+    const cur = i===updates.length-1;
+    h += '<div class="s-line'+(cur?' cur':'')+'"><span>'+(cur?'›':'✓')+'</span> '+esc(u)+'</div>';
+  });
+  if(showDots){
+    h += '<div class="sdots">'
+       + '<div class="sdot" style="animation-delay:0s"></div>'
+       + '<div class="sdot" style="animation-delay:.2s"></div>'
+       + '<div class="sdot" style="animation-delay:.4s"></div>'
+       + '</div>';
+  }
+  thinkEl.innerHTML = h;
+  scrollBot();
+}
+
+function appendStatusLine(text, liveUpdates){
+  // Update the live status box in place rather than rebuilding from scratch
+  if(!thinkEl) showThinking([text]);
+  else _renderThinkingContent(liveUpdates, true);
+}
+
+function removeThinking(){ if(thinkEl){thinkEl.remove();thinkEl=null;} }
+
+// Format AI response — strip chat-template token leakage
+function formatResponse(raw){
+  let text = raw || '';
+  text = text.replace(/<\|im_start\|>[\s\S]*?<\|im_end\|>\n?/g, '');
+  const ROLE_RE = /\b(system|user|assistant|human|model|im_start|im_end)\b/gi;
+  text = text.replace(/<\|im_start\|>/g, '')
+             .replace(/<\|im_end\|>/g, '')
+             .replace(/<\|[^|]*\|>/g, '');
+  text = text.split('\n')
+    .filter(line => {
+      const stripped = line.trim().replace(/[.?!,;:\u00f3]/g, '');
+      return !ROLE_RE.test(stripped) || stripped.length > 20;
+    })
+    .join('\n');
+  text = text.replace(/([.!?])\u00f3?st\b/gi, '$1')
+             .replace(/([.!?])\s*ouser\b/gi, '$1')
+             .replace(/([.!?])\s*assistant\b/gi, '$1');
+  text = text.replace(/\n{3,}/g, '\n\n').trim();
+  return text;
+}
+
+function appendAi(text, tools, iters, elapsed, statusUpdates, isClarification){
+  const clean  = formatResponse(text);
+  const unique = [...new Set(tools||[])];
+  const badges = unique.map(t=>
+    '<span class="tbadge">'+(t==='search_documentation'?'📚':'\u2699\uFE0F')+' '+esc(t)+'</span>'
+  ).join('');
+  const toolRow = unique.length
+    ? '<div class="ai-tools"><span class="tmeta">called:</span>'+badges
+      +'<span class="tmeta">&middot; '+iters+' iter'+(iters!==1?'s':'')+'</span></div>'
+    : '';
+  const cmds = (statusUpdates||[]).filter(s=>s.startsWith('$ '));
+  const cmdLog = cmds.length
+    ? '<div class="kubectl-log">'
+      + cmds.map(c=>'<span class="kubectl-cmd">'+esc(c)+'</span>').join('')
+      +'</div>'
+    : '';
+  const bubbleCls = 'ai-bubble' + (isClarification ? ' clarification' : '');
+  const d = document.createElement('div');
+  d.className = 'msg-ai fade-up';
+  d.innerHTML =
+    '<div class="ai-icon">'
+    +'<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="var(--accent)">'
+    +'<path d="M18 3a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-4.724l-4.762 2.857a1 1 0 0 1 -1.508 -.743l-.006 -.114v-2h-1a4 4 0 0 1 -3.995 -3.8l-.005 -.2v-8a4 4 0 0 1 4 -4zm-2.8 9.286a1 1 0 0 0 -1.414 .014a2.5 2.5 0 0 1 -3.572 0a1 1 0 0 0 -1.428 1.4a4.5 4.5 0 0 0 6.428 0a1 1 0 0 0 -.014 -1.414m-5.69 -4.286h-.01a1 1 0 1 0 0 2h.01a1 1 0 0 0 0 -2m5 0h-.01a1 1 0 0 0 0 2h.01a1 1 0 0 0 0 -2"/>'
+    +'</svg></div>'
+    +'<div class="ai-body">'
+    +'<div class="'+bubbleCls+'">'+esc(clean)+'</div>'
+    +(elapsed!=null && !isClarification ?'<div class="ai-elapsed">&#8987; '+elapsed+'s</div>':'')
+    +toolRow
+    +cmdLog
+    +'<div class="ai-copy-row"><button class="copy-btn" title="Copy response">⎘ Copy</button></div>'
+    +'</div>';
+  msgsEl.appendChild(d);
+  // wire copy button
+  const copyBtn = d.querySelector('.copy-btn');
+  copyBtn.onclick = () => {
+    navigator.clipboard.writeText(clean).then(() => {
+      copyBtn.textContent = '✓ Copied';
+      copyBtn.classList.add('copied');
+      setTimeout(() => { copyBtn.textContent = '⎘ Copy'; copyBtn.classList.remove('copied'); }, 2000);
+    }).catch(() => {
+      copyBtn.textContent = '✗ Failed';
+      setTimeout(() => { copyBtn.textContent = '⎘ Copy'; }, 2000);
+    });
+  };
+  scrollBot();
+}
+
+async function sendMessage(override){
+  const q = override || inpEl.value.trim();
+  if(!q || loading) return;
+  inpEl.value = '';
+  setLoading(true);
+  appendUser(q);
+
+  const liveUpdates = [];
+  showThinking(liveUpdates);
+
+  // Live elapsed-time counter shown in the status box header.
+  // Shows "processing (Xs)" from the very first second so the user
+  // always knows something is happening, even before the first SSE event.
+  let _elapsedSec = 0;
+  let _elapsedTimer = null;
+  function _startElapsedCounter(){
+    _elapsedSec = 0;
+    _elapsedTimer = setInterval(() => {
+      _elapsedSec++;
+      if(!thinkEl) return;
+      const hdr = thinkEl.querySelector('.s-label');
+      if(hdr){
+        hdr.textContent = `AGENT STATUS — processing (${_elapsedSec}s)`;
+        hdr.style.color = _elapsedSec >= 60 ? '#f59e0b' : '';
+      }
+    }, 1000);
+  }
+  function _stopElapsedCounter(){
+    if(_elapsedTimer){ clearInterval(_elapsedTimer); _elapsedTimer = null; }
+  }
+  _startElapsedCounter();
+
+  try{
+    const res = await fetch('/chat/stream', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({message: q, decode_secrets: decodeSecrets}),
+    });
+    if(!res.ok){
+      const e = await res.json().catch(()=>({}));
+      throw new Error(e.detail || 'HTTP '+res.status);
+    }
+
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let   buffer  = '';
+
+    while(true){
+      const {done, value} = await reader.read();
+      if(done) break;
+      buffer += decoder.decode(value, {stream: true});
+
+      // SSE lines are separated by \n\n; parse complete events only
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop(); // keep incomplete tail
+
+      for(const part of parts){
+        const line = part.trim();
+        if(!line.startsWith('data:')) continue;
+        let payload;
+        try{ payload = JSON.parse(line.slice(5).trim()); }
+        catch{ continue; }
+
+        if(payload.type === 'status'){
+          liveUpdates.push(payload.text);
+          appendStatusLine(payload.text, liveUpdates);
+
+        } else if(payload.type === 'tool'){
+          liveUpdates.push(payload.text);
+          appendStatusLine(payload.text, liveUpdates);
+
+        } else if(payload.type === 'heartbeat'){
+          // Server-sent keep-alive — update the status box with the warning
+          const timeoutSec = payload.timeout || 300;
+          const remaining  = timeoutSec - (payload.elapsed || 0);
+          const hbText     = `⏳ Still processing… (${payload.elapsed}s elapsed, timeout in ${remaining}s)`;
+          // Replace the last heartbeat line rather than accumulating many
+          const lastIdx = liveUpdates.length - 1;
+          if(lastIdx >= 0 && liveUpdates[lastIdx].startsWith('⏳')){
+            liveUpdates[lastIdx] = hbText;
+          } else {
+            liveUpdates.push(hbText);
+          }
+          _renderThinkingContent(liveUpdates, true);
+
+        } else if(payload.type === 'result'){
+          _stopElapsedCounter();
+          removeThinking();
+          appendAi(
+            payload.response,
+            payload.tools_used,
+            payload.iterations,
+            payload.elapsed_seconds,
+            payload.status_updates,
+            payload.clarification_needed
+          );
+
+        } else if(payload.type === 'error'){
+          _stopElapsedCounter();
+          removeThinking();
+          appendAi('⚠ Agent error: '+payload.text, [], 0, null, [], false);
+        }
+      }
+    }
+  } catch(err){
+    _stopElapsedCounter();
+    removeThinking();
+    const msg = err.message || '';
+    const isTimeout = msg.toLowerCase().includes('load') || msg.toLowerCase().includes('network') || msg.toLowerCase().includes('failed to fetch');
+    const hint = isTimeout
+      ? '⏱ The request timed out — the cluster data may be very large.\n\nTry narrowing the query to a specific namespace (e.g. "list pods in cdp") or increase LLM_TIMEOUT in Settings → LLM Input/Output.'
+      : '⚠ Error: '+msg+'\n\nMake sure the backend is running:\n  python3 app.py';
+    appendAi(hint, [], 0, null, [], false);
+  } finally {
+    _stopElapsedCounter();
+    setLoading(false);
+  }
+}
+sndBtn.onclick = ()=> sendMessage();
+inpEl.addEventListener('keydown', e=>{
+  if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// METRICS POLLING
+// ═══════════════════════════════════════════════════════════════════════════
+const sparkPts  = [];
+const SW=264, SH=28;
+
+// CPU bar: deep steel-blue → indigo → deep crimson (visible on all 3 themes)
+function cpuCol(p){
+  if(p<40) return 'hsl('+(220-p*0.5)+',80%,52%)';   // steel-blue
+  if(p<70) return 'hsl('+(200-(p-40)*3)+',85%,48%)'; // indigo
+  return           'hsl('+(110-(p-70)*3)+',80%,40%)'; // deep amber→crimson
+}
+// GPU bar: deep teal → violet → deep red
+function gpuCol(p){
+  if(p<50) return 'hsl('+(190-p*0.6)+',85%,45%)';   // teal
+  if(p<80) return 'hsl('+(160-(p-50)*4)+',80%,42%)'; // violet
+  return           'hsl('+(40-(p-80)*2)+',85%,42%)';  // deep red
+}
+function tempCol(c){ return c<60?'#3b82f6':c<75?'#8b5cf6':'#dc2626'; }
+
+function renderDots(el, pct){
+  const N=32, filled=Math.round((pct/100)*N);
+  let h='';
+  for(let i=0;i<N;i++){
+    const a=i<filled, col=a?cpuCol((i/N)*100):'transparent';
+    h+='<div style="width:4px;height:8px;border-radius:1px;flex-shrink:0;background:'+col
+      +';border:1px solid '+(a?col:'var(--panelBorder)22')+'"></div>';
+  }
+  el.innerHTML=h;
+}
+
+function renderSpark(svg, pts, pct){
+  if(pts.length<2){svg.innerHTML='';return;}
+  const col=cpuCol(pct);
+  const pts2=pts.map((v,i)=>((i/59)*SW)+','+(SH-(v/100)*SH)).join(' ');
+  svg.innerHTML=
+    '<defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">'
+    +'<stop offset="0%" stop-color="'+col+'" stop-opacity="0.35"/>'
+    +'<stop offset="100%" stop-color="'+col+'" stop-opacity="0.03"/>'
+    +'</linearGradient></defs>'
+    +'<polyline points="'+pts2+'" fill="none" stroke="'+col+'" stroke-width="1.5"/>'
+    +'<polygon points="0,'+SH+' '+pts2+' '+SW+','+SH+'" fill="url(#sg)"/>';
+}
+
+function renderCores(el, cores){
+  const cols=cores.length>12?3:cores.length>6?2:1;
+  const perCol=Math.ceil(cores.length/cols);
+  let h='';
+  for(let ci=0;ci<cols;ci++){
+    h+='<div class="core-col">';
+    cores.slice(ci*perCol,(ci+1)*perCol).forEach((pct,i)=>{
+      const idx=ci*perCol+i, col=cpuCol(pct), hot=pct>80;
+      h+='<div class="core-row">'
+        +'<span class="core-lbl">C'+(idx+1)+'</span>'
+        +'<div class="core-track"><div class="core-bg"></div>'
+        +'<div class="core-fill" style="width:'+pct+'%;background:'+col+'"></div>'
+        +'<div class="core-dots"></div></div>'
+        +'<span class="core-pct"'+(hot?' style="color:'+col+';font-weight:700"':'')+'>'+pct+'%</span></div>';
+    });
+    h+='</div>';
+  }
+  el.innerHTML=h;
+}
+
+function renderGpus(el, gpus){
+  el.innerHTML='';
+  gpus.forEach(gpu=>{
+    const uc=gpuCol(gpu.util_pct), mc=gpuCol(gpu.mem_pct), tc=tempCol(gpu.temp_c);
+    const sn=gpu.name.replace(/NVIDIA\s*/i,'').replace(/GeForce\s*/i,'').trim();
+    const c=document.createElement('div');
+    c.className='gpu-card';
+    c.innerHTML=
+      '<div class="gpu-chdr">'
+      +'<span class="gpu-idx">GPU</span>'
+      +'<span class="gpu-name" title="'+esc(gpu.name)+'">'+esc(sn)+'</span>'
+      +'</div>'
+      // Utilisation bar
+      +'<div><div class="g-bar-row">'
+      +'<span class="g-bar-lbl">Utilisation</span>'
+      +'<span class="g-bar-val" style="color:'+uc+'">'+gpu.util_pct+'%</span>'
+      +'</div>'
+      +'<div class="g-track">'
+      +'<div class="g-fill" style="width:'+gpu.util_pct+'%;background:'+uc+';box-shadow:0 0 5px '+uc+'88"></div>'
+      +'<div class="g-stripe"></div></div></div>'
+      // VRAM bar
+      +'<div><div class="g-bar-row">'
+      +'<span class="g-bar-lbl">VRAM</span>'
+      +'<span class="g-bar-val" style="color:'+mc+';font-weight:400;font-size:11px">'+gpu.mem_used_gb+'/'+gpu.mem_total_gb+' GB</span>'
+      +'</div>'
+      +'<div class="vram-track"><div class="vram-fill" style="width:'+gpu.mem_pct+'%;background:'+mc+'"></div></div></div>'
+      // Temp + power
+      +'<div class="gpu-meta">'
+      +'<span style="color:'+tc+';font-weight:700">'+gpu.temp_c+'\u00b0C</span>'
+      +(gpu.power_w!=null?' <span style="color:var(--panelDim)">&#9889; '+gpu.power_w+' W</span>':'')
+      +'</div>';
+    el.appendChild(c);
+  });
+}
+
+// DOM refs
+const coresEl    = document.getElementById('cores-grid');
+const sparkEl    = document.getElementById('sparkline');
+const dotbarEl   = document.getElementById('cpu-dotbar');
+const cpuPctEl   = document.getElementById('cpu-total-pct');
+const cpuFreqEl  = document.getElementById('cpu-freq-lbl');
+const memFillEl  = document.getElementById('mem-fill');
+const memPctEl   = document.getElementById('mem-pct');
+const memGbEl    = document.getElementById('mem-gb');
+const loadEl     = document.getElementById('load-avg');
+const gpuPanel   = document.getElementById('gpu-panel');
+const gpuCntEl   = document.getElementById('gpu-count-lbl');
+const gpuCardsEl = document.getElementById('gpu-cards');
+const gpuNoEl    = document.getElementById('gpu-none-msg');
+
+async function pollMetrics(){
+  try{
+    const r = await fetch('/metrics');
+    if(!r.ok) return;
+    const d = await r.json();
+
+    // Sparkline
+    sparkPts.push(d.cpu_total); if(sparkPts.length>60) sparkPts.shift();
+    renderSpark(sparkEl, sparkPts, d.cpu_total);
+
+    // CPU dotbar + pct
+    renderDots(dotbarEl, d.cpu_total);
+    cpuPctEl.textContent = d.cpu_total+'%';
+    cpuPctEl.style.color = cpuCol(d.cpu_total);
+
+    // Freq label
+    cpuFreqEl.textContent = (d.freq_mhz ? (d.freq_mhz/1000).toFixed(1)+' GHz' : '\u2014 GHz')
+                           + ' \u00b7 ' + (d.cpu_count||'?') + 'C';
+
+    // Per-core grid
+    renderCores(coresEl, d.cpu_per_core||[]);
+
+    // Memory utilisation (renamed from RAM)
+    const mp = d.mem_pct||0;
+    memFillEl.style.width      = mp+'%';
+    memFillEl.style.background = cpuCol(mp);
+    memPctEl.textContent       = mp+'%';
+    memPctEl.style.color       = cpuCol(mp);
+    memGbEl.textContent        = (d.mem_used_gb||0)+' / '+(d.mem_total_gb||0)+' GB';
+
+    // Load avg
+    const [a,b,c] = d.load_avg||[0,0,0];
+    loadEl.textContent = a+'  '+b+'  '+c;
+
+    // GPUs
+    const gpus = d.gpus||[];
+    if(gpus.length > 0){
+      gpuPanel.style.display = 'flex';
+      gpuCntEl.textContent   = gpus.length+' device'+(gpus.length>1?'s':'');
+      renderGpus(gpuCardsEl, gpus);
+      gpuNoEl.style.display  = 'none';
+    } else if(d.num_gpu > 0){
+      gpuPanel.style.display = 'flex';
+      gpuCntEl.textContent   = d.num_gpu+' device'+(d.num_gpu>1?'s':'');
+      gpuNoEl.style.display  = 'none';
+    } else {
+      gpuPanel.style.display = 'flex';
+      gpuCardsEl.innerHTML   = '';
+      gpuCntEl.textContent   = 'none detected';
+      gpuNoEl.style.display  = 'block';
+    }
+
+  } catch(_){ /* retry silently */ }
+}
+
+pollMetrics();
+setInterval(pollMetrics, 1500);
+
+// ═════════════════════════════════════════════════════════
+})();
+</script>
+</body>
+</html>
