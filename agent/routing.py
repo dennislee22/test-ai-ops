@@ -206,31 +206,54 @@ def default_tools_for(user_msg: str) -> list:
         return [("get_cluster_role_bindings", {}), ("get_service_accounts", {"namespace": ns})]
 
     # ── Secrets ───────────────────────────────────────────────────────────────
-    if any(k in lm for k in ["secret", "credential", "tls cert", "ssl cert",
-                               "ssl certificate", "certificate", "x509",
-                               "auth token", "api key", "private key",
-                               "imagepullsecret", "dockerconfig",
-                               "username", "password", "user credential"]):
+    # Trigger on: "secret" keyword, OR any long hyphenated k8s-style name
+    # that looks like a secret resource name (e.g. cdp-private-installer-db-root-cert)
+    _k8s_name_in_query = re.search(r'\b([a-z][a-z0-9]+-[a-z0-9-]{4,})\b', lm)
+    _k8s_name_candidate = _k8s_name_in_query.group(1) if _k8s_name_in_query else ""
+
+    _secret_trigger_words = ["secret", "credential", "tls cert", "ssl cert",
+                              "ssl certificate", "certificate", "x509",
+                              "auth token", "api key", "private key",
+                              "imagepullsecret", "dockerconfig",
+                              "username", "password", "user credential"]
+    _is_secret_query = (
+        any(k in lm for k in _secret_trigger_words)
+        # Also trigger if user says "show me <k8s-resource-name>" with no other tool match
+        or ("show" in lm and _k8s_name_candidate and len(_k8s_name_candidate) > 8)
+        or ("get" in lm and _k8s_name_candidate and len(_k8s_name_candidate) > 8)
+        or ("display" in lm and _k8s_name_candidate and len(_k8s_name_candidate) > 8)
+    )
+    if _is_secret_query:
         # Detect specific secret name — must look like a k8s resource name.
         # Patterns tried in order:
-        #   1. secret named/called "foo"  |  secret "foo"  |  secret foo
-        #   2. quoted name anywhere: "foo-secret" / 'foo-secret'
-        #   3. hyphenated k8s-style name that isn't a stopword
-        secret_name = ""
+        #   1. "secret <name>" or "secret named <name>"
+        #   2. quoted name anywhere
+        #   3. longest hyphenated k8s-style token in the message
         _stopwords = {"in", "for", "the", "all", "from", "with", "that", "has",
                       "any", "which", "what", "show", "list", "get", "cdp",
-                      "namespace", "tls", "ssl", "cert", "secret", "secrets"}
+                      "namespace", "tls", "ssl", "secret", "secrets",
+                      "me", "please", "display", "fetch", "find", "give"}
+        secret_name = ""
 
-        # Pattern 1: explicit "secret <name>" or "secret named <name>"
+        # Pattern 1: explicit "secret <name>"
         m = re.search(r'secret\s+(?:named?\s+|called?\s+)?["\']?([a-z0-9][a-z0-9._-]{2,})["\']?', lm)
         if m and m.group(1) not in _stopwords:
             secret_name = m.group(1)
 
-        # Pattern 2: quoted name anywhere in the message
+        # Pattern 2: quoted name anywhere
         if not secret_name:
-            m = re.search(r'["\']([a-z0-9][a-z0-9._-]{2,})["\']', lm)
+            m = re.search(r"""["']([a-z0-9][a-z0-9._-]{2,})["']""", lm)
             if m and m.group(1) not in _stopwords:
                 secret_name = m.group(1)
+
+        # Pattern 3: longest hyphenated k8s-style name in the query (>=3 hyphens = likely a resource name)
+        if not secret_name:
+            candidates = re.findall(r'\b([a-z][a-z0-9]*(?:-[a-z0-9]+){2,})\b', lm)
+            # Pick the longest one that's not a stopword and has enough hyphens to be a resource name
+            for c in sorted(candidates, key=len, reverse=True):
+                if c not in _stopwords and c.count('-') >= 2 and len(c) > 8:
+                    secret_name = c
+                    break
 
         # decode flag: controlled entirely by the UI Security toggle.
         # _wants_decode is only a fallback if the ContextVar can't be read
