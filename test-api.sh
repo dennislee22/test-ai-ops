@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Sequential API test — each query waits for the previous response before proceeding.
 
-URL="https://cpu-ecs-ai-ops-cpu.ml-9df5bc51-1da.apps.cdppvc.ares.olympus.cloudera.com/api/ask"
+DEFAULT_HOST="cpu-ecs-ai-ops-cpu.ml-9df5bc51-1da.apps.cdppvc.ares.olympus.cloudera.com"
+HOST="${1:-$DEFAULT_HOST}"
+URL="https://${HOST}/api/ask"
 
 QUESTIONS=(
     "list all pods"
@@ -23,7 +24,6 @@ QUESTIONS=(
 TOTAL=${#QUESTIONS[@]}
 PASS=0
 FAIL=0
-
 LOGFILE="test_api.log"
 
 exec > >(tee -a "$LOGFILE") 2>&1
@@ -40,8 +40,7 @@ for i in "${!QUESTIONS[@]}"; do
     Q="${QUESTIONS[$i]}"
     IDX=$((i + 1))
     printf "\n[%2d/%d] %s\n" "$IDX" "$TOTAL" "$Q"
-    printf "       Sending… "
-
+    printf "       Sending… [%s]\n" "$(date '+%H:%M:%S')"
     START=$(date +%s)
 
     RESPONSE=$(curl -s \
@@ -53,6 +52,7 @@ for i in "${!QUESTIONS[@]}"; do
     STATUS=$?
     END=$(date +%s)
     ELAPSED=$((END - START))
+    printf "       Answered  [%s] — %ds elapsed\n" "$(date '+%H:%M:%S')" "$ELAPSED"
 
     if [ $STATUS -ne 0 ]; then
         printf "FAILED (curl exit %d, %ds)\n" "$STATUS" "$ELAPSED"
@@ -65,7 +65,7 @@ import sys, json
 try:
     d = json.load(sys.stdin)
     r = d.get('response') or d.get('answer') or d.get('text') or str(d)
-    print(r[:600])
+    print(r)
 except Exception as e:
     print('Parse error:', e)
     sys.exit(1)
@@ -77,7 +77,8 @@ except Exception as e:
         FAIL=$((FAIL + 1))
     else
         printf "OK (%ds)\n" "$ELAPSED"
-        echo "$ANSWER" | sed 's/^/       /'
+        printf "\nQuestion: %s\n" "$Q"
+        printf "Answer:\n%s\n" "$ANSWER"
         PASS=$((PASS + 1))
     fi
 
