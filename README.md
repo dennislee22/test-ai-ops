@@ -22,7 +22,7 @@ An air-gapped Kubernetes operations chatbot for Cloudera ECS, powered by a local
 
 ## Architecture
 
-![ECS AI Ops Architecture](web/static/ecs-ai-arch.gif)
+<img src="web/static/ecs-ai-arch.gif" width="600" />
 
 ---
 
