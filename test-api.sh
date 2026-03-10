@@ -24,7 +24,7 @@ TOTAL=${#QUESTIONS[@]}
 PASS=0
 FAIL=0
 
-LOGFILE="test_api_$(date +%Y%m%d_%H%M%S).log"
+LOGFILE="test_api.log"
 
 exec > >(tee -a "$LOGFILE") 2>&1
 
