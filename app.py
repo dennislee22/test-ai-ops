@@ -17,8 +17,9 @@ Usage:
 
 Dependencies:
     pip install fastapi "uvicorn[standard]" langgraph langchain-core \
-                kubernetes python-dotenv psutil chromadb sentence-transformers \
-                pypdf markdown-it-py langchain-huggingface transformers torch accelerate
+                kubernetes python-dotenv psutil lancedb tantivy pyarrow \
+                sentence-transformers pypdf markdown-it-py \
+                langchain-huggingface transformers torch accelerate
 
 Optional (GPU monitoring):
     pip install nvidia-ml-py
@@ -68,6 +69,7 @@ if _env_file.exists():
 os.environ.setdefault("LLM_MODEL",       "Qwen/Qwen3-8B")
 os.environ.setdefault("EMBED_MODEL",     "nomic-ai/nomic-embed-text-v1.5")
 os.environ.setdefault("KUBECONFIG_PATH", "~/kubeconfig")
+os.environ.setdefault("LANCEDB_DIR",     str(Path(__file__).resolve().parent / "lancedb"))
 
 def _read_cluster_server() -> str:
     try:
@@ -89,7 +91,7 @@ def _read_cluster_server() -> str:
 CLUSTER_SERVER = _read_cluster_server()
 
 os.environ.setdefault("LOG_LEVEL",       "DEBUG")
-os.environ.setdefault("CHROMA_DIR",      str(_HERE / "chromadb"))
+os.environ.setdefault("LANCEDB_DIR",     str(_HERE / "lancedb"))
 os.environ.setdefault("CUSTOM_RULES",    "- Do NOT recommend migrating to cgroupv2. This environment uses cgroupv1.")
 
 if _ARGS.model_dir:
@@ -99,7 +101,7 @@ if _ARGS.embed_dir:
 
 LLM_MODEL       = os.getenv("LLM_MODEL",           "Qwen/Qwen3-8B").strip()
 EMBED_MODEL     = os.getenv("EMBED_MODEL",         "nomic-ai/nomic-embed-text-v1.5").strip()
-CHROMA_DIR      = os.getenv("CHROMA_DIR",          str(_HERE / "chromadb"))
+LANCEDB_DIR     = os.getenv("LANCEDB_DIR",         str(_HERE / "lancedb"))
 CUSTOM_RULES    = os.getenv("CUSTOM_RULES",        "").strip()
 
 # tool-call JSON (e.g. small local models like Qwen3-8B).
@@ -173,7 +175,7 @@ def get_logger(name: str) -> logging.Logger:
     _cfg_set.add(name)
     return log
 
-for _noisy in ["httpx", "httpcore", "urllib3", "kubernetes.client", "langchain", "langsmith", "watchfiles", "chromadb"]:
+for _noisy in ["httpx", "httpcore", "urllib3", "kubernetes.client", "langchain", "langsmith", "watchfiles", "lancedb"]:
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 logger   = get_logger("app")
@@ -188,9 +190,16 @@ CHUNK_SIZE    = 512
 CHUNK_OVERLAP = 64
 TOP_K         = 5
 
-_chroma_client     = None
-_chroma_collection = None
-_embedder_fn       = None
+_embedder_fn  = None
+
+# ── LanceDB globals ───────────────────────────────────────────────────────────
+_lancedb_conn  = None   # lancedb.LanceDBConnection
+_docs_table    = None   # LanceTable — prose chunks (.md/.pdf/.txt)
+_excel_table   = None   # LanceTable — Excel structured rows
+
+# Vector dimension — must match EMBED_MODEL output (nomic-embed-text-v1.5 = 768)
+_EMBED_DIM = 768
+
 
 def _get_embedder():
     global _embedder_fn
@@ -226,28 +235,81 @@ def _get_embedder():
     _embedder_fn = _local
     return _embedder_fn
 
+
 def embed_text(text: str) -> list:
     return _get_embedder()(text)
 
-def _get_chroma():
-    global _chroma_client, _chroma_collection
-    if _chroma_collection is not None:
-        return _chroma_client, _chroma_collection
 
-    import chromadb
-    from chromadb.config import Settings
+def _get_lancedb():
+    """Return (connection, docs_table, excel_table), opening/creating as needed."""
+    global _lancedb_conn, _docs_table, _excel_table
+    if _lancedb_conn is not None:
+        return _lancedb_conn, _docs_table, _excel_table
 
-    Path(CHROMA_DIR).mkdir(parents=True, exist_ok=True)
-    _log_rag.info(f"[ChromaDB] Opening persistent store: {CHROMA_DIR}")
+    import lancedb
+    import pyarrow as pa
 
-    _chroma_client = chromadb.PersistentClient(path=CHROMA_DIR, settings=Settings(anonymized_telemetry=False))
-    _chroma_collection = _chroma_client.get_or_create_collection(name="k8s_docs", metadata={"hnsw:space": "cosine"})
-    
-    return _chroma_client, _chroma_collection
+    Path(LANCEDB_DIR).mkdir(parents=True, exist_ok=True)
+    _log_rag.info(f"[LanceDB] Opening store: {LANCEDB_DIR}")
+    _lancedb_conn = lancedb.connect(LANCEDB_DIR)
+
+    # ── Prose docs table ──────────────────────────────────────────────────────
+    docs_schema = pa.schema([
+        pa.field("id",          pa.utf8()),
+        pa.field("vector",      pa.list_(pa.float32(), _EMBED_DIM)),
+        pa.field("text",        pa.utf8()),
+        pa.field("source",      pa.utf8()),
+        pa.field("doc_type",    pa.utf8()),
+        pa.field("chunk_index", pa.int32()),
+        pa.field("file_hash",   pa.utf8()),
+    ])
+    if "docs" in _lancedb_conn.table_names():
+        _docs_table = _lancedb_conn.open_table("docs")
+    else:
+        _docs_table = _lancedb_conn.create_table("docs", schema=docs_schema)
+        _log_rag.info("[LanceDB] Created table: docs")
+
+    # ── Excel structured-issues table ─────────────────────────────────────────
+    # Primary search column: "symptom" — the vector is the embedding of the
+    # symptom/search text only.  All other columns are stored as typed fields
+    # and returned in full on retrieval, preserving column relationships.
+    excel_schema = pa.schema([
+        pa.field("id",            pa.utf8()),
+        pa.field("vector",        pa.list_(pa.float32(), _EMBED_DIM)),
+        pa.field("sheet",         pa.utf8()),
+        pa.field("symptom",       pa.utf8()),   # PRIMARY search column (embedded)
+        pa.field("issue_id",      pa.utf8()),
+        pa.field("category",      pa.utf8()),
+        pa.field("problem",       pa.utf8()),
+        pa.field("root_cause",    pa.utf8()),
+        pa.field("fix",           pa.utf8()),
+        pa.field("severity",      pa.utf8()),
+        pa.field("present",       pa.utf8()),   # "Yes" = unresolved
+        pa.field("jira",          pa.utf8()),
+        pa.field("discovered",    pa.utf8()),
+        pa.field("resolved",      pa.utf8()),
+        pa.field("notes",         pa.utf8()),
+        pa.field("do_text",       pa.utf8()),
+        pa.field("dont_text",     pa.utf8()),
+        pa.field("rationale",     pa.utf8()),
+        pa.field("prerequisite",  pa.utf8()),
+        pa.field("how_to_verify", pa.utf8()),
+        pa.field("learning",      pa.utf8()),
+        pa.field("action_taken",  pa.utf8()),
+    ])
+    if "excel_issues" in _lancedb_conn.table_names():
+        _excel_table = _lancedb_conn.open_table("excel_issues")
+    else:
+        _excel_table = _lancedb_conn.create_table("excel_issues", schema=excel_schema)
+        _log_rag.info("[LanceDB] Created table: excel_issues")
+
+    return _lancedb_conn, _docs_table, _excel_table
+
 
 def init_db():
-    _get_chroma()
+    _get_lancedb()
     _get_embedder()
+
 
 def chunk_text(text: str) -> list:
     chunks, start = [], 0
@@ -267,6 +329,7 @@ def chunk_text(text: str) -> list:
         start = end - CHUNK_OVERLAP
     return chunks
 
+
 def _doc_type(filename: str) -> str:
     n = filename.lower()
     if any(k in n for k in ["known", "issue", "bug", "error"]):   return "known_issue"
@@ -274,17 +337,23 @@ def _doc_type(filename: str) -> str:
     if any(k in n for k in ["dos", "donts", "guidelines"]):       return "dos_donts"
     return "general"
 
+
 def ingest_file(file_path: str, force: bool = False) -> dict:
+    """Ingest a prose document (.md, .pdf, .txt) into the LanceDB docs table."""
     path  = Path(file_path)
     fhash = hashlib.md5(path.read_bytes()).hexdigest()
-    _, col = _get_chroma()
+    _, docs_tbl, _ = _get_lancedb()
 
     if not force:
-        existing = col.get(where={"source": str(path)}, limit=1, include=["metadatas"])
-        if existing["ids"] and existing["metadatas"]:
-            if existing["metadatas"][0].get("file_hash", "") == fhash:
+        try:
+            existing = docs_tbl.search().where(
+                f"source = '{str(path)}' AND file_hash = '{fhash}'"
+            ).limit(1).to_list()
+            if existing:
                 _log_rag.info(f"[RAG] Skip (unchanged): {path.name}")
                 return {"file": path.name, "status": "skipped", "chunks": 0}
+        except Exception:
+            pass
 
     try:
         suffix = path.suffix.lower()
@@ -306,55 +375,334 @@ def ingest_file(file_path: str, force: bool = False) -> dict:
     doc_type = _doc_type(path.name)
     _log_rag.info(f"[RAG] {path.name}: {len(chunks)} chunks  type={doc_type}")
 
-    try: col.delete(where={"source": str(path)})
-    except Exception: pass
+    try:
+        docs_tbl.delete(f"source = '{str(path)}'")
+    except Exception:
+        pass
 
-    ids       = [f"{fhash}_{i}" for i in range(len(chunks))]
-    metadatas = [{"source": str(path), "doc_type": doc_type, "chunk_index": i, "file_hash": fhash} for i in range(len(chunks))]
-    embeddings = [embed_text(ch) for ch in chunks]
-
-    col.add(ids=ids, embeddings=embeddings, documents=chunks, metadatas=metadatas)
+    rows = []
+    for i, ch in enumerate(chunks):
+        rows.append({
+            "id":          f"{fhash}_{i}",
+            "vector":      embed_text(ch),
+            "text":        ch,
+            "source":      str(path),
+            "doc_type":    doc_type,
+            "chunk_index": i,
+            "file_hash":   fhash,
+        })
+    docs_tbl.add(rows)
     return {"file": path.name, "status": "ingested", "chunks": len(chunks), "doc_type": doc_type}
+
+
+def ingest_excel(file_path: str, force: bool = False) -> dict:
+    """
+    Ingest a structured Excel knowledge base into the LanceDB excel_issues table.
+
+    Each sheet is processed with column-aware embedding:
+      - Known Issues   → vector = embed(symptom)
+      - Dos and Don'ts → vector = embed(do_text + " / " + dont_text)
+      - Prerequisites  → vector = embed(prerequisite)
+      - Past Learnings → vector = embed(what_went_wrong + " / " + key_learning)
+
+    The full row is stored alongside the vector so retrieval returns
+    complete structured context to the LLM — not just the matched text.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return {"file": Path(file_path).name, "status": "error", "chunks": 0,
+                "error": "pandas not installed — pip install pandas openpyxl"}
+
+    path  = Path(file_path)
+    fhash = hashlib.md5(path.read_bytes()).hexdigest()
+    _, _, excel_tbl = _get_lancedb()
+
+    def _s(val) -> str:
+        if val is None: return ""
+        try:
+            import math
+            if isinstance(val, float) and math.isnan(val): return ""
+        except Exception:
+            pass
+        return str(val).strip()
+
+    rows  = []
+    total = 0
+
+    try:
+        xl = pd.read_excel(str(path), sheet_name=None, dtype=str)
+    except Exception as e:
+        return {"file": path.name, "status": "error", "chunks": 0, "error": str(e)}
+
+    for sheet_name, df in xl.items():
+        sn   = sheet_name.strip()
+        df.columns = [c.strip() for c in df.columns]
+
+        if "Known Issues" in sn or "known" in sn.lower():
+            _log_rag.info(f"[RAG/Excel] Sheet '{sn}' → Known Issues ({len(df)} rows)")
+            for _, row in df.iterrows():
+                symptom = _s(row.get("Symptom (Observable)", row.get("Symptom", "")))
+                if not symptom:
+                    continue
+                rows.append({
+                    "id": f"ki-{fhash}-{total}", "vector": embed_text(symptom),
+                    "sheet": "Known Issues", "symptom": symptom,
+                    "issue_id":   _s(row.get("Issue ID", "")),
+                    "category":   _s(row.get("Category", "")),
+                    "problem":    _s(row.get("Problem Summary", row.get("Problem", ""))),
+                    "root_cause": _s(row.get("Root Cause", "")),
+                    "fix":        _s(row.get("Remediation Steps", row.get("Fix", ""))),
+                    "severity":   _s(row.get("Severity", "")),
+                    "present":    _s(row.get("Present / Unresolved?", row.get("Present", ""))),
+                    "jira":       _s(row.get("Jira Ticket", row.get("Jira", ""))),
+                    "discovered": _s(row.get("Discovered Date", "")),
+                    "resolved":   _s(row.get("Resolved Date", "")),
+                    "notes":      _s(row.get("Notes / Lessons Learned", row.get("Notes", ""))),
+                    "do_text": "", "dont_text": "", "rationale": "",
+                    "prerequisite": "", "how_to_verify": "", "learning": "", "action_taken": "",
+                })
+                total += 1
+
+        elif "Dos" in sn or "Don" in sn or "donts" in sn.lower():
+            _log_rag.info(f"[RAG/Excel] Sheet '{sn}' → Dos and Don'ts ({len(df)} rows)")
+            for _, row in df.iterrows():
+                do_t   = _s(row.get("✅  DO", row.get("DO", row.get("Do", ""))))
+                dont_t = _s(row.get("❌  DON'T", row.get("DONT", row.get("Don't", ""))))
+                search_text = f"{do_t} / {dont_t}".strip(" /")
+                if not search_text:
+                    continue
+                rows.append({
+                    "id": f"dd-{fhash}-{total}", "vector": embed_text(search_text),
+                    "sheet": "Dos and Donts", "symptom": search_text,
+                    "issue_id": "", "category": _s(row.get("Category", "")),
+                    "problem": "", "root_cause": "", "fix": "", "severity": "", "present": "",
+                    "jira": _s(row.get("Related Issue", "")),
+                    "discovered": "", "resolved": "",
+                    "notes": _s(row.get("Rationale", "")),
+                    "do_text": do_t, "dont_text": dont_t,
+                    "rationale": _s(row.get("Rationale", "")),
+                    "prerequisite": "", "how_to_verify": "", "learning": "", "action_taken": "",
+                })
+                total += 1
+
+        elif "Prerequisite" in sn or "prereq" in sn.lower():
+            _log_rag.info(f"[RAG/Excel] Sheet '{sn}' → Prerequisites ({len(df)} rows)")
+            for _, row in df.iterrows():
+                prereq = _s(row.get("Prerequisite", ""))
+                if not prereq:
+                    continue
+                rows.append({
+                    "id": f"pr-{fhash}-{total}", "vector": embed_text(prereq),
+                    "sheet": "Prerequisites", "symptom": prereq,
+                    "issue_id": "", "category": _s(row.get("Category", "")),
+                    "problem": _s(row.get("Why It Matters", "")), "root_cause": "",
+                    "fix": "", "severity": "", "present": "", "jira": "",
+                    "discovered": "", "resolved": "", "notes": "",
+                    "do_text": "", "dont_text": "",
+                    "rationale": _s(row.get("Why It Matters", "")),
+                    "prerequisite": prereq,
+                    "how_to_verify": _s(row.get("How to Verify", "")),
+                    "learning": "", "action_taken": "",
+                })
+                total += 1
+
+        elif "Learning" in sn or "learning" in sn.lower() or "Past" in sn:
+            _log_rag.info(f"[RAG/Excel] Sheet '{sn}' → Past Learnings ({len(df)} rows)")
+            for _, row in df.iterrows():
+                went_wrong = _s(row.get("What Went Wrong", ""))
+                learning   = _s(row.get("Key Learning", ""))
+                search_text = f"{went_wrong} / {learning}".strip(" /")
+                if not search_text:
+                    continue
+                rows.append({
+                    "id": f"pl-{fhash}-{total}", "vector": embed_text(search_text),
+                    "sheet": "Past Learnings", "symptom": search_text,
+                    "issue_id": "", "category": "",
+                    "problem": _s(row.get("Incident Summary", "")),
+                    "root_cause": went_wrong, "fix": _s(row.get("What Worked Well", "")),
+                    "severity": "",
+                    "present": _s(row.get("Prevented Recurrence?", "")),
+                    "jira": _s(row.get("Jira / Postmortem", "")),
+                    "discovered": _s(row.get("Incident Date", "")), "resolved": "", "notes": "",
+                    "do_text": "", "dont_text": "", "rationale": "",
+                    "prerequisite": "", "how_to_verify": "",
+                    "learning": learning, "action_taken": _s(row.get("Action Taken", "")),
+                })
+                total += 1
+        else:
+            _log_rag.info(f"[RAG/Excel] Skipping unrecognised sheet '{sn}'")
+
+    if not rows:
+        return {"file": path.name, "status": "empty", "chunks": 0}
+
+    try:
+        excel_tbl.delete(f"id LIKE 'ki-{fhash}%' OR id LIKE 'dd-{fhash}%' OR id LIKE 'pr-{fhash}%' OR id LIKE 'pl-{fhash}%'")
+    except Exception:
+        pass
+
+    excel_tbl.add(rows)
+    _log_rag.info(f"[RAG/Excel] {path.name}: {total} rows ingested")
+    return {"file": path.name, "status": "ingested", "chunks": total, "doc_type": "excel"}
+
 
 def ingest_directory(docs_dir: str, force: bool = False) -> list:
     p = Path(docs_dir)
-    files = sorted(p.glob("**/*.md")) + sorted(p.glob("**/*.pdf")) + sorted(p.glob("**/*.txt"))
-    return [ingest_file(str(f), force=force) for f in files]
+    results = []
+    for f in sorted(p.glob("**/*.md")) + sorted(p.glob("**/*.pdf")) + sorted(p.glob("**/*.txt")):
+        results.append(ingest_file(str(f), force=force))
+    for f in sorted(p.glob("**/*.xlsx")) + sorted(p.glob("**/*.xls")):
+        results.append(ingest_excel(str(f), force=force))
+    return results
+
 
 def rag_retrieve(query: str, top_k: int = TOP_K, doc_type: Optional[str] = None) -> str:
-    _, col = _get_chroma()
-    n = col.count()
-    if n == 0: return "No documents ingested yet."
+    """
+    Unified semantic retrieval across both LanceDB tables.
 
-    qe = embed_text(query)
-    where = {"doc_type": doc_type} if doc_type else None
+    Searches excel_issues first (column-aware, unresolved issues surfaced first),
+    then the docs table (prose chunks).  Returns a single formatted context
+    string combining both, ready for the LLM synthesis step.
+    """
+    _, docs_tbl, excel_tbl = _get_lancedb()
+    sections = []
+
+    # ── 1. Excel structured knowledge base ───────────────────────────────────
     try:
-        res = col.query(query_embeddings=[qe], n_results=min(top_k, n), where=where, include=["documents", "metadatas", "distances"])
-    except Exception as e:
-        return f"RAG query failed: {e}"
+        excel_count = excel_tbl.count_rows()
+    except Exception:
+        excel_count = 0
 
-    docs = res.get("documents", [[]])[0]
-    metas = res.get("metadatas", [[]])[0]
-    dists = res.get("distances", [[]])[0]
+    if excel_count > 0:
+        try:
+            qvec = embed_text(query)
+            # Try unresolved-first, fall back to all results
+            try:
+                unresolved = (
+                    excel_tbl.search(qvec, vector_column_name="vector")
+                    .where("present = 'Yes'")
+                    .limit(top_k)
+                    .to_list()
+                )
+            except Exception:
+                unresolved = []
 
-    if not docs: return "No relevant documentation found."
+            all_hits = (
+                excel_tbl.search(qvec, vector_column_name="vector")
+                .limit(top_k)
+                .to_list()
+            )
 
-    lines = [f"Retrieved {len(docs)} relevant chunks:\n"]
-    for i, (doc, meta, dist) in enumerate(zip(docs, metas, dists), 1):
-        sim = round(1 - dist, 3)
-        src = Path(meta.get("source", "?")).name
-        lines.append(f"[{i}] {src} | relevance:{sim}\n{doc}\n")
-    return "\n".join(lines)
+            seen, merged = set(), []
+            for r in (unresolved + all_hits):
+                if r["id"] not in seen:
+                    seen.add(r["id"])
+                    merged.append(r)
+            merged = merged[:top_k]
+
+            if merged:
+                lines = [f"📋 Knowledge Base ({len(merged)} match(es)):\n"]
+                for hit in merged:
+                    sheet = hit.get("sheet", "")
+                    sim   = round(1 - hit.get("_distance", 1.0), 3)
+                    if sheet == "Known Issues":
+                        status = "⚠️ UNRESOLVED" if hit.get("present") == "Yes" else "✅ Resolved"
+                        jira   = hit.get("jira", "")
+                        lines.append(
+                            f"[{sheet}] {hit.get('issue_id','')} | {hit.get('severity','')} | {status}"
+                            + (f" | {jira}" if jira else "") + f" | relevance:{sim}\n"
+                            f"  Problem  : {hit.get('problem','')}\n"
+                            f"  Symptom  : {hit.get('symptom','')}\n"
+                            f"  RootCause: {hit.get('root_cause','')}\n"
+                            f"  Fix      : {hit.get('fix','')}\n"
+                            + (f"  Notes    : {hit.get('notes','')}\n" if hit.get("notes") else "")
+                        )
+                    elif sheet == "Dos and Donts":
+                        lines.append(
+                            f"[{sheet}] {hit.get('category','')} | relevance:{sim}\n"
+                            f"  ✅ DO   : {hit.get('do_text','')}\n"
+                            f"  ❌ DON'T: {hit.get('dont_text','')}\n"
+                            f"  Why     : {hit.get('rationale','')}\n"
+                        )
+                    elif sheet == "Prerequisites":
+                        lines.append(
+                            f"[{sheet}] {hit.get('category','')} | relevance:{sim}\n"
+                            f"  Prerequisite : {hit.get('prerequisite','')}\n"
+                            f"  Why it matters: {hit.get('rationale','')}\n"
+                            f"  How to verify : {hit.get('how_to_verify','')}\n"
+                        )
+                    elif sheet == "Past Learnings":
+                        lines.append(
+                            f"[{sheet}] {hit.get('discovered','')} | relevance:{sim}\n"
+                            f"  Incident  : {hit.get('problem','')}\n"
+                            f"  Went wrong: {hit.get('root_cause','')}\n"
+                            f"  Learning  : {hit.get('learning','')}\n"
+                            f"  Action    : {hit.get('action_taken','')}\n"
+                        )
+                    else:
+                        lines.append(f"[{sheet}] relevance:{sim}\n  {hit.get('symptom','')}\n")
+                sections.append("\n".join(lines))
+        except Exception as e:
+            _log_rag.warning(f"[RAG/Excel] Search failed: {e}")
+
+    # ── 2. Prose docs table ───────────────────────────────────────────────────
+    try:
+        docs_count = docs_tbl.count_rows()
+    except Exception:
+        docs_count = 0
+
+    if docs_count > 0:
+        try:
+            qvec  = embed_text(query)
+            srch  = docs_tbl.search(qvec, vector_column_name="vector")
+            if doc_type:
+                srch = srch.where(f"doc_type = '{doc_type}'")
+            hits = srch.limit(top_k).to_list()
+            if hits:
+                lines = [f"📄 Documentation ({len(hits)} chunk(s)):\n"]
+                for hit in hits:
+                    sim = round(1 - hit.get("_distance", 1.0), 3)
+                    src = Path(hit.get("source", "?")).name
+                    lines.append(f"[{src}] relevance:{sim}\n{hit.get('text','')}\n")
+                sections.append("\n".join(lines))
+        except Exception as e:
+            _log_rag.warning(f"[RAG/Docs] Search failed: {e}")
+
+    return "\n\n---\n\n".join(sections) if sections else "No relevant documentation found."
+
 
 def get_doc_stats() -> dict:
-    _, col = _get_chroma()
-    total = col.count()
-    if total == 0: return {"total_chunks": 0, "files": 0, "by_type": {}}
-    from collections import Counter
-    all_meta = col.get(include=["metadatas"])["metadatas"]
-    by_type = dict(Counter(m.get("doc_type", "general") for m in all_meta))
-    by_src = Counter(m.get("source", "?") for m in all_meta)
-    return {"total_chunks": total, "files": len(by_src), "by_type": by_type}
+    """Row counts and breakdown for both LanceDB tables."""
+    try:
+        _, docs_tbl, excel_tbl = _get_lancedb()
+        docs_count  = docs_tbl.count_rows()
+        excel_count = excel_tbl.count_rows()
+        excel_by_sheet: dict = {}
+        if excel_count > 0:
+            try:
+                from collections import Counter
+                rows = excel_tbl.search().limit(excel_count + 1).to_list()
+                excel_by_sheet = dict(Counter(r.get("sheet", "unknown") for r in rows))
+            except Exception:
+                pass
+        docs_by_type: dict = {}
+        if docs_count > 0:
+            try:
+                from collections import Counter
+                rows = docs_tbl.search().limit(docs_count + 1).to_list()
+                docs_by_type = dict(Counter(r.get("doc_type", "general") for r in rows))
+            except Exception:
+                pass
+        return {
+            "total_chunks":   docs_count + excel_count,
+            "docs_chunks":    docs_count,
+            "excel_rows":     excel_count,
+            "docs_by_type":   docs_by_type,
+            "excel_by_sheet": excel_by_sheet,
+        }
+    except Exception as e:
+        return {"total_chunks": 0, "docs_chunks": 0, "excel_rows": 0,
+                "docs_by_type": {}, "excel_by_sheet": {}, "error": str(e)}
 
 RAG_TOOLS = {
     "rag_search": {
@@ -1385,21 +1733,23 @@ async def _lifespan(app: FastAPI):
     logger.info(f"  LLM      : {LLM_MODEL}")
     logger.info(f"  Embed    : {EMBED_MODEL}")
     logger.info(f"  GPU      : {gpu_info}")
-    logger.info(f"  ChromaDB : {CHROMA_DIR}")
+    logger.info(f"  LanceDB  : {LANCEDB_DIR}")
     logger.info(f"  Tools    : {len(K8S_TOOLS)} kubectl tools registered")
     logger.info("=" * 60)
 
     _run_startup_checks()
 
     try:
-        _log_rag.info("[ChromaDB] Initialising persistent store…")
+        _log_rag.info("[LanceDB] Initialising store…")
         init_db()
         stats = get_doc_stats()
         _log_rag.info(
-            f"[ChromaDB] Ready — {stats['total_chunks']} chunks "
-            f"across {stats['files']} file(s)  |  by type: {stats['by_type']}")
+            f"[LanceDB] Ready — {stats['docs_chunks']} doc chunks, "
+            f"{stats['excel_rows']} Excel rows  |  "
+            f"sheets: {stats.get('excel_by_sheet', {})}  "
+            f"doc types: {stats.get('docs_by_type', {})}")
     except Exception as e:
-        _log_rag.error(f"[ChromaDB] Init failed — RAG unavailable: {e}")
+        _log_rag.error(f"[LanceDB] Init failed — RAG unavailable: {e}")
 
     logger.info("[Agent] Pre-warming LLM…")
     t0 = time.time()
@@ -1427,7 +1777,7 @@ class IngestResponse(BaseModel): results: list; total_files: int; total_chunks: 
 @app.get("/health")
 async def health():
     stats = get_doc_stats()
-    return {"status": "ok", "model": LLM_MODEL, "model_source": "huggingface", "embed_source": "huggingface", "num_gpu": NUM_GPU, "chroma_chunks": stats["total_chunks"], "k8s_tools": len(K8S_TOOLS), "cluster_server": CLUSTER_SERVER}
+    return {"status": "ok", "model": LLM_MODEL, "model_source": "huggingface", "embed_source": "huggingface", "num_gpu": NUM_GPU, "lancedb_docs": stats["docs_chunks"], "lancedb_excel_rows": stats["excel_rows"], "k8s_tools": len(K8S_TOOLS), "cluster_server": CLUSTER_SERVER}
 
 class KubeconfigRequest(BaseModel):
     kubeconfig: str
@@ -1537,11 +1887,12 @@ async def ingest_upload_real(
     force: str = FastAPIForm(default="false"),
 ):
     """
-    Upload documents directly into ChromaDB via multipart form upload.
-    Accepts .md, .pdf, .txt files.
+    Upload documents directly into LanceDB via multipart form upload.
+    Accepts .md, .pdf, .txt files (prose → docs table) and
+    .xlsx / .xls files (structured Excel → excel_issues table).
 
     curl -s -X POST http://localhost:8000/api/ingest/upload \\
-         -F 'files=@runbook.md' -F 'files=@notes.txt' -F 'force=false'
+         -F 'files=@runbook.md' -F 'files=@knowledge_base.xlsx' -F 'force=false'
     """
     do_force = force.lower() in ("true", "1", "yes")
     docs_dir = _HERE / "docs"
@@ -1550,16 +1901,19 @@ async def ingest_upload_real(
     results = []
     for upload in files:
         suffix = Path(upload.filename).suffix.lower()
-        if suffix not in (".md", ".pdf", ".txt"):
+        if suffix not in (".md", ".pdf", ".txt", ".xlsx", ".xls"):
             results.append({
                 "file": upload.filename, "status": "rejected",
-                "chunks": 0, "error": f"Unsupported type '{suffix}'. Use .md, .pdf, or .txt."
+                "chunks": 0, "error": f"Unsupported type '{suffix}'. Use .md, .pdf, .txt, .xlsx, or .xls."
             })
             continue
         dest = docs_dir / upload.filename
         content = await upload.read()
         dest.write_bytes(content)
-        result = ingest_file(str(dest), force=do_force)
+        if suffix in (".xlsx", ".xls"):
+            result = ingest_excel(str(dest), force=do_force)
+        else:
+            result = ingest_file(str(dest), force=do_force)
         results.append(result)
         logger.info(f"[Ingest/Upload] {upload.filename} → {result['status']} ({result['chunks']} chunks)")
 
@@ -1596,7 +1950,7 @@ async def api_index():
             {"method": "GET",  "path": "/api/deployments",    "description": "Deployment status  (optional: ?ns=X)"},
             {"method": "GET",  "path": "/api/pvcs",           "description": "PVC / storage status  (optional: ?ns=X)"},
             {"method": "GET",  "path": "/api/namespaces",     "description": "All namespaces and their status"},
-            {"method": "GET",  "path": "/api/rag/stats",      "description": "ChromaDB document chunk statistics"},
+            {"method": "GET",  "path": "/api/rag/stats",      "description": "LanceDB document and Excel row statistics"},
             {"method": "GET",  "path": "/api/system",         "description": "Live CPU / RAM / GPU metrics"},
         ],
     }
@@ -1616,7 +1970,8 @@ async def api_info():
         "num_gpu":      NUM_GPU,
         "cluster_ok":   cluster_ok,
         "cluster_error": cluster_err,
-        "rag_chunks":   get_doc_stats()["total_chunks"],
+        "rag_docs":     get_doc_stats()["docs_chunks"],
+        "rag_excel":    get_doc_stats()["excel_rows"],
         "tools_count":  len(K8S_TOOLS),
     }
 
@@ -1776,7 +2131,7 @@ async def api_namespaces():
     raw = await asyncio.get_event_loop().run_in_executor(None, get_namespace_status)
     return {"output": raw}
 
-@api.get("/rag/stats", summary="ChromaDB document ingestion statistics")
+@api.get("/rag/stats", summary="LanceDB document and Excel row statistics")
 async def api_rag_stats():
     """
     curl -s http://localhost:8000/api/rag/stats
@@ -1937,7 +2292,7 @@ if __name__ == "__main__":
 ║  Embed    : {EMBED_MODEL:<46} ║
 ║  GPU      : {gpu_str:<46} ║
 ║  Tools    : {tool_count} kubectl tools registered{'':<26} ║
-║  ChromaDB : {CHROMA_DIR:<46} ║
+║  LanceDB  : {LANCEDB_DIR:<46} ║
 ║  Server   : http://{_ARGS.host}:{_ARGS.port:<38} ║
 ╚════════════════════════════════════════════════════════════╝
 """)

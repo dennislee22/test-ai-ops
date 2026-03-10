@@ -70,16 +70,17 @@ This ECS AI Ops Chatbot is powered by:
 │   └── static/
 │       ├── k8s-logo.svg
 │       ├── rancher-logo.svg
-│       ├── chatbot-icon.svg
-│       └── ecs-ai-arch.gif
+│       └── chatbot-icon.svg
 │
-├── docs/                     # Ingested into ChromaDB for RAG
-
+├── docs/                     # Ingested into LanceDB for RAG
+│                             # .md / .pdf / .txt  → prose chunks (docs table)
+│                             # .xlsx / .xls       → structured rows (excel_issues table)
+│
 ├── api_test_logs/
 │   ├── test-API-CPU-output.log
 │   └── test-API-GPU-A100-80GB-output.log
 ├── requirements.txt
-├── chromadb/                 # Auto-created on first ingest
+├── lancedb/                  # Auto-created on first ingest (two tables: docs, excel_issues)
 └── logs/
     └── app.log
 ```
@@ -93,7 +94,8 @@ This ECS AI Ops Chatbot is powered by:
 | LLM | HuggingFace Transformers | `Qwen/Qwen3-8B` — excellent tool-calling, works on CPU and GPU |
 | Agent | LangGraph | ReAct loop: LLM selects tools → executes → observes → repeats or answers |
 | Embeddings | SentenceTransformers | `nomic-ai/nomic-embed-text-v1.5` (local) |
-| Vector DB | ChromaDB (embedded) | Zero external dependencies |
+| Vector DB | LanceDB (embedded) | Two tables: `docs` (prose chunks) + `excel_issues` (structured Excel rows) |
+| Excel RAG | Column-aware ingestion | Each Excel sheet embedded per primary search column; full row returned on retrieval |
 | K8s tools | kubernetes Python client | 24 typed, read-only tools — no kubectl binary needed |
 | API | FastAPI | REST + SSE streaming |
 | Frontend | Single-file HTML/JS | Served by FastAPI at `/` |
@@ -159,6 +161,11 @@ The application automatically detects available GPUs at startup and uses them if
 pip install -r requirements.txt
 ```
 
+Key additions vs the previous ChromaDB version:
+- `lancedb` — replaces chromadb; embedded, no server required
+- `tantivy` — native FTS index for LanceDB keyword search
+- `pandas` + `openpyxl` — Excel ingestion (`ingest_excel()`)
+
 For NVIDIA GPU:
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cu121
@@ -176,7 +183,7 @@ EMBED_MODEL=/models/nomic-embed-text-v1.5
 
 NUM_GPU=1           # 0 = CPU only
 LOG_LEVEL=DEBUG     # DEBUG shows full agentic loop: tool selection, raw LLM output, multi-hop decisions
-CHROMA_DIR=./chromadb
+LANCEDB_DIR=./lancedb
 
 KUBECTL_ALLOW_WRITES=false
 ALLOW_DB_EXEC=true
@@ -191,6 +198,12 @@ LLM_TIMEOUT=300
 python3 app.py --ingest ./docs
 python3 app.py --ingest ./docs --force   # re-ingest all
 ```
+
+LanceDB auto-detects file type on ingest:
+- `.md` / `.pdf` / `.txt` → chunked into the `docs` table (prose RAG)
+- `.xlsx` / `.xls` → ingested row-by-row into the `excel_issues` table with column-aware embeddings
+
+Place your Excel knowledge base (known issues, dos & don'ts, prerequisites, past learnings) in `docs/` and it will be ingested automatically.
 
 ### 4. Start the server
 
@@ -239,7 +252,7 @@ Interactive docs: **[/docs](http://localhost:9000/docs)** (Swagger) · **[/redoc
 | GET | `/api/deployments` | Deployment status (optional: `?ns=X`) |
 | GET | `/api/pvcs` | PVC / storage status (optional: `?ns=X`) |
 | GET | `/api/namespaces` | All namespaces and their status |
-| GET | `/api/rag/stats` | ChromaDB document chunk statistics |
+| GET | `/api/rag/stats` | LanceDB doc chunks and Excel row statistics |
 | GET | `/api/system` | Live CPU / RAM / GPU metrics |
 | POST | `/api/kubeconfig` | Apply a new kubeconfig |
 | POST | `/api/ingest/upload` | Upload docs to ChromaDB |
@@ -266,11 +279,16 @@ curl -s -X POST http://localhost:9000/api/tool \
      -H 'Content-Type: application/json' \
      -d '{"name":"get_node_health","args":{}}'
 
-# List all tools
-curl -s http://localhost:9000/api/tools
+# Upload a prose doc
+curl -s -X POST http://localhost:9000/api/ingest/upload \
+     -F 'files=@runbook.md'
 
-# System metrics
-curl -s http://localhost:9000/api/system
+# Upload an Excel knowledge base
+curl -s -X POST http://localhost:9000/api/ingest/upload \
+     -F 'files=@ecs_knowledge_base.xlsx'
+
+# LanceDB stats
+curl -s http://localhost:9000/api/rag/stats
 ```
 
 > ⚠️ `/api/ask` is a blocking request. For long-running CPU queries, use `/chat/stream` instead to avoid nginx proxy read timeout.
