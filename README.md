@@ -16,7 +16,7 @@ This ECS AI Ops Chatbot is powered by:
 
 - 🤖 **Self-hosted local LLM** — Qwen3-8B running entirely on-premise via HuggingFace Transformers, with no external API calls or internet dependency. Qwen3-8B is chosen because it strikes the right balance; lightweight enough to run on modest hardware, yet capable enough to avoid the hallucination issues common in smaller models. It also has strong native tool-calling capability, which is essential for reliably driving the agentic loop.
 - 🔁 **LangGraph agentic loop** — a ReAct agent that autonomously selects the right Kubernetes tools, executes them, observes the results, and chains further calls when needed before synthesising a final answer
-- 📚 **ChromaDB RAG** — cross-references live cluster data against your own runbooks, known-issue docs, and SOPs ingested locally into a ChromaDB vector store
+- 📚 **LanceDB RAG** — cross-references live cluster data against your own runbooks, known-issue docs, and SOPs ingested locally into a LanceDB vector store
 
 <img src="web/static/ecs-ai-arch.gif" width="600" />
 
@@ -250,7 +250,7 @@ Interactive docs: **[/docs](http://localhost:9000/docs)** (Swagger) · **[/redoc
 | GET | `/api/rag/stats` | LanceDB doc chunks and Excel row statistics |
 | GET | `/api/system` | Live CPU / RAM / GPU metrics |
 | POST | `/api/kubeconfig` | Apply a new kubeconfig |
-| POST | `/api/ingest/upload` | Upload docs to ChromaDB |
+| POST | `/api/ingest/upload` | Upload docs to LanceDB |
 | POST | `/api/reload-prompt` | Hot-reload system_prompt.txt |
 | GET | `/api/prompt` | Read current system prompt |
 | PUT | `/api/prompt` | Update system prompt |
