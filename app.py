@@ -110,10 +110,6 @@ ENABLE_FALLBACK_ROUTING: bool = True
 # selection calls always use 256 (just a small <tool_call> JSON block).
 _MAX_NEW_TOKENS: int = int(os.getenv("MAX_NEW_TOKENS", "4096"))
 
-# Runtime-adjustable request timeout (seconds).  Exposed via GET/POST /api/config
-# and the Settings → LLM Input/Output tab.
-_LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "0")) or (900 if NUM_GPU == 0 else 300)
-
 # Request-scoped flag — True when the user has 'Show Secret Values' enabled in Settings.
 # Set per-request in chat_stream; read by agent/routing.py via get_decode_secrets().
 _decode_secrets_ctx: ContextVar[bool] = ContextVar("decode_secrets", default=False)
@@ -144,6 +140,10 @@ def _detect_gpu_count() -> int:
     return 0
 
 NUM_GPU = _detect_gpu_count()
+
+# Runtime-adjustable request timeout (seconds).  Exposed via GET/POST /api/config
+# and the Settings → LLM Input/Output tab.  Defaults to 900s on CPU, 300s on GPU.
+_LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "0")) or (900 if NUM_GPU == 0 else 300)
 
 
 _LOG_DIR = _HERE / "logs"
