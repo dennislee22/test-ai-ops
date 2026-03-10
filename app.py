@@ -2274,7 +2274,7 @@ if __name__ == "__main__":
         init_db()
         results = ingest_directory(_ARGS.ingest, force=_ARGS.force)
         total   = sum(r.get("chunks", 0) for r in results)
-        print(f"\n✅  {len(results)} file(s)  |  {total} total chunks stored in ChromaDB\n")
+        print(f"\n✅  {len(results)} file(s)  |  {total} total chunks stored in LanceDB\n")
         for r in results:
             icon = ("✓" if r["status"] == "ingested" else "—" if r["status"] == "skipped" else "✗")
             print(f"  {icon}  {r['file']:<42} {r['status']:<10} ({r['chunks']} chunks)")
