@@ -4,11 +4,31 @@ An air-gapped Kubernetes operations chatbot for Cloudera ECS, powered by a local
 
 ---
 
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Project Structure](#project-structure)
+- [Stack](#stack)
+- [K8s Tools](#k8s-tools)
+- [Example Queries](#example-queries)
+- [Quick Start](#quick-start)
+- [Customising the System Prompt](#customising-the-system-prompt)
+- [REST API](#rest-api)
+- [Runtime Tuning](#runtime-tuning)
+- [Hardware Sizing](#hardware-sizing)
+- [Security Notes](#security-notes)
+
+---
+
+## Architecture
+
+![ECS AI Ops Architecture](web/static/ecs-ai-arch.gif)
+
+---
 
 ## Project Structure
 
 ```
-k8s-ai-ops-agentic/
 ├── app.py                    # FastAPI server + LangGraph agent
 │
 ├── config/
@@ -27,7 +47,7 @@ k8s-ai-ops-agentic/
 │       ├── k8s-logo.svg
 │       ├── rancher-logo.svg
 │       ├── chatbot-icon.svg
-│       └── ecs-ai-ops.gif
+│       └── ecs-ai-arch.gif
 │
 ├── docs/                     # Ingested into ChromaDB for RAG
 ├── requirements.txt
@@ -46,7 +66,7 @@ k8s-ai-ops-agentic/
 | Agent | LangGraph | ReAct loop: LLM selects tools → executes → observes → repeats or answers |
 | Embeddings | SentenceTransformers | `nomic-ai/nomic-embed-text-v1.5` (local) |
 | Vector DB | ChromaDB (embedded) | Zero external dependencies |
-| K8s tools | kubernetes Python client | Typed, read-only tools — no kubectl binary needed |
+| K8s tools | kubernetes Python client | 24 typed, read-only tools — no kubectl binary needed |
 | API | FastAPI | REST + SSE streaming |
 | Frontend | Single-file HTML/JS | Served by FastAPI at `/` |
 
@@ -64,23 +84,21 @@ k8s-ai-ops-agentic/
 | Networking | `get_service_status`, `get_ingress_status` |
 | Config | `get_configmap_list`, `get_secrets`, `get_resource_quotas`, `get_limit_ranges` |
 | RBAC | `get_service_accounts`, `get_cluster_role_bindings` |
-| Namespaces | `get_namespace_status` |
-| kubectl exec | `kubectl_exec` — parses kubectl-style commands via K8s Python API (no binary needed) |
+| Namespaces | `get_namespace_status`, `get_namespace_resource_summary` |
+| Database | `exec_db_query` — read-only SQL inside DB pods (MySQL/MariaDB/PostgreSQL) |
 | RAG | `rag_search` — searches ingested runbooks and known-issues docs |
 
 ---
 
 ## Example Queries
 
-- Is the Vault doing ok?
-- Is my cluster having any issues?
-- Which pod is OOMKilled recently and what could be the cause?
-- Which node has GPUs available and in use?
-- What is the resource limit for cdp/dp-cadence-worker pod?
-- List all PVCs not bound across all namespaces
-- Show warning events in cdp namespace
-- Which secret in cdp has user credentials?
-- How many nodes are in the cluster?
+- is the vault pod doing ok?
+- which namespace has the least pods?
+- list all namespaces with total pods
+- calculate CPU requests for all pods in longhorn-system namespace
+- which node has a GPU available and in use?
+- get tables in db-0 of cmlwb1 namespace
+- explain how you access the database of a pod to get the table names, don't run it, just explain
 
 ---
 
@@ -89,6 +107,15 @@ k8s-ai-ops-agentic/
 ### Prerequisites
 
 - **Python 3.12** is required.
+- Download the LLM and embedding models before starting (air-gapped environment):
+
+```bash
+# Qwen3-8B
+git clone https://huggingface.co/Qwen/Qwen3-8B /models/Qwen3-8B
+
+# SentenceTransformers embedding model
+git clone https://huggingface.co/nomic-ai/nomic-embed-text-v1.5 /models/nomic-embed-text-v1.5
+```
 
 ### 1. Install dependencies
 
@@ -108,8 +135,8 @@ Create an `env` file next to `app.py`:
 ```ini
 KUBECONFIG_PATH=~/kubeconfig
 
-LLM_MODEL=Qwen/Qwen3-8B
-EMBED_MODEL=nomic-ai/nomic-embed-text-v1.5
+LLM_MODEL=/models/Qwen3-8B
+EMBED_MODEL=/models/nomic-embed-text-v1.5
 
 NUM_GPU=1           # 0 = CPU only
 LOG_LEVEL=DEBUG     # DEBUG shows full agentic loop: tool selection, raw LLM output, multi-hop decisions
@@ -158,8 +185,40 @@ curl -s -X POST http://localhost:9000/api/reload-prompt
 
 ## REST API
 
+Interactive docs: **[/docs](http://localhost:9000/docs)** (Swagger) · **[/redoc](http://localhost:9000/redoc)**
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/info` | Model, GPU, cluster status |
+| POST | `/api/ask` | Ask the AI (blocking) |
+| POST | `/chat/stream` | Ask the AI (SSE streaming) |
+| POST | `/api/tool` | Call a K8s tool directly |
+| GET | `/api/tools` | List all registered tools and their signatures |
+| GET | `/api/pods` | Pod health summary (optional: `?ns=cdp`) |
+| GET | `/api/pods/raw` | kubectl-style pod table (optional: `?ns=cdp`) |
+| GET | `/api/nodes` | Node health and GPU summary |
+| GET | `/api/events` | Cluster events (optional: `?ns=X&warn=1`) |
+| GET | `/api/deployments` | Deployment status (optional: `?ns=X`) |
+| GET | `/api/pvcs` | PVC / storage status (optional: `?ns=X`) |
+| GET | `/api/namespaces` | All namespaces and their status |
+| GET | `/api/rag/stats` | ChromaDB document chunk statistics |
+| GET | `/api/system` | Live CPU / RAM / GPU metrics |
+| POST | `/api/kubeconfig` | Apply a new kubeconfig |
+| POST | `/api/ingest/upload` | Upload docs to ChromaDB |
+| POST | `/api/reload-prompt` | Hot-reload system_prompt.txt |
+| GET | `/api/prompt` | Read current system prompt |
+| PUT | `/api/prompt` | Update system prompt |
+| GET | `/api/config` | Read runtime config |
+| POST | `/api/config` | Update runtime config |
+
 ```bash
-# Ask the AI
+# Ask the AI (SSE streaming — recommended, avoids proxy timeout)
+curl -s --no-buffer -X POST http://localhost:9000/chat/stream \
+     -H 'Content-Type: application/json' \
+     -H 'Accept: text/event-stream' \
+     -d '{"message":"is the vault pod doing ok?","history":[],"decode_secrets":false}'
+
+# Ask the AI (blocking)
 curl -s -X POST http://localhost:9000/api/ask \
      -H 'Content-Type: application/json' \
      -d '{"q":"are there any failing pods?"}'
@@ -176,7 +235,7 @@ curl -s http://localhost:9000/api/tools
 curl -s http://localhost:9000/api/system
 ```
 
-Interactive docs: **[/docs](http://localhost:9000/docs)** (Swagger) · **[/redoc](http://localhost:9000/redoc)**
+> ⚠️ `/api/ask` is a blocking request. For long-running CPU queries, use `/chat/stream` instead to avoid nginx proxy read timeout.
 
 ---
 
@@ -186,7 +245,7 @@ Interactive docs: **[/docs](http://localhost:9000/docs)** (Swagger) · **[/redoc
 |---|---|---|
 | `KUBECTL_MAX_CHARS` | Characters of cluster data the LLM reads per tool call | 20000 |
 | `MAX_NEW_TOKENS` | Tokens the LLM writes per response (~4 chars/token) | 4096 |
-| `LLM_TIMEOUT` | Hard timeout per request (seconds) | 300 |
+| `LLM_TIMEOUT` | Hard timeout per request (seconds) | 300s GPU / 900s CPU |
 
 Adjust at runtime via ⚙ Settings → LLM Input/Output, or via API:
 ```bash
@@ -201,7 +260,7 @@ curl -s -X POST http://localhost:9000/api/config \
 
 | Inference | RAM | VRAM |
 |---|---|---|
-| CPU only, min. 28 cores | min. 48 GB | — |
+| CPU only, min. 28 cores | min. 64 GB | — |
 | GPU, **Qwen3-8B** (recommended) | 32 GB | ~20 GB |
 
 > ⚠️ CPU inference takes **several minutes** to generate a response per query. A GPU is strongly recommended for practical use.
