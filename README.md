@@ -272,10 +272,12 @@ curl -s -X POST http://localhost:9000/api/config \
 
 ## Hardware Sizing
 
-| Setup | RAM | VRAM | Speed |
-|---|---|---|---|
-| CPU only, 8-core | 32 GB | — | ~6–10 tok/s |
-| GPU, **Qwen3-8B** (tested and recommended for its tool invocation capability) | 32 GB | ~20 GB | ~30–60 tok/s |
+| Inference | RAM | VRAM |
+|---|---|---|
+| CPU only, min. 28 cores | min. 48 GB | — |
+| GPU, **Qwen3-8B** (recommended) | 32 GB | ~20 GB |
+
+> ⚠️ CPU inference takes **several minutes** to generate a response per query. A GPU is strongly recommended for practical use.
 
 Qwen3-8B in bfloat16 uses ~16–20 GB VRAM. In CPU-only mode the model loads into system RAM.
 
