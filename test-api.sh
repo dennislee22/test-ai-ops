@@ -39,7 +39,7 @@ sep
 for i in "${!QUESTIONS[@]}"; do
     Q="${QUESTIONS[$i]}"
     IDX=$((i + 1))
-    printf "\n[%2d/%d] %s\n" "$IDX" "$TOTAL" "$Q"
+    printf "\n[%2d/%d] [%s] %s\n" "$IDX" "$TOTAL" "$(date '+%d-%b-%Y %H:%M:%S')" "$Q"
     printf "       Sending… [%s]\n" "$(date '+%H:%M:%S')"
     START=$(date +%s)
 
