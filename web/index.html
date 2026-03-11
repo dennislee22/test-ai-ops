@@ -211,7 +211,7 @@ button{cursor:pointer;font-family:inherit}
 }
 .mtab{
   padding:9px 16px;font-size:12px;font-weight:600;
-  font-family:'IBM Plex Mono',monospace;color:var(--textMain);
+  font-family:'IBM Plex Mono',monospace;color:#f1f5f9;
   border:none;background:none;cursor:pointer;
   border-bottom:2px solid transparent;margin-bottom:-1px;
   transition:color .15s,border-color .15s;
@@ -650,7 +650,7 @@ button{cursor:pointer;font-family:inherit}
       <div id="main-tabs">
         <button class="mtab active" data-pane="chat-pane"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:4px"><path d="M18 3a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-4.724l-4.762 2.857a1 1 0 0 1 -1.508 -.743l-.006 -.114v-2h-1a4 4 0 0 1 -3.995 -3.8l-.005 -.2v-8a4 4 0 0 1 4 -4zm-2.8 9.286a1 1 0 0 0 -1.414 .014a2.5 2.5 0 0 1 -3.572 0a1 1 0 0 0 -1.428 1.4a4.5 4.5 0 0 0 6.428 0a1 1 0 0 0 -.014 -1.414m-5.69 -4.286h-.01a1 1 0 1 0 0 2h.01a1 1 0 0 0 0 -2m5 0h-.01a1 1 0 0 0 0 2h.01a1 1 0 0 0 0 -2" /></svg> ECS AI Ops Chatbot</button>
         <button class="mtab" data-pane="kb-bot-pane">&#128218; ECS Knowledge Bot</button>
-        <button class="mtab" data-pane="settings-pane"><span style="font-size:16px;vertical-align:-1px">&#9881;</span> Settings</button>
+        <button class="mtab" data-pane="settings-pane"><span style="font-size:18px;vertical-align:-2px">&#9881;</span> Settings</button>
         <button class="mtab" data-pane="readme-pane">&#128214; README</button>
         <button class="mtab" data-pane="guidelines-pane">&#128203; Prompt Guidelines for ECS AI Ops Chatbot</button>
       </div>
@@ -703,7 +703,7 @@ button{cursor:pointer;font-family:inherit}
       <!-- ── README pane ───────────────────────────────────────────────── -->
       <div id="readme-pane">
 
-        <h1><img src="/static/chatbot-icon.svg" width="26" height="26" style="vertical-align:middle;margin-right:6px;filter:brightness(0) invert(1)"><img src="/static/k8s-logo.svg" width="24" height="24" style="vertical-align:middle;margin-right:8px">ECS AI Ops Chatbot</h1>
+        <h1><img src="/static/chatbot-icon.svg" width="26" height="26" style="vertical-align:middle;margin-right:6px;filter:brightness(0) invert(1)"><img src="/static/k8s-logo.svg" width="24" height="24" style="vertical-align:middle;margin-right:8px">Cloudera ECS AI Ops</h1>
         <p>An air-gapped Kubernetes operations assistant for Cloudera ECS, powered by a local LLM (Qwen3-8B on GPU / Qwen3-8B-GGUF Q4_K_M on CPU), LangGraph agentic loop, and LanceDB RAG.</p>
 
         <div class="tip">&#128161; <strong>Quick start:</strong> Type a question in the <strong>ECS AI Ops Chatbot</strong> tab — e.g. <em>"is my cluster having any issues?"</em> — and press <strong>Enter</strong>.</div>
@@ -711,14 +711,14 @@ button{cursor:pointer;font-family:inherit}
         <div class="warn">&#9888; This chatbot is <strong>read-only by default</strong> — it will never restart, delete, or modify cluster resources. Validated on Qwen3-8B running on GPU (HuggingFace Transformers) and Qwen3-8B-GGUF Q4_K_M running on CPU (llama-cpp-python). Using other self-hosted models may produce different or unexpected responses.</div>
 
         <!-- ── ECS AI Ops Chatbot ──────────────────────────────────────── -->
-        <h2 style="font-size:15px;font-family:'IBM Plex Sans',sans-serif;letter-spacing:normal"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:5px"><path d="M18 3a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-4.724l-4.762 2.857a1 1 0 0 1 -1.508 -.743l-.006 -.114v-2h-1a4 4 0 0 1 -3.995 -3.8l-.005 -.2v-8a4 4 0 0 1 4 -4zm-2.8 9.286a1 1 0 0 0 -1.414 .014a2.5 2.5 0 0 1 -3.572 0a1 1 0 0 0 -1.428 1.4a4.5 4.5 0 0 0 6.428 0a1 1 0 0 0 -.014 -1.414m-5.69 -4.286h-.01a1 1 0 1 0 0 2h.01a1 1 0 0 0 0 -2m5 0h-.01a1 1 0 0 0 0 2h.01a1 1 0 0 0 0 -2" /></svg> ECS AI Ops Chatbot</h2>
+        <h2 style="font-size:15px;font-family:'IBM Plex Sans',sans-serif;letter-spacing:normal"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:5px"><path d="M18 3a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-4.724l-4.762 2.857a1 1 0 0 1 -1.508 -.743l-.006 -.114v-2h-1a4 4 0 0 1 -3.995 -3.8l-.005 -.2v-8a4 4 0 0 1 4 -4zm-2.8 9.286a1 1 0 0 0 -1.414 .014a2.5 2.5 0 0 1 -3.572 0a1 1 0 0 0 -1.428 1.4a4.5 4.5 0 0 0 6.428 0a1 1 0 0 0 -.014 -1.414m-5.69 -4.286h-.01a1 1 0 1 0 0 2h.01a1 1 0 0 0 0 -2m5 0h-.01a1 1 0 0 0 0 2h.01a1 1 0 0 0 0 -2" /></svg> Cloudera ECS AI Ops</h2>
         <p>Each query runs through an <strong>agentic ReAct loop</strong> driven by the LLM. The LLM reads a Tool Selection Guide in its system prompt, picks the right tools, observes the results, and decides whether to chain further tool calls or synthesise a final answer. Each query is treated independently — there is no conversation history.</p>
 
         <!-- ── ECS Knowledge Bot ──────────────────────────────────────── -->
         <h2 style="font-size:15px;font-family:'IBM Plex Sans',sans-serif;letter-spacing:normal">&#128218; ECS Knowledge Bot</h2>
         <p>A dedicated RAG-only interface that queries your ingested knowledge base directly — no LLM inference, no live cluster calls, instant results. Best used for looking up runbooks, known issues, dos &amp; don'ts, prerequisites, and past learnings.</p>
         <table>
-          <tr><th></th><th>ECS AI Ops Chatbot</th><th>ECS Knowledge Bot</th></tr>
+          <tr><th></th><th>Cloudera ECS AI Ops</th><th>ECS Knowledge Bot</th></tr>
           <tr><td>Live cluster data</td><td>✅ Yes — kubectl, Longhorn, events</td><td>❌ No</td></tr>
           <tr><td>Knowledge base (RAG)</td><td>✅ Yes — alongside live data</td><td>✅ Yes — only source</td></tr>
           <tr><td>LLM synthesis</td><td>✅ Yes — ReAct agent loop</td><td>❌ No — raw retrieval</td></tr>
