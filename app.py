@@ -2357,6 +2357,115 @@ async def api_rag_query(query: str, top_k: int = 50, sheet: Optional[str] = None
     except Exception as e:
         return _JSONResponse(status_code=500, content={"error": str(e)})
 
+
+class KbAskRequest(BaseModel):
+    q: str
+    top_k: int = 50
+    sheet: Optional[str] = None
+
+@api.post("/kb/ask", summary="ECS Knowledge Bot — RAG retrieval + LLM synthesis, no cluster tools")
+async def api_kb_ask(req: KbAskRequest):
+    """
+    Retrieves relevant context from the LanceDB knowledge base, then asks the LLM
+    to synthesise a focused answer. No cluster tools are called.
+
+    curl -s -X POST http://localhost:8000/api/kb/ask \\
+         -H 'Content-Type: application/json' \\
+         -d '{"q":"list all longhorn known issues","top_k":50}'
+    """
+    if not req.q.strip():
+        return _JSONResponse(status_code=400, content={"error": "q must not be empty"})
+
+    top_k = max(10, min(req.top_k, 500))
+    logger.info(f"[API] POST /api/kb/ask  q={req.q!r:.120}  top_k={top_k}")
+
+    KB_SYSTEM_PROMPT = (
+        "You are the ECS Knowledge Bot, a read-only assistant that answers questions "
+        "strictly from the provided knowledge base context. "
+        "The context contains runbooks, known issues, dos and don'ts, prerequisites, and past learnings "
+        "for a Cloudera ECS Kubernetes cluster.\n\n"
+        "Rules:\n"
+        "- Answer only from the context provided. Do not use general knowledge.\n"
+        "- If the context contains no relevant information, say so clearly.\n"
+        "- For Known Issues, present each issue as a structured block:\n"
+        "  **[Issue ID] Summary** | Severity | Status\n"
+        "  - Symptom   : ...\n"
+        "  - Root Cause: ...\n"
+        "  - Fix       : ...\n"
+        "  - Jira      : ...\n"
+        "- Flag UNRESOLVED issues with ⚠️.\n"
+        "- Be concise. Do not repeat the question. Do not add preamble.\n"
+        "- Never suggest live cluster operations — this bot has no cluster access."
+    )
+
+    try:
+        context = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: rag_retrieve(query=req.q, top_k=top_k, sheet=req.sheet)
+        )
+        if not context.strip():
+            return {"answer": "No matching entries found in the knowledge base for this query.",
+                    "query": req.q, "top_k": top_k}
+
+        user_msg = f"Context from knowledge base:\n\n{context}\n\nQuestion: {req.q}"
+
+        # ── GGUF path ──────────────────────────────────────────────────────────
+        if tokenizer is None:
+            resp = await asyncio.get_event_loop().run_in_executor(None, lambda: model.create_chat_completion(
+                messages=[
+                    {"role": "system", "content": KB_SYSTEM_PROMPT},
+                    {"role": "user",   "content": user_msg},
+                ],
+                max_tokens=max(512, _MAX_NEW_TOKENS),
+                temperature=0.3,
+                top_p=0.9,
+            ))
+            answer = resp["choices"][0]["message"].get("content", "").strip()
+
+        # ── HuggingFace Transformers path ──────────────────────────────────────
+        else:
+            import torch
+            chat_msgs = [
+                {"role": "system", "content": KB_SYSTEM_PROMPT},
+                {"role": "user",   "content": user_msg},
+            ]
+            template_kwargs = {"add_generation_prompt": True}
+            if _is_qwen3:
+                template_kwargs["enable_thinking"] = False
+
+            encoded = tokenizer.apply_chat_template(
+                chat_msgs, tokenize=True, return_tensors="pt", **template_kwargs
+            )
+            input_ids = (encoded["input_ids"] if hasattr(encoded, "__getitem__") and not hasattr(encoded, "shape")
+                         else encoded).to(model.device)
+
+            _max_new = max(512, _MAX_NEW_TOKENS)
+            model_max = getattr(tokenizer, "model_max_length", None) or 32768
+            if model_max > 131072:
+                model_max = 32768
+            budget = model_max - _max_new - 64
+            if input_ids.shape[-1] > budget:
+                keep_head = budget // 2
+                keep_tail = budget - keep_head
+                input_ids = torch.cat([input_ids[:, :keep_head], input_ids[:, -keep_tail:]], dim=-1)
+
+            with torch.no_grad():
+                out = model.generate(
+                    input_ids,
+                    max_new_tokens=_max_new,
+                    do_sample=True,
+                    temperature=0.3,
+                    top_p=0.9,
+                    pad_token_id=tokenizer.eos_token_id,
+                )
+            new_tokens = out[0][input_ids.shape[-1]:]
+            answer = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+
+        return {"answer": answer, "query": req.q, "top_k": top_k}
+
+    except Exception as e:
+        logger.error(f"[API/kb/ask] {e}", exc_info=True)
+        return _JSONResponse(status_code=500, content={"error": str(e)})
+
 @api.get("/system", summary="Live CPU / RAM / GPU utilisation metrics")
 async def api_system():
     """

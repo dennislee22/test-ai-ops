@@ -290,12 +290,12 @@ button{cursor:pointer;font-family:inherit}
 .kb-sf-btn:hover{border-color:var(--accent);color:var(--accent2)}
 .kb-sf-btn.active{background:var(--accent)22;border-color:var(--accent);color:var(--accent2)}
 .kb-answer-block{
-  background:var(--inputBg);border:1px solid var(--accent)66;border-radius:10px;
+  background:var(--panelBg);border:2px solid var(--accent);border-radius:10px;
   padding:18px 20px;animation:fadeUp .25s ease;
 }
 .kb-answer-q{
-  font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);
-  font-weight:600;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--accent)33;
+  font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent);
+  font-weight:600;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--panelBorder);
 }
 .kb-answer-body{font-size:13px;line-height:1.75;color:var(--textMain);white-space:pre-wrap;word-break:break-word}
 .kb-answer-body table{border-collapse:collapse;width:100%;margin:10px 0;font-size:12px;font-family:'IBM Plex Mono',monospace}
@@ -304,10 +304,10 @@ button{cursor:pointer;font-family:inherit}
 .kb-answer-body tr:nth-child(even) td{background:var(--headerBg)55}
 .kb-copy-btn{
   margin-top:12px;font-size:11px;font-family:'IBM Plex Mono',monospace;
-  background:none;border:1px solid var(--accent)66;border-radius:4px;
-  color:var(--accent2);padding:4px 12px;transition:all .15s;cursor:pointer;
+  background:none;border:1px solid var(--accent);border-radius:4px;
+  color:var(--accent);padding:4px 12px;transition:all .15s;cursor:pointer;
 }
-.kb-copy-btn:hover{border-color:var(--accent);background:var(--accent)22;color:var(--accent2)}
+.kb-copy-btn:hover{background:var(--accent);color:var(--bg)}
 .kb-spinner{display:flex;align-items:center;gap:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);padding:12px 0}
 .kb-spinner span{animation:dotPulse 1.4s ease-in-out infinite}
 .kb-spinner span:nth-child(2){animation-delay:.2s}
@@ -716,13 +716,13 @@ button{cursor:pointer;font-family:inherit}
 
         <!-- ── ECS Knowledge Bot ──────────────────────────────────────── -->
         <h2 style="font-size:15px;font-family:'IBM Plex Sans',sans-serif;letter-spacing:normal"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="18" height="18" style="vertical-align:-4px;margin-right:5px"><path d="M 60 93 C 60 55, 140 55, 140 93 Z" fill="currentColor"/><polygon points="100,25 170,55 100,75 30,55" fill="currentColor"/><line x1="45" y1="59" x2="45" y2="95" stroke="currentColor" stroke-width="3"/><circle cx="45" cy="95" r="4" fill="currentColor"/><path d="M 40 115 L 45 95 L 50 115 Z" fill="currentColor"/><path d="M 32 125 C 12 125, 12 155, 32 155 Z" fill="currentColor" opacity="0.6"/><path d="M 168 125 C 188 125, 188 155, 168 155 Z" fill="currentColor" opacity="0.6"/><rect x="40" y="105" width="120" height="70" rx="35" fill="none" stroke="currentColor" stroke-width="16"/><circle cx="75" cy="140" r="9" fill="currentColor"/><circle cx="125" cy="140" r="9" fill="currentColor"/></svg> ECS Knowledge Bot</h2>
-        <p>A dedicated RAG-only interface that queries your ingested knowledge base directly — no LLM inference, no live cluster calls, instant results. Best used for looking up runbooks, known issues, dos &amp; don'ts, prerequisites, and past learnings.</p>
+        <p>A knowledge base interface that retrieves relevant context from your ingested documents and synthesises a focused answer using the LLM — no live cluster calls. Best used for looking up runbooks, known issues, dos &amp; don'ts, prerequisites, and past learnings.</p>
         <table>
           <tr><th></th><th>ECS AI Ops Chatbot</th><th>ECS Knowledge Bot</th></tr>
           <tr><td>Live cluster data</td><td>✅ Yes — kubectl, Longhorn, events</td><td>❌ No</td></tr>
-          <tr><td>Knowledge base (RAG)</td><td>✅ Yes — alongside live data</td><td>✅ Yes — only source</td></tr>
-          <tr><td>LLM synthesis</td><td>✅ Yes — ReAct agent loop</td><td>❌ No — raw retrieval</td></tr>
-          <tr><td>Response speed</td><td>Slower (LLM inference)</td><td>Instant</td></tr>
+          <tr><td>Knowledge base (RAG)</td><td>✅ Yes — alongside live data</td><td>✅ Yes — primary source</td></tr>
+          <tr><td>LLM synthesis</td><td>✅ Yes — ReAct agent loop</td><td>✅ Yes — KB-focused prompt</td></tr>
+          <tr><td>Response speed</td><td>Slower (agent + tools)</td><td>Faster (RAG + direct synthesis)</td></tr>
           <tr><td>Best for</td><td>Operational queries, health checks, diagnostics</td><td>Reference lookups, runbooks, SOPs</td></tr>
         </table>
         <p>Adjust the <strong>Max results</strong> slider if answers appear incomplete — increasing it retrieves more knowledge base entries per query.</p>
@@ -1265,34 +1265,22 @@ document.querySelectorAll('.mtab').forEach(btn => {
 
     const topK = parseInt(topkSlider.value, 10) || 50;
 
-    // Intercept conversational / identity queries — don't hit the vector store
-    const ql = q.toLowerCase().replace(/[?!.,]/g, '').trim();
-    const CONVERSATIONAL = [
-      'who are you', 'what are you', 'what is this', 'what can you do',
-      'help', 'hello', 'hi', 'hey', 'how are you', 'what do you do',
-      'tell me about yourself', 'introduce yourself'
-    ];
-    if(CONVERSATIONAL.some(p => ql === p || ql.startsWith(p))){
-      renderAnswer(q, topK,
-        'I am the ECS Knowledge Bot — a RAG-only interface that searches your ingested knowledge base (runbooks, known issues, dos & don\'ts, prerequisites, and past learnings).\n\nI do not use an LLM or access live cluster data. Ask me about documented issues, fixes, or operational guidance from your uploaded documents.');
-      sendBtn.disabled = false;
-      input.focus();
-      return;
-    }
-
     // Spinner
     const spinner = document.createElement('div');
     spinner.className = 'kb-spinner';
-    spinner.innerHTML = '&#128218; Searching knowledge base <span>.</span><span>.</span><span>.</span>';
+    spinner.innerHTML = '&#128218; Searching knowledge base and synthesising answer <span>.</span><span>.</span><span>.</span>';
     body.appendChild(spinner);
     body.scrollTop = body.scrollHeight;
 
     try {
-      const params = new URLSearchParams({ query: q, top_k: topK });
-      const res  = await fetch('/api/rag/query?' + params.toString());
+      const res  = await fetch('/api/kb/ask', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ q, top_k: topK })
+      });
       const data = await res.json();
       spinner.remove();
-      renderAnswer(q, topK, data.answer || data.context || '(No results found)');
+      renderAnswer(q, topK, data.answer || '(No results found)');
     } catch(err) {
       spinner.remove();
       renderAnswer(q, topK, '⚠️ Error: ' + err.message);
