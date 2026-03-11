@@ -703,34 +703,50 @@ button{cursor:pointer;font-family:inherit}
       <!-- ── README pane ───────────────────────────────────────────────── -->
       <div id="readme-pane">
 
-        <h1><img src="/static/chatbot-icon.svg" width="26" height="26" style="vertical-align:middle;margin-right:6px;filter:brightness(0) invert(1)"><img src="/static/k8s-logo.svg" width="24" height="24" style="vertical-align:middle;margin-right:8px">Cloudera ECS AI Ops Chatbot</h1>
-        <p>An air-gapped Kubernetes operations assistant for Cloudera ECS, powered by a local LLM (Qwen3-8B), LangGraph agentic loop, and ChromaDB RAG.</p>
+        <h1><img src="/static/chatbot-icon.svg" width="26" height="26" style="vertical-align:middle;margin-right:6px;filter:brightness(0) invert(1)"><img src="/static/k8s-logo.svg" width="24" height="24" style="vertical-align:middle;margin-right:8px">ECS AI Ops Chatbot</h1>
+        <p>An air-gapped Kubernetes operations assistant for Cloudera ECS, powered by a local LLM (Qwen3-8B on GPU / Qwen3-8B-GGUF Q4_K_M on CPU), LangGraph agentic loop, and LanceDB RAG.</p>
 
-        <div class="tip">&#128161; <strong>Quick start:</strong> Type a question in the <strong>ECS AI Ops</strong> tab — e.g. <em>"is my cluster having any issues?"</em> — and press <strong>Enter</strong>.</div>
+        <div class="tip">&#128161; <strong>Quick start:</strong> Type a question in the <strong>ECS AI Ops Chatbot</strong> tab — e.g. <em>"is my cluster having any issues?"</em> — and press <strong>Enter</strong>.</div>
 
-        <div class="warn">&#9888; This chatbot has been tested with Qwen3-8B, which performs excellently with tool-calling and is <strong>read-only by default</strong> — it will never restart, delete, or modify cluster resources. Using other self-hosted models may produce different or unexpected responses.</div>
+        <div class="warn">&#9888; This chatbot is <strong>read-only by default</strong> — it will never restart, delete, or modify cluster resources. Tested with Qwen3-8B. Using other self-hosted models may produce different or unexpected responses.</div>
 
-        <!-- ── How it works ───────────────────────────────────────────── -->
-        <h2>How it works</h2>
-        <p>Each query runs through an <strong>agentic ReAct loop</strong> driven by the LLM — not by hardcoded rules. The LLM reads a Tool Selection Guide in its system prompt, picks the right tools, observes the results, and decides whether to call more tools or synthesise a final answer.</p>
+        <!-- ── ECS AI Ops Chatbot ──────────────────────────────────────── -->
+        <h2 style="font-size:15px;font-family:'IBM Plex Sans',sans-serif;letter-spacing:normal">ECS AI Ops Chatbot</h2>
+        <p>Each query runs through an <strong>agentic ReAct loop</strong> driven by the LLM. The LLM reads a Tool Selection Guide in its system prompt, picks the right tools, observes the results, and decides whether to chain further tool calls or synthesise a final answer. Each query is treated independently — there is no conversation history.</p>
+        <p>Example queries:</p>
+        <ul>
+          <li>is my cluster having any issues?</li>
+          <li>list all pods in cdp namespace</li>
+          <li>what is the cpu and memory request for cdp-embedded-db pod in cdp namespace?</li>
+          <li>calculate CPU requests for all pods in longhorn-system namespace</li>
+          <li>list all RWO pvc in cdp namespace</li>
+          <li>which node has a GPU available and in use?</li>
+          <li>show all warning events in cdp namespace</li>
+        </ul>
 
         <!-- ── ECS Knowledge Bot ──────────────────────────────────────── -->
-        <h2>&#128218; ECS Knowledge Bot</h2>
-        <p>The <strong>ECS Knowledge Bot</strong> tab is a dedicated RAG-only interface — it queries your ingested knowledge base directly without involving the LLM or making any live cluster calls. It is best used for looking up runbooks, known issues, dos &amp; don'ts, prerequisites, and past learnings from your uploaded documents.</p>
-        <p>Key differences from the ECS AI Ops Chatbot:</p>
+        <h2 style="font-size:15px;font-family:'IBM Plex Sans',sans-serif;letter-spacing:normal">&#128218; ECS Knowledge Bot</h2>
+        <p>A dedicated RAG-only interface that queries your ingested knowledge base directly — no LLM inference, no live cluster calls, instant results. Best used for looking up runbooks, known issues, dos &amp; don'ts, prerequisites, and past learnings.</p>
         <table>
           <tr><th></th><th>ECS AI Ops Chatbot</th><th>ECS Knowledge Bot</th></tr>
-          <tr><td>Live cluster data</td><td>✅ Yes — calls kubectl, Longhorn, events tools</td><td>❌ No</td></tr>
-          <tr><td>Knowledge base (RAG)</td><td>✅ Yes — consulted alongside live data</td><td>✅ Yes — only source</td></tr>
+          <tr><td>Live cluster data</td><td>✅ Yes — kubectl, Longhorn, events</td><td>❌ No</td></tr>
+          <tr><td>Knowledge base (RAG)</td><td>✅ Yes — alongside live data</td><td>✅ Yes — only source</td></tr>
           <tr><td>LLM synthesis</td><td>✅ Yes — ReAct agent loop</td><td>❌ No — raw retrieval</td></tr>
           <tr><td>Response speed</td><td>Slower (LLM inference)</td><td>Instant</td></tr>
           <tr><td>Best for</td><td>Operational queries, health checks, diagnostics</td><td>Reference lookups, runbooks, SOPs</td></tr>
         </table>
-        <p>Use the <strong>Filter</strong> pills to restrict results to a specific sheet (Known Issues, Dos &amp; Don'ts, Prerequisites, Past Learnings), and adjust the <strong>Max results</strong> slider if answers appear incomplete — increasing it retrieves more knowledge base entries per query.</p>
+        <p>Adjust the <strong>Max results</strong> slider if answers appear incomplete — increasing it retrieves more knowledge base entries per query.</p>
+        <p>Example queries:</p>
+        <ul>
+          <li>what are the known issues with longhorn storage?</li>
+          <li>what are the dos and don'ts for ECS cluster maintenance?</li>
+          <li>what are the prerequisites before upgrading ECS?</li>
+          <li>what past incidents involved PVC stuck in terminating state?</li>
+        </ul>
 
         <!-- ── Configuring the Cluster ─────────────────────────────────── -->
         <h2>Configuring the Cluster</h2>
-        <p>Click the <strong>&#9881; gear icon</strong> → <strong>Cluster</strong> tab. Paste your kubeconfig YAML and click <strong>Apply</strong>. The cluster host appears in the header on success. No restart needed — you can switch clusters at any time.</p>
+        <p>Click <strong>&#9881; Settings</strong> → <strong>Kubeconfig</strong> tab. Paste your kubeconfig YAML and click <strong>Apply</strong>. The cluster host appears in the header on success. No restart needed — you can switch clusters at any time.</p>
 
         <pre><code>curl -s -X POST http://localhost:9000/api/kubeconfig \
      -H 'Content-Type: application/json' \
@@ -746,16 +762,16 @@ button{cursor:pointer;font-family:inherit}
      -H 'Content-Type: application/json' \
      -d '{"kubectl_max_chars": 50000, "max_new_tokens": 6144}'</code></pre>
 
-        <!-- ── Injecting Documents ─────────────────────────────────────── -->
+        <!-- ── Knowledge Base (RAG) ────────────────────────────────────── -->
         <h2>Knowledge Base (RAG)</h2>
-        <p>The assistant cross-references live cluster data with your runbooks, known-issues docs, and SOPs via <strong>LanceDB RAG</strong>.</p>
+        <p>The assistant cross-references live cluster data with your runbooks, known-issues docs, and SOPs via <strong>LanceDB RAG</strong>. Both chatbots draw from the same LanceDB vector store.</p>
 
         <h3>Via the Settings UI</h3>
         <ol>
-          <li>Click &#9881; → <strong>RAG Documents</strong> tab.</li>
+          <li>Click &#9881; Settings → <strong>RAG Documents</strong> tab.</li>
           <li>Drop <code>.md</code>, <code>.pdf</code>, <code>.txt</code>, <code>.xlsx</code>, or <code>.xls</code> files onto the drop zone.</li>
           <li>Click <strong>Ingest</strong>. Previously ingested files with the same content are automatically skipped (deduplication is hash-based).</li>
-          <li>To replace an existing file with updated content, tick <em>Force re-ingest</em> before clicking Ingest — this overwrites the existing chunks regardless of hash.</li>
+          <li>To replace an existing file with updated content, tick <em>Force re-ingest</em> before clicking Ingest.</li>
         </ol>
         <p style="font-size:11px;color:var(--dimText)">💡 All previously ingested files are listed in the <em>Ingested Files</em> panel at the bottom of the tab.</p>
 
@@ -763,9 +779,26 @@ button{cursor:pointer;font-family:inherit}
         <pre><code>python3 app.py --ingest ./docs
 python3 app.py --ingest ./docs --force   # force overwrite all</code></pre>
 
+        <!-- ── LLM ─────────────────────────────────────────────────────── -->
+        <h2>LLM — GPU vs CPU</h2>
+        <p>The application auto-detects available GPUs at startup. Use the appropriate model for your hardware:</p>
+        <table>
+          <tr><th>Hardware</th><th>Model</th><th>Backend</th><th>Response time</th></tr>
+          <tr><td><strong>GPU</strong> (recommended)</td><td><a href="https://huggingface.co/Qwen/Qwen3-8B" target="_blank">Qwen3-8B</a></td><td>HuggingFace Transformers (bfloat16)</td><td>10–30 s</td></tr>
+          <tr><td><strong>CPU only</strong></td><td><a href="https://huggingface.co/Qwen/Qwen3-8B-GGUF" target="_blank">Qwen3-8B-GGUF Q4_K_M</a></td><td>llama-cpp-python (quantised)</td><td>Several minutes</td></tr>
+        </table>
+        <p>Set <code>LLM_MODEL</code> in the <code>env</code> file. If the path ends with <code>.gguf</code> the app automatically switches to the GGUF backend — no other config change needed.</p>
+        <pre><code># GPU
+LLM_MODEL=/models/Qwen3-8B
+NUM_GPU=1
+
+# CPU (GGUF)
+LLM_MODEL=/models/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf
+NUM_GPU=0</code></pre>
+
         <!-- ── System Prompt ───────────────────────────────────────────── -->
         <h2>Customising the System Prompt</h2>
-        <p>The LLM's tool selection, multi-hop behaviour, and persona are all controlled by <code>config/system_prompt.txt</code>. Key sections:</p>
+        <p>The LLM's tool selection, multi-hop behaviour, and persona are controlled by <code>config/system_prompt.txt</code>. Key sections:</p>
         <ul>
           <li><strong>Tool Selection Guide</strong> — which tools to call for each query type</li>
           <li><strong>Multi-hop Reasoning</strong> — when to chain calls (e.g. OOMKilled → check quotas)</li>
@@ -786,6 +819,7 @@ python3 app.py --ingest ./docs --force   # force overwrite all</code></pre>
           <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/events?warn=1</code></td><td>Cluster events</td></tr>
           <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/tools</code></td><td>List all registered tools</td></tr>
           <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/system</code></td><td>Live CPU / RAM / GPU metrics</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/rag/query</code></td><td>RAG-only query (Knowledge Bot)</td></tr>
           <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/ask</code></td><td>Ask the AI (blocking)</td></tr>
           <tr><td><span class="badge badge-post">POST</span></td><td><code>/chat/stream</code></td><td>Ask the AI (SSE streaming)</td></tr>
           <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/tool</code></td><td>Call a tool directly</td></tr>
@@ -800,35 +834,37 @@ python3 app.py --ingest ./docs --force   # force overwrite all</code></pre>
         <h2>Environment Variables</h2>
         <table>
           <tr><th>Variable</th><th>Default</th><th>Description</th></tr>
-          <tr><td><code>LLM_MODEL</code></td><td>Qwen/Qwen3-8B</td><td>HuggingFace model ID or local path</td></tr>
+          <tr><td><code>LLM_MODEL</code></td><td>Qwen/Qwen3-8B</td><td>HuggingFace model ID or local path. Set to a <code>.gguf</code> path for CPU inference.</td></tr>
           <tr><td><code>EMBED_MODEL</code></td><td>nomic-ai/nomic-embed-text-v1.5</td><td>SentenceTransformers model ID or local path</td></tr>
-          <tr><td><code>NUM_GPU</code></td><td>auto</td><td>GPU count (0 = CPU only)</td></tr>
+          <tr><td><code>NUM_GPU</code></td><td>auto</td><td>GPU count (0 = CPU / GGUF mode)</td></tr>
           <tr><td><code>KUBECONFIG_PATH</code></td><td>~/kubeconfig</td><td>Path to kubeconfig (blank = in-cluster)</td></tr>
           <tr><td><code>LOG_LEVEL</code></td><td>DEBUG</td><td>DEBUG shows full agentic loop trace</td></tr>
-          <tr><td><code>CHROMA_DIR</code></td><td>./chromadb</td><td>ChromaDB persistent storage path</td></tr>
+          <tr><td><code>LANCEDB_DIR</code></td><td>./lancedb</td><td>LanceDB persistent storage path</td></tr>
           <tr><td><code>CUSTOM_RULES</code></td><td>—</td><td>Site-specific rules injected into the system prompt</td></tr>
           <tr><td><code>KUBECTL_ALLOW_WRITES</code></td><td>false</td><td>Allow write operations via kubectl_exec</td></tr>
-          <tr><td><code>ALLOW_DB_EXEC</code></td><td>true</td><td>Allow read-only SQL queries to be run inside DB pods via exec_db_query</td></tr>
+          <tr><td><code>ALLOW_DB_EXEC</code></td><td>true</td><td>Allow read-only SQL queries inside DB pods via exec_db_query</td></tr>
           <tr><td><code>KUBECTL_MAX_CHARS</code></td><td>20000</td><td>Max chars of K8s tool output fed into LLM. Runtime-adjustable.</td></tr>
           <tr><td><code>MAX_NEW_TOKENS</code></td><td>4096</td><td>Max tokens the LLM generates per response. Runtime-adjustable.</td></tr>
-          <tr><td><code>LLM_TIMEOUT</code></td><td>300</td><td>Hard timeout (seconds) per request.</td></tr>
+          <tr><td><code>LLM_TIMEOUT</code></td><td>300s GPU / 900s CPU</td><td>Hard timeout (seconds) per request.</td></tr>
+          <tr><td><code>GGUF_N_CTX</code></td><td>32768</td><td>Context window size (GGUF / CPU mode only)</td></tr>
+          <tr><td><code>GGUF_N_THREADS</code></td><td>all cores</td><td>CPU threads for GGUF inference</td></tr>
         </table>
 
         <!-- ── Hardware ───────────────────────────────────────────────── -->
         <h2>Hardware Sizing</h2>
         <table>
-          <tr><th>Inference</th><th>RAM</th><th>VRAM</th></tr>
-          <tr><td>CPU only, min. 28 cores</td><td>min. 48 GB</td><td>—</td></tr>
-          <tr><td>GPU, <strong>Qwen3-8B</strong> (recommended)</td><td>32 GB</td><td>~20 GB</td></tr>
+          <tr><th>Mode</th><th>Model</th><th>Min. CPU cores</th><th>RAM</th><th>VRAM</th></tr>
+          <tr><td><strong>GPU</strong> (recommended)</td><td>Qwen3-8B (bfloat16)</td><td>8</td><td>32 GB</td><td>~20 GB</td></tr>
+          <tr><td><strong>CPU only</strong></td><td>Qwen3-8B-GGUF Q4_K_M</td><td>16</td><td>16 GB</td><td>—</td></tr>
         </table>
-        <div class="warn">&#9888; CPU inference takes <strong>several minutes</strong> to generate a response per query. A GPU is strongly recommended for practical use.</div>
+        <div class="warn">&#9888; GPU inference is strongly recommended for better user experience. Qwen3-8B Q4_K_M uses ~5–6 GB RAM for model weights; remaining RAM is used for the OS, embeddings, and LanceDB.</div>
 
         <!-- ── Security ───────────────────────────────────────────────── -->
         <h2>Security Notes</h2>
         <ul>
           <li>All typed K8s tools are <strong>read-only</strong> by design.</li>
           <li><code>kubectl_exec</code> is read-only by default. Set <code>KUBECTL_ALLOW_WRITES=true</code> to enable write ops.</li>
-          <li>Secret values are hidden by default — toggle in ⚙ Settings → Security. Preference persists per browser.</li>
+          <li>Secret values are hidden by default — toggle in &#9881; Settings → Security. Preference persists per browser.</li>
           <li>Never expose this service publicly — it has direct cluster read access.</li>
           <li>Restrict the env file: <code>chmod 600 env</code></li>
         </ul>
@@ -921,8 +957,6 @@ python3 app.py --ingest ./docs --force   # force overwrite all</code></pre>
         <div class="gl-ex-note">Chatbot explains the exec_db_query flow: pod discovery &rarr; credential detection &rarr; SQL execution. No cluster tool is called.</div>
         <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-general"></div><div class="gl-ex-body"><span class="gl-ex-text">what can you do?</span><button class="gl-copy-btn" onclick="glCopy(this,'what can you do?')">copy</button></div></div>
         <div class="gl-ex-note">Lists available capabilities. No tool is called.</div>
-        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-general"></div><div class="gl-ex-body"><span class="gl-ex-text">how are you?</span><button class="gl-copy-btn" onclick="glCopy(this,'how are you?')">copy</button></div></div>
-        <div class="gl-ex-note">Answered warmly as the ECS Operations Assistant. No tool is called.</div>
 
       </div><!-- #guidelines-pane -->
 
