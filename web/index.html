@@ -650,7 +650,7 @@ button{cursor:pointer;font-family:inherit}
         <h3>Via the Settings UI</h3>
         <ol>
           <li>Click &#9881; → <strong>Knowledge Base</strong> tab.</li>
-          <li>Drop <code>.md</code>, <code>.pdf</code>, or <code>.txt</code> files onto the drop zone.</li>
+          <li>Drop <code>.md</code>, <code>.pdf</code>, <code>.txt</code>, <code>.xlsx</code>, or <code>.xls</code> files onto the drop zone.</li>
           <li>Optionally tick <em>Force re-ingest</em> to overwrite existing entries.</li>
           <li>Click <strong>Ingest</strong>.</li>
         </ol>
@@ -686,7 +686,7 @@ python3 app.py --ingest ./docs --force   # re-ingest all</code></pre>
           <tr><td><span class="badge badge-post">POST</span></td><td><code>/chat/stream</code></td><td>Ask the AI (SSE streaming)</td></tr>
           <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/tool</code></td><td>Call a tool directly</td></tr>
           <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/kubeconfig</code></td><td>Apply a new kubeconfig</td></tr>
-          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/ingest/upload</code></td><td>Upload docs to ChromaDB</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/ingest/upload</code></td><td>Upload docs to LanceDB</td></tr>
           <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/reload-prompt</code></td><td>Hot-reload system_prompt.txt</td></tr>
           <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/prompt</code></td><td>Read current system prompt</td></tr>
           <tr><td><span class="badge badge-put">PUT</span></td><td><code>/api/prompt</code></td><td>Update system prompt</td></tr>
@@ -799,7 +799,7 @@ python3 app.py --ingest ./docs --force   # re-ingest all</code></pre>
         <h3>Resources &amp; Compute</h3>
         <span class="gl-tag gl-tag-resource">RESOURCE</span>
         <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-cluster"></div><div class="gl-ex-body"><span class="gl-ex-text">list all statefulset in cdp namespace</span><button class="gl-copy-btn" onclick="glCopy(this,'list all statefulset in cdp namespace')">copy</button></div></div>
-        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-resource"></div><div class="gl-ex-body"><span class="gl-ex-text">what's cpu and ram request for cdp-embedded-db pod in cdp namespace</span><button class="gl-copy-btn" onclick="glCopy(this,'what\'s cpu and ram request for cdp-embedded-db pod in cdp namespace')">copy</button></div></div>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-resource"></div><div class="gl-ex-body"><span class="gl-ex-text">what's the cpu and ram request for cdp-embedded-db pod in cdp namespace?</span><button class="gl-copy-btn" onclick="glCopy(this,'what\'s the cpu and ram request for cdp-embedded-db pod in cdp namespace?')">copy</button></div></div>
         <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-resource"></div><div class="gl-ex-body"><span class="gl-ex-text">calculate CPU requests for all pods in longhorn-system namespace</span><button class="gl-copy-btn" onclick="glCopy(this,'calculate CPU requests for all pods in longhorn-system namespace')">copy</button></div></div>
         <div class="gl-ex-note">Aggregates CPU and memory requests/limits for every pod in the namespace in one call.</div>
         <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-resource"></div><div class="gl-ex-body"><span class="gl-ex-text">which node has a GPU available and in use?</span><button class="gl-copy-btn" onclick="glCopy(this,'which node has a GPU available and in use?')">copy</button></div></div>
@@ -937,7 +937,7 @@ python3 app.py --ingest ./docs --force   # re-ingest all</code></pre>
 
       <!-- ── Tab: Knowledge Base ── -->
       <div class="stab-pane" id="tab-kb">
-        <p>Upload .md, .pdf, or .txt documents to inject into the vector database for RAG retrieval.</p>
+        <p>Upload .md, .pdf, .txt, .xlsx, or .xls documents to inject into the vector database for RAG retrieval.</p>
 
         <!-- RAG stats -->
         <div id="rag-stats-bar">
@@ -948,9 +948,9 @@ python3 app.py --ingest ./docs --force   # re-ingest all</code></pre>
 
         <!-- Drop zone -->
         <div id="drop-zone">
-          <input type="file" id="doc-file-input" multiple accept=".md,.pdf,.txt"/>
+          <input type="file" id="doc-file-input" multiple accept=".md,.pdf,.txt,.xlsx,.xls"/>
           <span id="drop-zone-label">Drop files here or click to browse</span>
-          <span>.md &nbsp;·&nbsp; .pdf &nbsp;·&nbsp; .txt</span>
+          <span>.md &nbsp;·&nbsp; .pdf &nbsp;·&nbsp; .txt &nbsp;·&nbsp; .xlsx &nbsp;·&nbsp; .xls</span>
         </div>
 
         <!-- Selected files list -->
@@ -1358,7 +1358,7 @@ async function loadRagStats(){
 }
 
 function setFileList(files){
-  pendingFiles = Array.from(files).filter(f => /\.(md|pdf|txt)$/i.test(f.name));
+  pendingFiles = Array.from(files).filter(f => /\.(md|pdf|txt|xlsx|xls)$/i.test(f.name));
   const rejected = Array.from(files).length - pendingFiles.length;
   selectedFiles.textContent = pendingFiles.length
     ? '📎 ' + pendingFiles.map(f=>f.name).join(', ') + (rejected ? `  (${rejected} unsupported skipped)` : '')
@@ -1430,7 +1430,7 @@ const EXAMPLES = [
   'Check all namespaces, which pvc is not bound?',
   'Which node has GPUs available and in use?',
   'List all statefulset in cdp namespace',
-  'What\'s cpu and ram request for cdp-embedded-db pod in cdp namespace?',
+  'What\'s the cpu and ram request for cdp-embedded-db pod in cdp namespace?',
 ];
 const exBtns = document.getElementById('ex-btns');
 EXAMPLES.forEach(ex=>{

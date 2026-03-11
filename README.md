@@ -130,7 +130,7 @@ This ECS AI Ops Chatbot is powered by:
 - get tables in db-0 of cmlwb1 namespace
 - explain how you access the database of a pod to get the table names, don't run it, just explain
 - list all statefulset in cdp namespace
-- what's cpu and ram request for cdp-embedded-db pod in cdp namespace
+- what's the cpu and ram request for cdp-embedded-db pod in cdp namespace?
 
 ---
 
