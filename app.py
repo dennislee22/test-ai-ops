@@ -1,28 +1,6 @@
 #!/usr/bin/env python3
 """
-Cloudera ECS AI Ops — Single-file application (Transformers Edition)
-====================================================================
-Runs the complete stack from one Python file.
-No external APIs or services required. Uses HuggingFace Transformers locally.
-
-Usage:
-    python3 app.py                                    # start on port 8000
-    python3 app.py --port 9000                        # custom port
-    python3 app.py --host 0.0.0.0                     # bind address
-    python3 app.py --model-dir  Qwen/Qwen3-8B # LLM from local dir or HF hub
-    python3 app.py --embed-dir  nomic-ai/nomic-embed-text-v1.5 # embeddings
-    python3 app.py --ingest ./docs                    # ingest docs then start
-    python3 app.py --ingest ./docs --force            # re-ingest all docs
-    python3 app.py --reload                           # dev auto-reload
-
-Dependencies:
-    pip install fastapi "uvicorn[standard]" langgraph langchain-core \
-                kubernetes python-dotenv psutil lancedb tantivy pyarrow \
-                sentence-transformers pypdf markdown-it-py \
-                langchain-huggingface transformers torch accelerate
-
-Optional (GPU monitoring):
-    pip install nvidia-ml-py
+Cloudera ECS AI Ops
 """
 
 import os, sys, argparse, re, hashlib, time, json, logging, logging.handlers
