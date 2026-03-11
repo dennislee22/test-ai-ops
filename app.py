@@ -972,6 +972,11 @@ def build_agent():
 
     tokenizer, model, _is_qwen3 = _build_llm()
 
+    # Expose at module scope so /api/kb/ask can use the same loaded model
+    globals()["_kb_tokenizer"] = tokenizer
+    globals()["_kb_model"]     = model
+    globals()["_kb_is_qwen3"]  = _is_qwen3
+
     # System prompt — /no_think suffix is the Qwen3 soft switch for thinking mode.
     # enable_thinking=False in apply_chat_template is the hard switch (Jinja-level).
     _sys_prompt = _load_system_prompt().format(custom_rules=CUSTOM_RULES or "None.")
@@ -1486,6 +1491,9 @@ def build_agent():
     return g.compile()
 
 _agent = None
+_kb_tokenizer = None
+_kb_model     = None
+_kb_is_qwen3  = False
 def get_agent():
     global _agent
     if _agent is None: _agent = build_agent()
@@ -2398,19 +2406,19 @@ async def api_kb_ask(req: KbAskRequest):
         "- Never suggest live cluster operations — this bot has no cluster access."
     )
 
+    # Ensure LLM is loaded — build_agent() populates _kb_tokenizer/_kb_model/_kb_is_qwen3
+    get_agent()
+
     try:
         context = await asyncio.get_event_loop().run_in_executor(
             None, lambda: rag_retrieve(query=req.q, top_k=top_k, sheet=req.sheet)
         )
-        if not context.strip():
-            return {"answer": "No matching entries found in the knowledge base for this query.",
-                    "query": req.q, "top_k": top_k}
 
         user_msg = f"Context from knowledge base:\n\n{context}\n\nQuestion: {req.q}"
 
         # ── GGUF path ──────────────────────────────────────────────────────────
-        if tokenizer is None:
-            resp = await asyncio.get_event_loop().run_in_executor(None, lambda: model.create_chat_completion(
+        if _kb_tokenizer is None:
+            resp = await asyncio.get_event_loop().run_in_executor(None, lambda: _kb_model.create_chat_completion(
                 messages=[
                     {"role": "system", "content": KB_SYSTEM_PROMPT},
                     {"role": "user",   "content": user_msg},
@@ -2429,17 +2437,17 @@ async def api_kb_ask(req: KbAskRequest):
                 {"role": "user",   "content": user_msg},
             ]
             template_kwargs = {"add_generation_prompt": True}
-            if _is_qwen3:
+            if _kb_is_qwen3:
                 template_kwargs["enable_thinking"] = False
 
-            encoded = tokenizer.apply_chat_template(
+            encoded = _kb_tokenizer.apply_chat_template(
                 chat_msgs, tokenize=True, return_tensors="pt", **template_kwargs
             )
             input_ids = (encoded["input_ids"] if hasattr(encoded, "__getitem__") and not hasattr(encoded, "shape")
-                         else encoded).to(model.device)
+                         else encoded).to(_kb_model.device)
 
             _max_new = max(512, _MAX_NEW_TOKENS)
-            model_max = getattr(tokenizer, "model_max_length", None) or 32768
+            model_max = getattr(_kb_tokenizer, "model_max_length", None) or 32768
             if model_max > 131072:
                 model_max = 32768
             budget = model_max - _max_new - 64
@@ -2449,16 +2457,16 @@ async def api_kb_ask(req: KbAskRequest):
                 input_ids = torch.cat([input_ids[:, :keep_head], input_ids[:, -keep_tail:]], dim=-1)
 
             with torch.no_grad():
-                out = model.generate(
+                out = _kb_model.generate(
                     input_ids,
                     max_new_tokens=_max_new,
                     do_sample=True,
                     temperature=0.3,
                     top_p=0.9,
-                    pad_token_id=tokenizer.eos_token_id,
+                    pad_token_id=_kb_tokenizer.eos_token_id,
                 )
             new_tokens = out[0][input_ids.shape[-1]:]
-            answer = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+            answer = _kb_tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
         return {"answer": answer, "query": req.q, "top_k": top_k}
 
