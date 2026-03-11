@@ -138,8 +138,12 @@ def default_tools_for(user_msg: str) -> list:
                                "node health", "node status"]):
         return [("get_node_health", {})]
 
+    # ── ReplicaSets ───────────────────────────────────────────────────────────
+    if any(k in lm for k in ["replicaset", "replica set", " rs ", "rs in"]):
+        return [("kubectl_exec", {"command": f"kubectl get replicasets -n {ns}"})]
+
     # ── Deployments ───────────────────────────────────────────────────────────
-    if any(k in lm for k in ["deployment", "deploy ", "replica", "desired replica",
+    if any(k in lm for k in ["deployment", "deploy ", "desired replica",
                                "ready replica", "degraded"]):
         return [("get_deployment_status", {"namespace": ns})]
 

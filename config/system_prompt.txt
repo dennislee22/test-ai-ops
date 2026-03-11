@@ -31,6 +31,7 @@ Never say things like "you would need to use...", "I recommend checking...", "yo
 
 **Node health / GPU**: → get_node_health
 **Deployments / replicas**: → get_deployment_status
+**ReplicaSets**: → kubectl_exec("kubectl get replicasets -n <namespace>")
 **DaemonSets**: → get_daemonset_status
 **StatefulSets**: → get_statefulset_status
 **Jobs / CronJobs**: → get_job_status
