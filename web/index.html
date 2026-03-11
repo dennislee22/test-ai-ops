@@ -290,24 +290,24 @@ button{cursor:pointer;font-family:inherit}
 .kb-sf-btn:hover{border-color:var(--accent);color:var(--accent2)}
 .kb-sf-btn.active{background:var(--accent)22;border-color:var(--accent);color:var(--accent2)}
 .kb-answer-block{
-  background:var(--msgBg);border:1px solid var(--border);border-radius:10px;
+  background:var(--msgBg);border:1px solid var(--accent)44;border-radius:10px;
   padding:18px 20px;animation:fadeUp .25s ease;
 }
 .kb-answer-q{
   font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);
   margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border);
 }
-.kb-answer-body{font-size:13px;line-height:1.75;color:var(--bodyText);white-space:pre-wrap;word-break:break-word}
+.kb-answer-body{font-size:13px;line-height:1.75;color:var(--textMain);white-space:pre-wrap;word-break:break-word}
 .kb-answer-body table{border-collapse:collapse;width:100%;margin:10px 0;font-size:12px;font-family:'IBM Plex Mono',monospace}
 .kb-answer-body th{background:var(--inputBg);color:var(--panelLabel);font-weight:700;padding:7px 12px;border:1px solid var(--border);text-align:left;font-size:11px;letter-spacing:.04em}
 .kb-answer-body td{padding:6px 12px;border:1px solid var(--border);color:var(--bodyText);vertical-align:top}
 .kb-answer-body tr:nth-child(even) td{background:var(--headerBg)55}
 .kb-copy-btn{
   margin-top:12px;font-size:11px;font-family:'IBM Plex Mono',monospace;
-  background:none;border:1px solid var(--border);border-radius:4px;
-  color:var(--dimText);padding:4px 12px;transition:all .15s;
+  background:none;border:1px solid var(--accent)66;border-radius:4px;
+  color:var(--accent2);padding:4px 12px;transition:all .15s;cursor:pointer;
 }
-.kb-copy-btn:hover{border-color:var(--accent);color:var(--accent2)}
+.kb-copy-btn:hover{border-color:var(--accent);background:var(--accent)22;color:var(--accent2)}
 .kb-spinner{display:flex;align-items:center;gap:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);padding:12px 0}
 .kb-spinner span{animation:dotPulse 1.4s ease-in-out infinite}
 .kb-spinner span:nth-child(2){animation-delay:.2s}
@@ -1290,11 +1290,6 @@ document.querySelectorAll('.mtab').forEach(btn => {
   function renderAnswer(question, topK, raw){
     const block = document.createElement('div');
     block.className = 'kb-answer-block';
-
-    const qDiv = document.createElement('div');
-    qDiv.className = 'kb-answer-q';
-    qDiv.textContent = `❓ ${question}  · top_k=${topK}`;
-    block.appendChild(qDiv);
 
     const ansDiv = document.createElement('div');
     ansDiv.className = 'kb-answer-body';
