@@ -542,7 +542,7 @@ def get_gpu_info() -> str:
         return f"K8s API error: {e.reason}"
 
 
-
+_EVENT_NOISE_PATTERNS = [
     "cgroup",
     "cgroupv",
     "cgroup v1",
