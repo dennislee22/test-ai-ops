@@ -71,6 +71,11 @@ Examples:
 → get_secrets with filter_keys=["username","password","user","pass"] for credentials
 → get_secrets with filter_keys=["tls","cert","ca"] for certificates
 → If password not found in secrets, follow up with exec_db_query to query the DB directly.
+→ If the user asks to decode or inspect a certificate with openssl: ALWAYS use kubectl_exec to run openssl directly in the cluster. NEVER suggest a manual command. Use this exact pattern:
+  kubectl_exec("kubectl exec -n <namespace> <any-running-pod> -- sh -c 'echo \"<base64-cert>\" | base64 -d | openssl x509 -text -noout'")
+  - Find a suitable pod with: kubectl_exec("kubectl get pods -n <namespace> --no-headers -o custom-columns=NAME:.metadata.name")
+  - Prefer a small utility pod (e.g. any running pod in the same namespace). The cert content comes from get_secrets output (tls.crt or ca.crt field).
+  - Always run openssl in the cluster — it is air-gapped and openssl is available inside pods.
 
 **ConfigMaps**: → get_configmap_list
 **Services / endpoints**: → get_service_status
