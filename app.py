@@ -89,7 +89,6 @@ ENABLE_FALLBACK_ROUTING: bool = True
 # the Settings → Max Output tab.  Synthesis calls use this value; tool-
 # selection calls always use 256 (just a small <tool_call> JSON block).
 _MAX_NEW_TOKENS: int = int(os.getenv("MAX_NEW_TOKENS", "4096"))
-_per_req = {"max_new_tokens": 0}  # single-writer slot; safe because LLM is single-threaded
 
 # Request-scoped flag — True when the user has 'Show Secret Values' enabled in Settings.
 # Set per-request in chat_stream; read by agent/routing.py via get_decode_secrets().
@@ -1254,11 +1253,10 @@ def build_agent():
         _log_ag.debug(f"[llm_node itr={itr}] chat_msgs count={len(chat_msgs)} has_tool_results={has_tool_results}")
 
         # ── Token budget ──────────────────────────────────────────────────────
-        _req_max = _per_req.get('max_new_tokens', 0)  # per-request override
         if not has_tool_results:
             _max_new = 512
         else:
-            _max_new = max(512, _req_max if _req_max > 0 else _MAX_NEW_TOKENS)
+            _max_new = max(512, _MAX_NEW_TOKENS)
         _log_ag.debug(f"[llm_node itr={itr}] max_new_tokens={_max_new}")
 
         # ── GGUF path (tokenizer is None) ─────────────────────────────────────
@@ -1582,7 +1580,7 @@ async def run_agent(user_message: str) -> dict:
         "clarification_needed": False,
     }
 
-async def run_agent_streaming(user_message: str, history: list = None):
+async def run_agent_streaming(user_message: str, history: list = None, max_new_tokens: int = 0):
     """
     Async generator that yields Server-Sent Events (SSE) strings.
 
@@ -1602,7 +1600,10 @@ async def run_agent_streaming(user_message: str, history: list = None):
     yield _sse({"type": "status", "text": f"🤖 Model: {LLM_MODEL}"})
 
     agent          = get_agent()
-    _per_req["max_new_tokens"] = max_new_tokens  # set before graph invocation
+    global _MAX_NEW_TOKENS
+    _saved_max_tokens = _MAX_NEW_TOKENS
+    if max_new_tokens > 0:
+        _MAX_NEW_TOKENS = max_new_tokens
     t0             = time.time()
     all_updates: list      = [f"🤖 Model: {LLM_MODEL}"]
     tools_called: list     = []
@@ -1803,6 +1804,8 @@ async def run_agent_streaming(user_message: str, history: list = None):
         _hb_task.cancel()
         logger.error(f"[Stream] {exc}", exc_info=True)
         yield _sse({"type": "error", "text": str(exc)})
+    finally:
+        _MAX_NEW_TOKENS = _saved_max_tokens
 
 
 def _gpu_metrics() -> list:
@@ -1919,7 +1922,7 @@ class ChatRequest(BaseModel):
     message: str
     decode_secrets: bool = False
     history: list[HistoryMessage] = []
-    max_new_tokens: int = 0  # 0 = use server default _MAX_NEW_TOKENS
+    max_new_tokens: int = 0
 class ChatResponse(BaseModel): response: str; tools_used: list; iterations: int; status_updates: list; elapsed_seconds: float
 class IngestRequest(BaseModel): docs_dir: str; force: bool = False
 class IngestResponse(BaseModel): results: list; total_files: int; total_chunks: int

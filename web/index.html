@@ -669,7 +669,7 @@ button{cursor:pointer;font-family:inherit}
             </label>
             <input type="range" id="chat-max-tokens-slider" min="512" max="8192" step="512" value="4096"
               style="width:120px;accent-color:var(--accent);cursor:pointer;height:5px"
-              title="Maximum tokens the LLM can generate per response. Higher = longer answers but slower."/>
+              title="Maximum tokens the LLM can generate per response."/>
             <span style="font-size:10px;color:var(--panelDim)">512 — 8192</span>
           </div>
         </div>
@@ -1255,12 +1255,12 @@ document.querySelectorAll('.mtab').forEach(btn => {
     topkVal.textContent = topkSlider.value;
   });
 
-  // Chat max output tokens slider
   const chatTokenSlider = document.getElementById('chat-max-tokens-slider');
   const chatTokenVal    = document.getElementById('chat-max-tokens-val');
   if(chatTokenSlider) chatTokenSlider.addEventListener('input', () => {
     chatTokenVal.textContent = chatTokenSlider.value;
   });
+
 
   // Send on Enter (Shift+Enter = newline)
   input.addEventListener('keydown', e => {
@@ -2122,10 +2122,8 @@ async function sendMessage(override){
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({
-        message: q,
-        decode_secrets: decodeSecrets,
-        history: [],
-        max_new_tokens: parseInt(document.getElementById('chat-max-tokens-slider')?.value || '4096')
+        message: q, decode_secrets: decodeSecrets, history: [],
+        max_new_tokens: parseInt(document.getElementById('chat-max-tokens-slider')?.value||'0')
       }),
     });
     if(!res.ok){
