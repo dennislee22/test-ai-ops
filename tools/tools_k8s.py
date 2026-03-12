@@ -1311,7 +1311,8 @@ def _safe_reason(e) -> str:
     except Exception:
         return "Unknown API error"
 _ALLOW_WRITES     = os.getenv("KUBECTL_ALLOW_WRITES", "false").lower() in ("1", "true", "yes")
-_EXEC_POD_PATTERN = os.getenv("EXEC_POD_PATTERN", "").strip()  # e.g. "cdp-mlx-control-plane-app-"
+_EXEC_POD_PATTERN = os.getenv("EXEC_POD_PATTERN", "cdp-mlx-control-plane-app-").strip()
+_log.info(f"[tools_k8s] EXEC_POD_PATTERN={_EXEC_POD_PATTERN!r} (override with EXEC_POD_PATTERN env var)")
 
 _KUBECTL_READ_VERBS  = {
     "get", "describe", "logs", "top", "rollout", "auth",
