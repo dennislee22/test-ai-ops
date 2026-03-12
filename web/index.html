@@ -695,9 +695,9 @@ button{cursor:pointer;font-family:inherit}
           <div id="kb-ex-btns">
             <div class="kb-ex-label">EXAMPLE QUERIES</div>
             <div style="display:flex;flex-wrap:wrap;gap:7px;margin-top:6px">
-              <button class="ex-btn" onclick="kbExSend(this)">List the known issues with Longhorn in 1.5.5 SP1</button>
-              <button class="ex-btn" onclick="kbExSend(this)">What can you do?</button>
-              <button class="ex-btn" onclick="kbExSend(this)">What are the dos &amp; don'ts</button>
+              <button class="ex-btn">List the known issues with Longhorn in 1.5.5 SP1</button>
+              <button class="ex-btn">What can you do?</button>
+              <button class="ex-btn">What are the dos &amp; don'ts</button>
             </div>
           </div>
         </div>
@@ -951,15 +951,6 @@ NUM_GPU=0</code></pre>
 
       <!-- ── Settings pane ────────────────────────────────────────────────── -->
       <div id="settings-pane">
-
-        <!-- Left vertical nav -->
-        <nav class="stab-sidebar">
-          <div class="stab-sidebar-title">&#9881; Settings</div>
-          <button class="stab active" data-tab="tab-cluster"><span class="stab-icon">&#128279;</span>Kubeconfig</button>
-          <button class="stab" data-tab="tab-kb"><span class="stab-icon">&#128196;</span>RAG Documents</button>
-          <button class="stab" data-tab="tab-output"><span class="stab-icon">&#127919;</span>LLM Input/Output</button>
-          <button class="stab" data-tab="tab-security"><span class="stab-icon">&#128274;</span>Security</button>
-        </nav>
 
         <!-- Right content -->
         <div class="stab-content">
@@ -1263,10 +1254,12 @@ document.querySelectorAll('.mtab').forEach(btn => {
   });
   sendBtn.addEventListener('click', askKb);
 
-  function kbExSend(btn){
-    input.value = btn.textContent.trim();
-    askKb();
-  }
+  document.querySelectorAll("#kb-ex-btns .ex-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      input.value = btn.textContent.trim();
+      askKb();
+    });
+  });
 
   async function askKb(){
     const q = input.value.trim();
