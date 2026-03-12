@@ -259,14 +259,14 @@ button{cursor:pointer;font-family:inherit}
 }
 #kb-bot-pane.active{display:flex}
 #kb-bot-header{
-  padding:18px 24px 14px;border-bottom:1px solid var(--border);flex-shrink:0;
+  padding:10px 24px 0;flex-shrink:0;
 }
 #kb-bot-header h2{
   font-size:15px;font-weight:700;color:var(--accent2);
   font-family:'IBM Plex Mono',monospace;letter-spacing:.04em;margin-bottom:4px;
 }
 #kb-bot-header p{font-size:12px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;margin:0}
-#kb-bot-body{flex:1;overflow-y:auto;padding:18px 24px;display:flex;flex-direction:column;gap:14px}
+#kb-bot-body{flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:14px}
 #kb-bot-input-row{display:flex;gap:8px;align-items:flex-end;padding:14px 24px;border-top:1px solid var(--border);flex-shrink:0;background:var(--headerBg)}
 #kb-bot-input{
   flex:1;background:var(--inputBg);border:1px solid var(--border);border-radius:8px;
@@ -399,8 +399,8 @@ button{cursor:pointer;font-family:inherit}
 }
 #ex-label{font-size:11px;color:#ffffff;font-family:'IBM Plex Mono',monospace;letter-spacing:.1em}
 #ex-btns{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
-#kb-ex-btns{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 14px}
-.kb-ex-label{font-size:10px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);letter-spacing:.08em;text-transform:uppercase;width:100%;margin-bottom:2px}
+#kb-ex-btns{margin-bottom:4px}
+.kb-ex-label{font-size:11px;font-family:'IBM Plex Mono',monospace;color:#ffffff;letter-spacing:.1em;text-transform:uppercase;width:100%;margin-bottom:2px}
 .ex-btn{
   background:var(--headerBg);border:1px solid var(--border);
   border-radius:8px;padding:6px 12px;font-size:12px;
@@ -680,30 +680,27 @@ button{cursor:pointer;font-family:inherit}
       <!-- ── ECS Knowledge Bot pane ───────────────────────────────────────── -->
       <div id="kb-bot-pane">
         <div id="kb-bot-header">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
-            <div>
-              <h2><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="20" height="20" style="vertical-align:-4px;margin-right:7px"><path d="M 60 93 C 60 55, 140 55, 140 93 Z" fill="currentColor"/><polygon points="100,25 170,55 100,75 30,55" fill="currentColor"/><line x1="45" y1="59" x2="45" y2="95" stroke="currentColor" stroke-width="3"/><circle cx="45" cy="95" r="4" fill="currentColor"/><path d="M 40 115 L 45 95 L 50 115 Z" fill="currentColor"/><path d="M 32 125 C 12 125, 12 155, 32 155 Z" fill="currentColor" opacity="0.6"/><path d="M 168 125 C 188 125, 188 155, 168 155 Z" fill="currentColor" opacity="0.6"/><rect x="40" y="105" width="120" height="70" rx="35" fill="none" stroke="currentColor" stroke-width="16"/><circle cx="75" cy="140" r="9" fill="currentColor"/><circle cx="125" cy="140" r="9" fill="currentColor"/></svg> ECS Knowledge Bot</h2>
-            </div>
-            <!-- Results limit control -->
-            <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;font-family:'IBM Plex Mono',monospace">
-              <label style="font-size:11px;color:var(--dimText);white-space:nowrap">
-                Max results: <strong id="kb-topk-val" style="color:var(--accent2)">50</strong>
-              </label>
-              <input type="range" id="kb-topk-slider"
-                min="10" max="200" step="10" value="50"
-                style="width:120px;accent-color:var(--accent);cursor:pointer;height:5px"
-                title="How many knowledge base entries to retrieve. Increase if answers seem incomplete."/>
-              <span style="font-size:10px;color:var(--panelDim)">10 — 200</span>
+          <div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;font-family:'IBM Plex Mono',monospace">
+            <label style="font-size:11px;color:var(--dimText);white-space:nowrap">
+              Max results: <strong id="kb-topk-val" style="color:var(--accent2)">50</strong>
+            </label>
+            <input type="range" id="kb-topk-slider"
+              min="10" max="200" step="10" value="50"
+              style="width:120px;accent-color:var(--accent);cursor:pointer;height:5px"
+              title="How many knowledge base entries to retrieve. Increase if answers seem incomplete."/>
+            <span style="font-size:10px;color:var(--panelDim)">10 — 200</span>
+          </div>
+        </div>
+        <div id="kb-bot-body">
+          <div id="kb-ex-btns">
+            <div class="kb-ex-label">EXAMPLE QUERIES</div>
+            <div style="display:flex;flex-wrap:wrap;gap:7px;margin-top:6px">
+              <button class="ex-btn" onclick="kbExSend(this)">List the known issues with Longhorn in 1.5.5 SP1</button>
+              <button class="ex-btn" onclick="kbExSend(this)">What can you do?</button>
+              <button class="ex-btn" onclick="kbExSend(this)">What are the dos &amp; don'ts</button>
             </div>
           </div>
         </div>
-        <div id="kb-ex-btns">
-          <div class="kb-ex-label">Example queries</div>
-          <button class="ex-btn" onclick="kbExSend(this)">List the known issues with Longhorn in 1.5.5 SP1</button>
-          <button class="ex-btn" onclick="kbExSend(this)">What can you do?</button>
-          <button class="ex-btn" onclick="kbExSend(this)">What are the dos &amp; don'ts</button>
-        </div>
-        <div id="kb-bot-body"></div>
         <div id="kb-bot-input-row">
           <textarea id="kb-bot-input" rows="2" placeholder="Ask about known issues, dos &amp; don'ts, prerequisites, past learnings… (Enter to send)"></textarea>
           <button id="kb-bot-send">&#8594; Ask</button>
