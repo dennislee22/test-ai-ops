@@ -2041,6 +2041,33 @@ def kubectl_exec(command: str) -> str:
     if not re.match(r"^kubectl(\s|$)", command):
         return "[ERROR] Command must start with 'kubectl'."
 
+    # ── Intercept `kubectl exec` and route to exec_pod_command ──────────────
+    # Pattern: kubectl exec [-n ns] [-it|-i|-t] <pod> [--container=c] -- <shell_cmd>
+    _exec_re = re.compile(
+        r"^kubectl\s+exec\s+"
+        r"(?:(?:-n\s+(\S+)|--namespace[= ](\S+))\s+)?"
+        r"(?:-[it]{1,2}\s+)?"
+        r"(\S+)"                          # pod name
+        r"(?:\s+(?:--container[= ](\S+)|-c\s+(\S+)))?"
+        r"\s+--\s+(.+)$",                 # shell command after --
+        re.DOTALL,
+    )
+    _em = _exec_re.match(command)
+    if _em:
+        ns       = _em.group(1) or _em.group(2) or "default"
+        pod      = _em.group(3)
+        container = _em.group(4) or _em.group(5) or ""
+        shell_cmd = _em.group(6).strip()
+        # strip 'sh -c ...' wrapper — exec_pod_command wraps in sh -c itself
+        _shc_sq = re.match(r"^(?:sh|bash)\s+-c\s+'(.*)'$", shell_cmd, re.DOTALL)
+        _shc_dq = re.match(r'^(?:sh|bash)\s+-c\s+"(.*)"$', shell_cmd, re.DOTALL)
+        if _shc_sq:
+            shell_cmd = _shc_sq.group(1)
+        elif _shc_dq:
+            shell_cmd = _shc_dq.group(1)
+        _log.info(f"[kubectl_exec] routing kubectl exec → exec_pod_command(ns={ns}, pod={pod}, container={container!r})")
+        return exec_pod_command(namespace=ns, pod_name=pod, command=shell_cmd, container=container)
+
     _SHELL_OPS = re.compile(r'(\|\||&&|(?<!<)>(?!>)|\bawk\b|\bgrep\b|\bsed\b|\bcut\b|\bwc\b|2>/dev/null)')
     if _SHELL_OPS.search(command):
         return (
@@ -2737,6 +2764,40 @@ def exec_db_query(namespace: str, sql: str,
     return header + output
 
 
+def exec_pod_command(namespace: str, pod_name: str, command: str, container: str = "") -> str:
+    """
+    Execute an arbitrary shell command inside a running pod using the K8s stream API.
+    Use this for commands like openssl, base64, cat, etc. that cannot be run via kubectl_exec.
+
+    Args:
+        namespace:  Pod namespace (e.g. "cdp")
+        pod_name:   Exact pod name (e.g. "cdp-embedded-db-0")
+        command:    Shell command to run (e.g. "echo '...' | openssl x509 -text -noout")
+        container:  Container name for multi-container pods (optional)
+    Returns:
+        Command stdout/stderr output, or an error string.
+    """
+    from kubernetes.stream import stream as _k8s_stream
+
+    exec_cmd = ["/bin/sh", "-c", command]
+    stream_kwargs = dict(stderr=True, stdin=False, stdout=True, tty=False, _preload_content=True)
+    if container:
+        stream_kwargs["container"] = container
+    try:
+        resp = _k8s_stream(
+            _core.connect_get_namespaced_pod_exec,
+            pod_name, namespace,
+            command=exec_cmd,
+            **stream_kwargs,
+        )
+        output = resp.strip() if isinstance(resp, str) else str(resp).strip()
+        return output or "(command returned no output)"
+    except ApiException as e:
+        return f"[ERROR] exec failed (pod={pod_name} ns={namespace}): {_safe_reason(e)}"
+    except Exception as exc:
+        return f"[ERROR] Unexpected exec error: {exc}"
+
+
 K8S_TOOLS: dict = {
 
     "get_pod_status": {
@@ -3020,6 +3081,23 @@ K8S_TOOLS["kubectl_exec"] = {
                 "'kubectl get namespaces -A'"
             ),
         },
+    },
+}
+
+K8S_TOOLS["exec_pod_command"] = {
+    "fn":          exec_pod_command,
+    "description": (
+        "Execute an arbitrary shell command inside a running Kubernetes pod using the K8s stream API. "
+        "Use this to run openssl, base64, cat, curl, or any other command inside the cluster. "
+        "NOTE: kubectl_exec will automatically route 'kubectl exec ...' commands to this tool — "
+        "you do not need to call this directly unless you already know the pod name. "
+        "IMPORTANT: Do NOT use $() subshell substitution in command — resolve all values in prior tool calls first."
+    ),
+    "parameters": {
+        "namespace": {"type": "string", "description": "Kubernetes namespace (e.g. 'cdp')."},
+        "pod_name":  {"type": "string", "description": "Exact name of a running pod (e.g. 'cdp-embedded-db-0')."},
+        "command":   {"type": "string", "description": "Shell command to run. Use literal values only — no $() subshells."},
+        "container": {"type": "string", "default": "", "description": "Optional container name for multi-container pods."},
     },
 }
 

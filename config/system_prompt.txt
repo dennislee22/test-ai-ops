@@ -71,19 +71,17 @@ Examples:
 → get_secrets with filter_keys=["username","password","user","pass"] for credentials
 → get_secrets with filter_keys=["tls","cert","ca"] for certificates
 → If password not found in secrets, follow up with exec_db_query to query the DB directly.
-→ If the user asks to decode or inspect a certificate with openssl: you MUST always call kubectl_exec to run openssl — NEVER just display the cert content and stop.
-  Follow this EXACT three-step sequence:
-  Step 1 — call get_secrets to retrieve the certificate.
-  Step 2 — get a running pod name (SEPARATE tool call):
+→ If the user asks to decode or inspect a certificate with openssl: follow this EXACT sequence:
+  Step 1 — call get_secrets to retrieve the certificate field (e.g. DB_SSL_CERT, tls.crt, ca.crt).
+  Step 2 — get a running pod name in the namespace:
     kubectl_exec("kubectl get pods -n <namespace> --field-selector=status.phase=Running --no-headers -o custom-columns=NAME:.metadata.name")
     Pick the first pod name returned.
-  Step 3 — exec openssl in that pod (SEPARATE tool call). Check the cert format from Step 1:
-    • If the cert value starts with "-----BEGIN CERTIFICATE-----" (already PEM):
-      kubectl_exec("kubectl exec -n <namespace> <pod-name> -- sh -c 'echo \"-----BEGIN CERTIFICATE-----\\n<cert-body>\\n-----END CERTIFICATE-----\" | openssl x509 -text -noout'")
-    • If the cert value is raw base64 (no PEM headers):
-      kubectl_exec("kubectl exec -n <namespace> <pod-name> -- sh -c 'echo <base64-value> | base64 -d | openssl x509 -text -noout'")
-  CRITICAL: kubectl_exec uses the Python K8s API — $() subshell substitution does NOT work.
-  CRITICAL: Displaying the cert content is NOT sufficient — you MUST complete Step 3 with openssl output.
+  Step 3 — run openssl via kubectl exec (kubectl_exec will handle this automatically):
+    kubectl_exec("kubectl exec -n <namespace> <pod-name> -- sh -c 'echo \"<pem-content>\" | openssl x509 -text -noout'")
+    If the cert is already PEM (starts with -----BEGIN CERTIFICATE-----), pipe it directly.
+    If the cert is raw base64, add "| base64 -d" before openssl.
+  CRITICAL: Do NOT use $() subshell substitution — always use literal pod names and cert values from prior steps.
+  CRITICAL: Displaying the cert is NOT the final answer — always complete Step 3 with openssl output.
 
 **ConfigMaps**: → get_configmap_list
 **Services / endpoints**: → get_service_status
