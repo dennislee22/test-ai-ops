@@ -2365,6 +2365,76 @@ async def api_rag_query(query: str, top_k: int = 50, sheet: Optional[str] = None
         return _JSONResponse(status_code=500, content={"error": str(e)})
 
 
+def _llm_synthesise(context: str, question: str) -> str:
+    """
+    Call the loaded LLM directly (no agent, no tools) to synthesise an answer
+    from the provided RAG context. Uses whichever backend is loaded (HF or GGUF).
+    Returns the raw answer string.
+    """
+    try:
+        tok, mdl, is_q3 = globals()["tokenizer"], globals()["model"], globals()["_is_qwen3"]
+    except KeyError:
+        return context  # LLM not loaded yet — fall back to raw context
+
+    sys_prompt = (
+        "You are the ECS Knowledge Bot. You answer questions strictly from the "
+        "knowledge base context provided. Be concise and factual. "
+        "Do NOT call any cluster tools. Do NOT invent information not in the context."
+    )
+    user_msg = (
+        "[KNOWLEDGE BASE CONTEXT]\n"
+        + context + "\n"
+        + "[END CONTEXT]\n\n"
+        + "Question: " + question + "\n\n"
+        + "Answer using only the context above. If the context does not contain "
+        + "relevant information, say so clearly."
+    )
+    msgs = [
+        {"role": "system", "content": sys_prompt},
+        {"role": "user",   "content": user_msg},
+    ]
+
+    try:
+        if tok is None:
+            # GGUF path
+            resp = mdl.create_chat_completion(
+                messages=msgs,
+                max_tokens=1024,
+                temperature=0.3,
+                top_p=0.9,
+                repeat_penalty=1.05,
+            )
+            raw = resp["choices"][0]["message"].get("content", "") or ""
+        else:
+            # HuggingFace Transformers path
+            import torch
+            kw = {"add_generation_prompt": True}
+            if is_q3:
+                kw["enable_thinking"] = False
+            encoded = tok.apply_chat_template(msgs, tokenize=True, return_tensors="pt", **kw)
+            ids = (encoded["input_ids"] if hasattr(encoded, "__getitem__") and not hasattr(encoded, "shape") else encoded).to(mdl.device)
+            with torch.no_grad():
+                out = mdl.generate(
+                    ids,
+                    max_new_tokens=1024,
+                    do_sample=False,
+                    temperature=1.0,
+                    repetition_penalty=1.05,
+                    pad_token_id=tok.eos_token_id,
+                )
+            raw = tok.decode(out[0][ids.shape[-1]:], skip_special_tokens=True)
+
+        # Strip thinking tags if present
+        import re as _re
+        raw = _re.sub(r'<think>[\s\S]*?</think>\s*', '', raw).strip()
+        return raw or context
+
+    except Exception as exc:
+        logger.warning(f"[_llm_synthesise] LLM call failed: {exc} — returning raw context")
+        return context
+
+
+
 class KbAskRequest(BaseModel):
     q: str
     top_k: int = 50
@@ -2412,7 +2482,15 @@ async def api_kb_ask(req: KbAskRequest):
         logger.info(f"[API/kb/ask] RAG context chars={len(context)}")
         if not context.strip() or context == "No relevant documentation found.":
             context = "I couldn't find anything in the knowledge base matching your query.\n\nTry asking about documented topics such as:\n  • known issues (e.g. \"list all longhorn known issues\")\n  • prerequisites (e.g. \"what are the ECS prerequisites?\")\n  • dos and don'ts (e.g. \"show longhorn dos and donts\")\n  • past learnings (e.g. \"show past incident learnings\")"
-        return {"answer": context, "query": req.q, "top_k": top_k}
+            return {"answer": context, "query": req.q, "top_k": top_k}
+
+        # Synthesise answer with LLM — runs on GPU/CPU, no cluster tools
+        logger.info(f"[API/kb/ask] calling _llm_synthesise")
+        answer = await _asyncio.get_event_loop().run_in_executor(
+            None, lambda: _llm_synthesise(context, req.q)
+        )
+        logger.info(f"[API/kb/ask] synthesis done, answer chars={len(answer)}")
+        return {"answer": answer, "query": req.q, "top_k": top_k}
 
     except Exception as e:
         logger.error(f"[API/kb/ask] {e}", exc_info=True)
