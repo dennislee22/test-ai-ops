@@ -293,7 +293,7 @@ button{cursor:pointer;font-family:inherit}
   background:var(--panelBg);border:2px solid var(--accent);border-radius:10px;
   padding:18px 20px;animation:fadeUp .25s ease;
 }
-.kb-answer-q{
+.kb-answer-q{display:flex;justify-content:space-between;align-items:baseline;
   font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent);
   font-weight:600;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--panelBorder);
 }
@@ -309,6 +309,8 @@ button{cursor:pointer;font-family:inherit}
 }
 .kb-copy-btn:hover{background:var(--accent);color:var(--bg)}
 .kb-spinner{display:flex;align-items:center;gap:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);padding:12px 0}
+.kb-elapsed{color:var(--accent);font-size:11px;min-width:28px}
+.kb-answer-elapsed{margin-left:auto;font-size:10px;color:var(--dimText);font-family:'IBM Plex Mono',monospace}
 .kb-spinner span{animation:dotPulse 1.4s ease-in-out infinite}
 .kb-spinner span:nth-child(2){animation-delay:.2s}
 .kb-spinner span:nth-child(3){animation-delay:.4s}
@@ -1264,39 +1266,74 @@ document.querySelectorAll('.mtab').forEach(btn => {
 
     const topK = parseInt(topkSlider.value, 10) || 50;
 
-    // Spinner
+    // Status box with elapsed timer
     const spinner = document.createElement('div');
     spinner.className = 'kb-spinner';
-    spinner.innerHTML = '&#128218; Searching knowledge base <span>#128218; Searching knowledge base and synthesising answer <span>.</span><span>.</span><span>.</span>';
+    spinner.innerHTML = '<span class="kb-status-text">&#128218; Searching knowledge base…</span> '
+      + '<span class="kb-elapsed">0s</span>';
     body.appendChild(spinner);
     body.scrollTop = body.scrollHeight;
 
+    let _elapsed = 0;
+    const _timer = setInterval(() => {
+      _elapsed++;
+      const el = spinner.querySelector('.kb-elapsed');
+      if(el) el.textContent = _elapsed + 's';
+    }, 1000);
+
     try {
-      const res  = await fetch('/api/kb/ask', {
+      const res = await fetch('/api/kb/stream', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ q, top_k: topK })
       });
-      const data = await res.json();
-      spinner.remove();
-      const answer = data.answer || data.error || '(No results found)';
-      renderAnswer(q, topK, answer);
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      while(true){
+        const {done, value} = await reader.read();
+        if(done) break;
+        buf += dec.decode(value, {stream:true});
+        const parts = buf.split('\n\n');
+        buf = parts.pop();
+        for(const part of parts){
+          const line = part.trim();
+          if(!line.startsWith('data:')) continue;
+          let payload;
+          try { payload = JSON.parse(line.slice(5).trim()); } catch{ continue; }
+          if(payload.type === 'status'){
+            const el = spinner.querySelector('.kb-status-text');
+            if(el) el.textContent = '\u{1F4DA} ' + payload.text;
+          } else if(payload.type === 'result'){
+            clearInterval(_timer);
+            spinner.remove();
+            renderAnswer(q, topK, payload.answer || '(No answer)', payload.elapsed);
+          } else if(payload.type === 'error'){
+            clearInterval(_timer);
+            spinner.remove();
+            renderAnswer(q, topK, '\u26a0\ufe0f Error: ' + payload.text);
+          }
+        }
+      }
     } catch(err) {
+      clearInterval(_timer);
       spinner.remove();
-      renderAnswer(q, topK, '⚠️ Error: ' + err.message);
+      renderAnswer(q, topK, '\u26a0\ufe0f Error: ' + err.message);
     } finally {
+      clearInterval(_timer);
       sendBtn.disabled = false;
       input.focus();
     }
   }
 
-  function renderAnswer(question, topK, raw){
+  function renderAnswer(question, topK, raw, elapsed){
     const block = document.createElement('div');
     block.className = 'kb-answer-block';
 
     const qDiv = document.createElement('div');
     qDiv.className = 'kb-answer-q';
-    qDiv.textContent = `› ${question}`;
+    qDiv.innerHTML = `<span>› ${question}</span>`
+      + (elapsed != null ? `<span class="kb-answer-elapsed">&#8987; ${elapsed}s</span>` : '');
     block.appendChild(qDiv);
 
     const ansDiv = document.createElement('div');

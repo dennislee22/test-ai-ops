@@ -2377,8 +2377,10 @@ def _llm_synthesise(context: str, question: str) -> str:
         return context or ""  # LLM not loaded yet — fall back to raw context
 
     sys_prompt = (
-        "You are the ECS Knowledge Bot. You answer questions strictly from the "
-        "knowledge base context provided. Be concise and factual. "
+        "You are the ECS Knowledge Bot for Cloudera ECS (Embedded Container Service) — "
+        "a Kubernetes-based platform for running Cloudera Data Platform (CDP) workloads in an air-gapped environment. "
+        "You answer questions strictly from the knowledge base context provided. Be concise and factual. "
+        "Do NOT expand ECS as anything other than Embedded Container Service. "
         "Do NOT call any cluster tools. Do NOT invent information not in the context."
     )
     if context:
@@ -2394,10 +2396,11 @@ def _llm_synthesise(context: str, question: str) -> str:
         user_msg = (
             "No relevant knowledge base entries were found for this query.\n\n"
             + "Question: " + question + "\n\n"
-            + "If this is a question about what you can do or who you are, "
-            + "introduce yourself as the ECS Knowledge Bot and explain your purpose. "
-            + "If it is an unrelated question, politely say it is outside your knowledge base "
-            + "and suggest relevant topics: known issues, prerequisites, dos and donts, past learnings."
+            + "If this is a question about what you can do or who you are, introduce yourself briefly: "
+            + "you are the ECS Knowledge Bot for Cloudera ECS (Embedded Container Service). "
+            + "You search a knowledge base of runbooks, known issues, prerequisites, dos and don'ts, and past learnings. "
+            + "Keep the answer to 3 sentences maximum. "
+            + "If it is an unrelated or conversational question (e.g. 'how are you'), respond warmly in 1 sentence then offer to help with KB topics."
         )
     msgs = [
         {"role": "system", "content": sys_prompt},
@@ -2505,6 +2508,70 @@ async def api_kb_ask(req: KbAskRequest):
     except Exception as e:
         logger.error(f"[API/kb/ask] {e}", exc_info=True)
         return _JSONResponse(status_code=500, content={"error": str(e)})
+
+@api.post("/kb/stream", summary="ECS Knowledge Bot — SSE streaming synthesis")
+async def api_kb_stream(req: KbAskRequest):
+    """
+    SSE streaming version of /api/kb/ask.
+    Emits: status events during RAG+synthesis, then a final result event.
+    """
+    import asyncio as _asyncio
+    import time as _time
+
+    async def _generate():
+        def _sse(obj):
+            return f"data: {json.dumps(obj)}\n\n"
+
+        start = _time.time()
+        q = req.q.strip()
+        if not q:
+            yield _sse({"type": "error", "text": "Empty query"})
+            return
+
+        top_k = max(10, min(req.top_k, 500))
+
+        # Auto-detect sheet (same logic as /kb/ask)
+        sheet = req.sheet
+        if not sheet:
+            ql = q.lower()
+            if any(k in ql for k in ["past learning", "past incident", "postmortem", "what went wrong", "incident", "lessons learned"]):
+                sheet = "Past Learnings"
+            elif any(k in ql for k in ["known issue", "known problem", "list issue", "unresolved", "open issue"]):
+                sheet = "Known Issues"
+            elif any(k in ql for k in ["dos and don", "dos & don", "best practice", "what to do", "what not to do", "donts"]):
+                sheet = "Dos and Donts"
+            elif any(k in ql for k in ["prerequisite", "prereq", "before deploy", "before install", "what must", "required before"]):
+                sheet = "Prerequisites"
+
+        yield _sse({"type": "status", "text": f"Searching knowledge base{(' · sheet: ' + sheet) if sheet else ''}…"})
+
+        try:
+            context = await _asyncio.get_event_loop().run_in_executor(
+                None, lambda: rag_retrieve(query=q, top_k=top_k, sheet=sheet)
+            )
+            no_rag = not context.strip() or context == "No relevant documentation found."
+            rag_ctx = None if no_rag else context
+            match_count = 0
+            if not no_rag:
+                import re as _re
+                m = _re.search(r'(\d+) match', context)
+                match_count = int(m.group(1)) if m else "?"
+            yield _sse({"type": "status", "text": f"Found {match_count} match(es) — synthesising answer…" if not no_rag else "No matches found — generating response…"})
+
+            answer = await _asyncio.get_event_loop().run_in_executor(
+                None, lambda: _llm_synthesise(rag_ctx, q)
+            )
+            answer = answer or "I'm sorry, I was unable to generate a response. Please try rephrasing your question."
+            elapsed = round(_time.time() - start, 1)
+            yield _sse({"type": "result", "answer": answer, "query": q, "elapsed": elapsed, "top_k": top_k})
+
+        except Exception as exc:
+            logger.error(f"[api_kb_stream] {exc}", exc_info=True)
+            yield _sse({"type": "error", "text": str(exc)})
+
+    from fastapi.responses import StreamingResponse as _SR
+    return _SR(_generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
 
 @api.get("/system", summary="Live CPU / RAM / GPU utilisation metrics")
 async def api_system():
