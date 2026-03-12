@@ -2381,11 +2381,18 @@ def _llm_synthesise(context: str, question: str, top_k: int = 50) -> str:
         "a Kubernetes-based platform for running Cloudera Data Platform (CDP) workloads in an air-gapped environment. "
         "You answer questions strictly from the knowledge base context provided. Be concise and factual. "
         "Do NOT expand ECS as anything other than Embedded Container Service. "
-        "Do NOT call any cluster tools. Do NOT invent information not in the context. "
-        "IMPORTANT: If the question is a single letter, a partial word (e.g. 'wh', 'li', 'ab'), "
-        "or otherwise too short/unclear to interpret, respond ONLY with: "
-        "'I didn't quite understand that. Could you rephrase your question? "
-        "For example: list all known issues, what are the ECS prerequisites, show longhorn dos and donts.'"
+        "Do NOT call any cluster tools. Do NOT invent information not in the context.\n\n"
+        "When NO knowledge base context is provided, apply these rules in order:\n"
+        "1. If the question is a single letter, partial word (e.g. 'wh', 'li', 'how', 'ab'), "
+        "random characters, or too vague to understand: respond ONLY with: "
+        "'Sorry, I didn't quite understand your question. Could you rephrase it? "
+        "For example: list known issues with Longhorn, what are the prerequisites, what are the dos and don'ts.'\n"
+        "2. If the question is a greeting or asks who you are / what you can do: briefly introduce yourself "
+        "as the ECS Knowledge Bot and mention you search a knowledge base of runbooks, known issues, "
+        "prerequisites, dos and don'ts, and past learnings. Add that no documents have been ingested yet "
+        "and the user should go to Settings \u2192 RAG Documents.\n"
+        "3. For all other questions with no context: respond ONLY with: "
+        "'No results found. Please ensure your RAG documents have been ingested via Settings \u2192 RAG Documents.'"
     )
     if context:
         user_msg = (
@@ -2396,24 +2403,8 @@ def _llm_synthesise(context: str, question: str, top_k: int = 50) -> str:
             + "Answer using only the context above."
         )
     else:
-        # No RAG results — check if conversational/identity first, else direct to ingest
-        _ql = question.lower().strip("?!. ")
-        _identity_kw = [
-            "who are you", "what are you", "what can you do", "what do you do",
-            "how are you", "hello", "hi", "hey", "introduce yourself",
-            "tell me about yourself", "what is this", "help"
-        ]
-        _is_identity = any(_ql == k or _ql.startswith(k) for k in _identity_kw)
-        if _is_identity:
-            user_msg = (
-                "Question: " + question + "\n\n"
-                + "Respond in 2 sentences: introduce yourself as the ECS Knowledge Bot for Cloudera ECS "
-                + "(Embedded Container Service), mention you search a knowledge base of runbooks, known issues, "
-                + "prerequisites, dos and don'ts, and past learnings. "
-                + "Note that no documents have been ingested yet and the user should go to Settings → RAG Documents."
-            )
-        else:
-            return "No results found. Please ensure your RAG documents have been ingested via Settings → RAG Documents."
+        # No RAG results — system prompt rules handle gibberish/identity/unknown
+        user_msg = "Question: " + question
     msgs = [
         {"role": "system", "content": sys_prompt},
         {"role": "user",   "content": user_msg},
