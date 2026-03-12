@@ -2396,17 +2396,24 @@ def _llm_synthesise(context: str, question: str, top_k: int = 50) -> str:
             + "Answer using only the context above."
         )
     else:
-        # No RAG results — LLM answers from its own knowledge of this KB bot
-        user_msg = (
-            "No knowledge base entries were found for this query.\n\n"
-            + "Question: " + question + "\n\n"
-            + "RULES:\n"
-            + "- Do NOT answer from your own knowledge. Do NOT suggest external documentation or support.\n"
-            + "- If this is a question about who you are or what you can do: briefly introduce yourself as the ECS Knowledge Bot "
-            + "and say no documents have been ingested yet.\n"
-            + "- For ALL other questions: respond with exactly this message: "
-            + "'No results found. Please ensure your RAG documents have been ingested via Settings → RAG Documents.'"
-        )
+        # No RAG results — check if conversational/identity first, else direct to ingest
+        _ql = question.lower().strip("?!. ")
+        _identity_kw = [
+            "who are you", "what are you", "what can you do", "what do you do",
+            "how are you", "hello", "hi", "hey", "introduce yourself",
+            "tell me about yourself", "what is this", "help"
+        ]
+        _is_identity = any(_ql == k or _ql.startswith(k) for k in _identity_kw)
+        if _is_identity:
+            user_msg = (
+                "Question: " + question + "\n\n"
+                + "Respond in 2 sentences: introduce yourself as the ECS Knowledge Bot for Cloudera ECS "
+                + "(Embedded Container Service), mention you search a knowledge base of runbooks, known issues, "
+                + "prerequisites, dos and don'ts, and past learnings. "
+                + "Note that no documents have been ingested yet and the user should go to Settings → RAG Documents."
+            )
+        else:
+            return "No results found. Please ensure your RAG documents have been ingested via Settings → RAG Documents."
     msgs = [
         {"role": "system", "content": sys_prompt},
         {"role": "user",   "content": user_msg},
