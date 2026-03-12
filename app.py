@@ -2381,14 +2381,24 @@ def _llm_synthesise(context: str, question: str) -> str:
         "knowledge base context provided. Be concise and factual. "
         "Do NOT call any cluster tools. Do NOT invent information not in the context."
     )
-    user_msg = (
-        "[KNOWLEDGE BASE CONTEXT]\n"
-        + context + "\n"
-        + "[END CONTEXT]\n\n"
-        + "Question: " + question + "\n\n"
-        + "Answer using only the context above. If the context does not contain "
-        + "relevant information, say so clearly."
-    )
+    if context:
+        user_msg = (
+            "[KNOWLEDGE BASE CONTEXT]\n"
+            + context + "\n"
+            + "[END CONTEXT]\n\n"
+            + "Question: " + question + "\n\n"
+            + "Answer using only the context above."
+        )
+    else:
+        # No RAG results — LLM answers from its own knowledge of this KB bot
+        user_msg = (
+            "No relevant knowledge base entries were found for this query.\n\n"
+            + "Question: " + question + "\n\n"
+            + "If this is a question about what you can do or who you are, "
+            + "introduce yourself as the ECS Knowledge Bot and explain your purpose. "
+            + "If it is an unrelated question, politely say it is outside your knowledge base "
+            + "and suggest relevant topics: known issues, prerequisites, dos and donts, past learnings."
+        )
     msgs = [
         {"role": "system", "content": sys_prompt},
         {"role": "user",   "content": user_msg},
@@ -2480,14 +2490,13 @@ async def api_kb_ask(req: KbAskRequest):
             None, lambda: rag_retrieve(query=req.q, top_k=top_k, sheet=sheet)
         )
         logger.info(f"[API/kb/ask] RAG context chars={len(context)}")
-        if not context.strip() or context == "No relevant documentation found.":
-            context = "I couldn't find anything in the knowledge base matching your query.\n\nTry asking about documented topics such as:\n  • known issues (e.g. \"list all longhorn known issues\")\n  • prerequisites (e.g. \"what are the ECS prerequisites?\")\n  • dos and don'ts (e.g. \"show longhorn dos and donts\")\n  • past learnings (e.g. \"show past incident learnings\")"
-            return {"answer": context, "query": req.q, "top_k": top_k}
+        no_rag = not context.strip() or context == "No relevant documentation found."
+        rag_ctx = None if no_rag else context
 
-        # Synthesise answer with LLM — runs on GPU/CPU, no cluster tools
-        logger.info(f"[API/kb/ask] calling _llm_synthesise")
+        # Always call LLM — with context if RAG found results, without if not
+        logger.info(f"[API/kb/ask] calling _llm_synthesise (rag_found={not no_rag})")
         answer = await _asyncio.get_event_loop().run_in_executor(
-            None, lambda: _llm_synthesise(context, req.q)
+            None, lambda: _llm_synthesise(rag_ctx, req.q)
         )
         logger.info(f"[API/kb/ask] synthesis done, answer chars={len(answer)}")
         return {"answer": answer, "query": req.q, "top_k": top_k}
