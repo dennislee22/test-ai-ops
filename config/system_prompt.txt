@@ -71,15 +71,19 @@ Examples:
 → get_secrets with filter_keys=["username","password","user","pass"] for credentials
 → get_secrets with filter_keys=["tls","cert","ca"] for certificates
 → If password not found in secrets, follow up with exec_db_query to query the DB directly.
-→ If the user asks to decode or inspect a certificate with openssl: follow this EXACT two-step sequence:
-  Step 1 — get a running pod name (SEPARATE tool call):
-    kubectl_exec("kubectl get pods -n <namespace> --no-headers -o custom-columns=NAME:.metadata.name")
-    Pick the first pod name returned (e.g. "cdp-release-xyz-abc").
-  Step 2 — exec into that pod using the LITERAL base64 value from get_secrets (SEPARATE tool call):
-    kubectl_exec("kubectl exec -n <namespace> <pod-name> -- sh -c 'echo <base64-value> | base64 -d | openssl x509 -text -noout'")
-    Where <base64-value> is the raw base64 string from the secret field (tls.crt, ca.crt, DB_SSL_CERT etc.).
+→ If the user asks to decode or inspect a certificate with openssl: you MUST always call kubectl_exec to run openssl — NEVER just display the cert content and stop.
+  Follow this EXACT three-step sequence:
+  Step 1 — call get_secrets to retrieve the certificate.
+  Step 2 — get a running pod name (SEPARATE tool call):
+    kubectl_exec("kubectl get pods -n <namespace> --field-selector=status.phase=Running --no-headers -o custom-columns=NAME:.metadata.name")
+    Pick the first pod name returned.
+  Step 3 — exec openssl in that pod (SEPARATE tool call). Check the cert format from Step 1:
+    • If the cert value starts with "-----BEGIN CERTIFICATE-----" (already PEM):
+      kubectl_exec("kubectl exec -n <namespace> <pod-name> -- sh -c 'echo \"-----BEGIN CERTIFICATE-----\\n<cert-body>\\n-----END CERTIFICATE-----\" | openssl x509 -text -noout'")
+    • If the cert value is raw base64 (no PEM headers):
+      kubectl_exec("kubectl exec -n <namespace> <pod-name> -- sh -c 'echo <base64-value> | base64 -d | openssl x509 -text -noout'")
   CRITICAL: kubectl_exec uses the Python K8s API — $() subshell substitution does NOT work.
-  Always resolve pod names and secret values in prior separate tool calls, then use literal values only.
+  CRITICAL: Displaying the cert content is NOT sufficient — you MUST complete Step 3 with openssl output.
 
 **ConfigMaps**: → get_configmap_list
 **Services / endpoints**: → get_service_status
