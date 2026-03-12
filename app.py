@@ -89,8 +89,7 @@ ENABLE_FALLBACK_ROUTING: bool = True
 # the Settings → Max Output tab.  Synthesis calls use this value; tool-
 # selection calls always use 256 (just a small <tool_call> JSON block).
 _MAX_NEW_TOKENS: int = int(os.getenv("MAX_NEW_TOKENS", "4096"))
-import contextvars as _cv
-_req_max_tokens_var: _cv.ContextVar[int] = _cv.ContextVar("_req_max_tokens_var", default=0)
+_per_req = {"max_new_tokens": 0}  # single-writer slot; safe because LLM is single-threaded
 
 # Request-scoped flag — True when the user has 'Show Secret Values' enabled in Settings.
 # Set per-request in chat_stream; read by agent/routing.py via get_decode_secrets().
@@ -839,7 +838,6 @@ class AgentState(TypedDict):
     iteration: int
     status_updates: list
     direct_answer: Optional[str]   # set by tool_node to bypass LLM synthesis
-    max_new_tokens: int             # per-request token override (0 = use global)
 
 def _build_llm():
     """
@@ -1256,7 +1254,7 @@ def build_agent():
         _log_ag.debug(f"[llm_node itr={itr}] chat_msgs count={len(chat_msgs)} has_tool_results={has_tool_results}")
 
         # ── Token budget ──────────────────────────────────────────────────────
-        _req_max = state.get('max_new_tokens', 0)  # per-request override from state
+        _req_max = _per_req.get('max_new_tokens', 0)  # per-request override
         if not has_tool_results:
             _max_new = 512
         else:
@@ -1563,7 +1561,6 @@ async def run_agent(user_message: str) -> dict:
         "tool_calls_made": [],
         "iteration": 0,
         "status_updates": [f"🤖 Model: {LLM_MODEL}"],
-        "max_new_tokens": 0,
     })
     elapsed = time.time() - t0
     last    = final["messages"][-1]
@@ -1605,6 +1602,7 @@ async def run_agent_streaming(user_message: str, history: list = None):
     yield _sse({"type": "status", "text": f"🤖 Model: {LLM_MODEL}"})
 
     agent          = get_agent()
+    _per_req["max_new_tokens"] = max_new_tokens  # set before graph invocation
     t0             = time.time()
     all_updates: list      = [f"🤖 Model: {LLM_MODEL}"]
     tools_called: list     = []
@@ -1657,7 +1655,6 @@ async def run_agent_streaming(user_message: str, history: list = None):
                     "tool_calls_made": [],
                     "iteration":       0,
                     "status_updates":  [],
-                    "max_new_tokens":  max_new_tokens,
                 },
                 version="v2",
             ):
@@ -1774,7 +1771,6 @@ async def run_agent_streaming(user_message: str, history: list = None):
                         "tool_calls_made": [],
                         "iteration":       0,
                         "status_updates":  [],
-                        "max_new_tokens":  max_new_tokens,
                     }),
                     timeout=_STREAM_TIMEOUT,
                 )
