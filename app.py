@@ -2385,7 +2385,8 @@ async def api_kb_ask(req: KbAskRequest):
     logger.info(f"[API] POST /api/kb/ask  q={req.q!r:.120}  top_k={top_k}")
 
     try:
-        context = await asyncio.get_event_loop().run_in_executor(
+        import asyncio as _asyncio
+        context = await _asyncio.get_event_loop().run_in_executor(
             None, lambda: rag_retrieve(query=req.q, top_k=top_k, sheet=req.sheet)
         )
         logger.info(f"[API/kb/ask] RAG context chars={len(context)}")
