@@ -2909,41 +2909,33 @@ def exec_pod_command(namespace: str, pod_name: str, command: str, container: str
 
     output = _run(pod_name)
 
-    # If binary not found, try other preferred pods directly (no probing — just run and check)
+    # If binary not found and we have a preferred exec pod, retry there directly
     if output and ("not found" in output or "No such file" in output):
         _nf = re.search(r"(\S+):\s*not found", output)
-        binary_hint = _nf.group(1) if _nf else "unknown"
-        _log.warning(f"[exec_pod_command] {binary_hint!r} missing in {pod_name!r}, trying other pods...")
+        binary_hint = _nf.group(1) if _nf else "a required binary"
+        _log.warning(f"[exec_pod_command] {binary_hint!r} missing in {pod_name!r}")
 
-        try:
-            all_pods = _core.list_namespaced_pod(
-                namespace, field_selector="status.phase=Running", limit=200
-            ).items
-        except Exception:
-            all_pods = []
+        if _EXEC_POD_PATTERN:
+            # Find the preferred pod by prefix
+            preferred_pod = ""
+            try:
+                all_pods = _core.list_namespaced_pod(
+                    namespace, field_selector="status.phase=Running", limit=200
+                ).items
+                for p in all_pods:
+                    if p.metadata.name and p.metadata.name.startswith(_EXEC_POD_PATTERN):
+                        preferred_pod = p.metadata.name
+                        break
+            except Exception:
+                pass
 
-        _prefer      = re.compile(r"(-app-|-service-|-manager-|-controller-|-worker-|-api-|-server-|-gateway-|-proxy-|-plane-app-|-platform-|-core-)", re.I)
-        _deprioritise = re.compile(r"(embedded-db|postgres|mysql|mariadb|prometheus|alertmanager|fluentd|fluent-bit|elasticsearch|kafka|zookeeper|-exporter-)", re.I)
+            if preferred_pod and preferred_pod != pod_name:
+                _log.info(f"[exec_pod_command] retrying with preferred pod {preferred_pod!r} (EXEC_POD_PATTERN={_EXEC_POD_PATTERN!r})")
+                return _run(preferred_pod)
+            elif not preferred_pod:
+                _log.warning(f"[exec_pod_command] no pod matching EXEC_POD_PATTERN={_EXEC_POD_PATTERN!r} found in namespace {namespace!r}")
 
-        def _pod_score(p):
-            name = p.metadata.name or ""
-            if _EXEC_POD_PATTERN and name.startswith(_EXEC_POD_PATTERN): return -1  # always first
-            if _deprioritise.search(name): return 2
-            if _prefer.search(name):       return 0
-            return 1
-
-        for p in sorted(all_pods, key=_pod_score):
-            candidate = p.metadata.name
-            if candidate == pod_name:
-                continue
-            _log.debug(f"[exec_pod_command] trying {candidate!r}...")
-            result = _run(candidate)
-            if result and "not found" not in result and "No such file" not in result and not result.startswith("[ERROR]"):
-                _log.info(f"[exec_pod_command] success with pod {candidate!r}")
-                return result
-            _log.debug(f"[exec_pod_command] {candidate!r} failed: {result!r:.80}")
-
-        return f"[ERROR] '{binary_hint}' not available in any running pod in namespace '{namespace}'."
+        return f"[ERROR] {binary_hint!r} not found in pod {pod_name!r}. Set EXEC_POD_PATTERN to a pod that has it."
 
     return output or "(command returned no output)"
 
