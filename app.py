@@ -2398,13 +2398,14 @@ def _llm_synthesise(context: str, question: str, top_k: int = 50) -> str:
     else:
         # No RAG results — LLM answers from its own knowledge of this KB bot
         user_msg = (
-            "No relevant knowledge base entries were found for this query.\n\n"
+            "No knowledge base entries were found for this query.\n\n"
             + "Question: " + question + "\n\n"
-            + "If this is a question about what you can do or who you are, introduce yourself briefly: "
-            + "you are the ECS Knowledge Bot for Cloudera ECS (Embedded Container Service). "
-            + "You search a knowledge base of runbooks, known issues, prerequisites, dos and don'ts, and past learnings. "
-            + "Keep the answer to 3 sentences maximum. "
-            + "If it is an unrelated or conversational question (e.g. 'how are you'), respond warmly in 1 sentence then offer to help with KB topics."
+            + "RULES:\n"
+            + "- Do NOT answer from your own knowledge. Do NOT suggest external documentation or support.\n"
+            + "- If this is a question about who you are or what you can do: briefly introduce yourself as the ECS Knowledge Bot "
+            + "and say no documents have been ingested yet.\n"
+            + "- For ALL other questions: respond with exactly this message: "
+            + "'No results found. Please ensure your RAG documents have been ingested via Settings → RAG Documents.'"
         )
     msgs = [
         {"role": "system", "content": sys_prompt},
@@ -2550,6 +2551,7 @@ async def api_kb_stream(req: KbAskRequest):
             elif any(k in ql for k in ["prerequisite", "prereq", "before deploy", "before install", "what must", "required before"]):
                 sheet = "Prerequisites"
 
+        yield _sse({"type": "question", "text": q})
         yield _sse({"type": "status", "text": f"Searching knowledge base{(' · sheet: ' + sheet) if sheet else ''}…"})
 
         try:

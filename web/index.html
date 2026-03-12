@@ -952,6 +952,14 @@ NUM_GPU=0</code></pre>
       <!-- ── Settings pane ────────────────────────────────────────────────── -->
       <div id="settings-pane">
 
+        <!-- Left vertical nav -->
+        <nav class="stab-sidebar">
+          <button class="stab active" data-tab="tab-cluster"><span class="stab-icon">&#128279;</span>Kubeconfig</button>
+          <button class="stab" data-tab="tab-kb"><span class="stab-icon">&#128196;</span>RAG Documents</button>
+          <button class="stab" data-tab="tab-output"><span class="stab-icon">&#127919;</span>LLM Input/Output</button>
+          <button class="stab" data-tab="tab-security"><span class="stab-icon">&#128274;</span>Security</button>
+        </nav>
+
         <!-- Right content -->
         <div class="stab-content">
 
@@ -1272,8 +1280,9 @@ document.querySelectorAll('.mtab').forEach(btn => {
     // Status box with elapsed timer
     const spinner = document.createElement('div');
     spinner.className = 'kb-spinner';
-    spinner.innerHTML = '<span class="kb-status-text">&#128218; Searching knowledge base…</span> '
-      + '<span class="kb-elapsed">0s</span>';
+    spinner.innerHTML = '<div class="kb-spinner-q"></div>'
+      + '<div><span class="kb-status-text">&#128218; Searching knowledge base…</span> '
+      + '<span class="kb-elapsed">0s</span></div>';
     body.appendChild(spinner);
     body.scrollTop = body.scrollHeight;
 
@@ -1304,7 +1313,10 @@ document.querySelectorAll('.mtab').forEach(btn => {
           if(!line.startsWith('data:')) continue;
           let payload;
           try { payload = JSON.parse(line.slice(5).trim()); } catch{ continue; }
-          if(payload.type === 'status'){
+          if(payload.type === 'question'){
+            const el = spinner.querySelector('.kb-spinner-q');
+            if(el){ el.textContent = '› ' + payload.text; el.style.cssText = 'font-family:\'IBM Plex Mono\',monospace;font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px'; }
+          } else if(payload.type === 'status'){
             const el = spinner.querySelector('.kb-status-text');
             if(el) el.textContent = '\u{1F4DA} ' + payload.text;
           } else if(payload.type === 'result'){
