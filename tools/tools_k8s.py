@@ -2780,7 +2780,7 @@ def _get_first_running_pod(namespace: str) -> str:
     return ""
 
 
-def _find_pod_with_binary(namespace: str, binary: str, max_pods: int = 20) -> str:
+def _find_pod_with_binary(namespace: str, binary: str, max_pods: int = 100) -> str:
     """
     Scan running pods in namespace until one is found that has `binary` available.
     Returns pod name, or empty string if none found within max_pods attempts.
@@ -2820,11 +2820,14 @@ def _find_pod_with_binary(namespace: str, binary: str, max_pods: int = 20) -> st
                 command=["/bin/sh", "-c", f"which {binary} 2>/dev/null || command -v {binary} 2>/dev/null"],
                 stderr=True, stdin=False, stdout=True, tty=False, _preload_content=True,
             )
+            _log.debug(f"[find_pod_with_binary] pod={pod_name!r} which={resp!r:.60}")
             if resp and resp.strip():
                 _log.info(f"[exec_pod_command] found {binary!r} in pod {pod_name!r}")
                 return pod_name
-        except Exception:
+        except Exception as _scan_err:
+            _log.debug(f"[find_pod_with_binary] pod={pod_name!r} scan error: {_scan_err}")
             continue
+    _log.warning(f"[exec_pod_command] {binary!r} not found in any of the scanned pods in namespace {namespace!r}")
     return ""
 
 
@@ -2908,6 +2911,8 @@ def exec_pod_command(namespace: str, pod_name: str, command: str, container: str
                 _log.info(f"[exec_pod_command] retrying with pod {better_pod!r}")
                 output = _run(better_pod)
                 pod_name = better_pod
+            elif not better_pod:
+                return f"[ERROR] '{binary_hint}' not found in any running pod in namespace '{namespace}'. Cannot run command."
 
     return output or "(command returned no output)"
 
