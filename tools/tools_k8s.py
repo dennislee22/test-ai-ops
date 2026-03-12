@@ -1311,7 +1311,7 @@ def _safe_reason(e) -> str:
     except Exception:
         return "Unknown API error"
 _ALLOW_WRITES     = os.getenv("KUBECTL_ALLOW_WRITES", "false").lower() in ("1", "true", "yes")
-_EXEC_POD_PATTERN   = os.getenv("EXEC_POD_PATTERN",   "mlx-control-plane-app-").strip()
+_EXEC_POD_PATTERN   = os.getenv("EXEC_POD_PATTERN",   "cdp-mlx-control-plane-app-").strip()
 _EXEC_POD_CONTAINER = os.getenv("EXEC_POD_CONTAINER", "cdp-release-mlx-control-plane-app").strip()
 _log.info(f"[tools_k8s] EXEC_POD_PATTERN={_EXEC_POD_PATTERN!r} container={_EXEC_POD_CONTAINER!r}")
 
@@ -2795,7 +2795,7 @@ def _find_exec_pod() -> tuple:
             field_selector="status.phase=Running", limit=500
         ).items
         for p in pods:
-            if p.metadata.name and p.metadata.name.startswith(_EXEC_POD_PATTERN):
+            if p.metadata.name and (_EXEC_POD_PATTERN in p.metadata.name or p.metadata.name.startswith(_EXEC_POD_PATTERN)):
                 _log.info(f"[exec_pod] found EXEC_POD_PATTERN pod: {p.metadata.name!r} in ns={p.metadata.namespace!r}")
                 return p.metadata.name, p.metadata.namespace
     except Exception as e:
