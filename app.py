@@ -2372,7 +2372,7 @@ def _llm_synthesise(context: str, question: str) -> str:
     Returns the raw answer string.
     """
     try:
-        tok, mdl, is_q3 = globals()["tokenizer"], globals()["model"], globals()["_is_qwen3"]
+        tok, mdl, is_q3 = globals()["_kb_tokenizer"], globals()["_kb_model"], globals()["_kb_is_qwen3"]
     except KeyError:
         return context or ""  # LLM not loaded yet — fall back to raw context
 
