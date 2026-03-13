@@ -1188,7 +1188,7 @@ def get_pv_usage(threshold: int = 80) -> str:
 
 # ── Prometheus metrics tool ──────────────────────────────────────────────────
 
-def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h", step: str = "60s") -> str:
+def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h", step: str = "60s", namespace: str = "") -> str:
     """
     Query Prometheus for time-series performance metrics and return tagged JSON
     for inline SVG chart rendering in the frontend.
@@ -1276,6 +1276,34 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h", step: st
                 f"Node-exporter is not installed, so disk I/O and network metrics are not scraped. "
                 f"Available metrics: cpu (pod CPU millicores), memory (pod memory MiB), "
                 f"pod_cpu, pod_memory, cluster_cpu, cluster_memory.")
+
+    # ── Namespace filter — inject into PromQL if specified ──────────────────
+    ns = namespace.strip().lower()
+    if ns:
+        # Insert {namespace="<ns>"} label selector into each metric name in the PromQL
+        # Works for both container_cpu_usage{...} and bare container_cpu_usage
+        import re as _re_ns
+        def _inject_ns(pql, ns_val):
+            ns_filter = f'namespace="{ns_val}"'
+            # Already has a label selector — append inside braces
+            def _add_to_existing(m):
+                inner = m.group(1).strip()
+                if inner:
+                    return '{' + inner + ',' + ns_filter + '}'
+                return '{' + ns_filter + '}'
+            result = _re_ns.sub(r'\{([^}]*)\}', _add_to_existing, pql)
+            # No label selector present — add one after each bare metric name
+            if result == pql:
+                result = _re_ns.sub(
+                    r'(container_cpu_usage|container_memory_usage_bytes'
+                    r'|kube_metrics_server_pods_cpu)',
+                    r'\1{' + ns_filter + '}',
+                    result
+                )
+            return result
+        promql = _inject_ns(promql, ns)
+        # Also update title to show namespace scope
+        title = f"{title} — ns:{ns}"
 
     # ── Duration → seconds ─────────────────────────────────────────────────
     def _dur_seconds(s):
@@ -1382,6 +1410,8 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h", step: st
         # Try fallback PromQLs for this metric key before giving up
         tried = [promql]
         for fallback_pql in FALLBACK_PROMQL.get(key, []):
+            if ns:
+                fallback_pql = _inject_ns(fallback_pql, ns)
             if fallback_pql in tried:
                 continue
             tried.append(fallback_pql)
@@ -3776,6 +3806,15 @@ K8S_TOOLS["query_prometheus_metrics"] = {
             "description": (
                 "Query resolution. Use '60s' for ≤6h windows, '5m' for ≤24h, '15m' for >24h. "
                 "Auto-scale: if duration is >24h, use '15m'; if >6h, use '5m'; else '60s'."
+            ),
+        },
+        "namespace": {
+            "type": "string",
+            "default": "",
+            "description": (
+                "Filter results to a specific Kubernetes namespace. "
+                "Extract from user question — 'in cdp namespace' → 'cdp', "
+                "'in the vault namespace' → 'vault'. Leave empty for all namespaces."
             ),
         },
     },

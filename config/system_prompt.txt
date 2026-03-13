@@ -117,8 +117,10 @@ Examples:
    Use when the question mentions "nodes", "per node", "each node", "node CPU", "node memory", or asks how loaded the cluster nodes are.
    Returns requests + limits + allocatable per node. This is the ONLY way to get per-node CPU/memory — node-exporter is not installed.
    NEVER use query_prometheus_metrics for node-level questions.
-**Pod CPU/memory trend over time / time-series graph / Prometheus chart**: → query_prometheus_metrics
-   Use ONLY when the question asks for a graph, trend, or time-series. Returns pod-level data (not node-level).
+**Pod CPU/memory usage graph / show usage / usage trend / usage over time**: → query_prometheus_metrics
+   Use when the question asks for CPU or memory usage (not requests/limits) — with or without a graph/trend keyword.
+   Returns pod-level time-series data with inline chart. NOT for node-level questions.
+   Pass namespace= if a namespace is mentioned (e.g. "in cdp namespace" → namespace="cdp").
    Available metrics: cpu/pod_cpu (pod CPU millicores), memory/pod_memory (pod memory MiB), cluster_cpu, cluster_memory.
    Note: node-exporter is NOT installed — disk_io and network metrics are unavailable.
    Pass duration= from question (1h, 6h, 24h, 7d). Default duration: 1h. Default metric: cpu.
