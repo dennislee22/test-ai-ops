@@ -1214,23 +1214,23 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h", step: st
     METRIC_MAP = {
         # CPU — millicores per pod (this cluster has no node-exporter)
         "cpu":          ("Pod CPU Usage (millicores)",
-                         "sort_desc(sum by (pod, namespace) (container_cpu_usage))",
+                         "sum by (pod, namespace (container_cpu_usage))",
                          "m"),
         "node_cpu":     ("Pod CPU Usage (millicores)",
-                         "sort_desc(sum by (pod, namespace) (container_cpu_usage))",
+                         "sum by (pod, namespace (container_cpu_usage))",
                          "m"),
         "pod_cpu":      ("Pod CPU Usage (millicores)",
-                         "sort_desc(sum by (pod, namespace) (container_cpu_usage))",
+                         "sum by (pod, namespace (container_cpu_usage))",
                          "m"),
         # Memory — MiB per pod
         "memory":       ("Pod Memory Usage (MiB)",
-                         "sort_desc(sum by (pod, namespace) (container_memory_usage_bytes)) / 1048576",
+                         "sum by (pod, namespace (container_memory_usage_bytes)) / 1048576",
                          "MiB"),
         "node_memory":  ("Pod Memory Usage (MiB)",
-                         "sort_desc(sum by (pod, namespace) (container_memory_usage_bytes)) / 1048576",
+                         "sum by (pod, namespace (container_memory_usage_bytes)) / 1048576",
                          "MiB"),
         "pod_memory":   ("Pod Memory Usage (MiB)",
-                         "sort_desc(sum by (pod, namespace) (container_memory_usage_bytes)) / 1048576",
+                         "sum by (pod, namespace (container_memory_usage_bytes)) / 1048576",
                          "MiB"),
         # Cluster-wide CPU limit total (single scalar — no node breakdown available)
         "cluster_cpu":  ("Cluster CPU Limits (cores)",
@@ -1259,9 +1259,9 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h", step: st
         "cpu":        ["sum by (pod, namespace) (kube_metrics_server_pods_cpu)"],
         "node_cpu":   ["sum by (pod, namespace) (kube_metrics_server_pods_cpu)"],
         "pod_cpu":    ["sum by (pod, namespace) (kube_metrics_server_pods_cpu)"],
-        "memory":     ["sort_desc(sum by (pod, namespace) (container_memory_usage_bytes)) / 1048576"],
-        "node_memory":["sort_desc(sum by (pod, namespace) (container_memory_usage_bytes)) / 1048576"],
-        "pod_memory": ["sort_desc(sum by (pod, namespace) (container_memory_usage_bytes)) / 1048576"],
+        "memory":     ["sum by (pod, namespace (container_memory_usage_bytes)) / 1048576"],
+        "node_memory":["sum by (pod, namespace (container_memory_usage_bytes)) / 1048576"],
+        "pod_memory": ["sum by (pod, namespace (container_memory_usage_bytes)) / 1048576"],
     }
 
     key = metric.lower().replace(" ", "_").replace("-", "_")
@@ -1458,6 +1458,15 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h", step: st
                 + available_hint)
 
     # ── Build chart payload ─────────────────────────────────────────────────
+    # Sort by last value descending (highest consumers first) — replaces PromQL sort_desc()
+    def _last_val(r):
+        vals = r.get("values", [])
+        try:
+            return float(vals[-1][1]) if vals else 0.0
+        except (ValueError, IndexError):
+            return 0.0
+
+    results = sorted(results, key=_last_val, reverse=True)
     total_series = len(results)
     CHART_CAP = 8  # max series in chart
 
@@ -1502,7 +1511,16 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h", step: st
 
     # Text summary — in sync with chart (same CHART_CAP series, same fmt)
     cap_note = f" (top {CHART_CAP} of {total_series})" if total_series > CHART_CAP else ""
-    summary_lines = [f"📊 {title} — last {duration}{cap_note}"]
+
+    # Caveat when user likely asked for node-level data but we only have pod-level
+    node_caveat = ""
+    if not ns:
+        node_caveat = (
+            "\nNote: per-node metrics are unavailable (no node-exporter on this cluster). "
+            "Showing pod-level data as the closest available proxy."
+        )
+
+    summary_lines = [f"📊 {title} — last {duration}{cap_note}{node_caveat}"]
     for s in series_out:
         if s["values"]:
             last_val = s["values"][-1][1]
