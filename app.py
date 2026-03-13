@@ -943,9 +943,12 @@ def build_agent():
             parts.append(f"--- TOOL RESULT {i} ---\n{body}\n")
         combined = "".join(parts)
 
-        _COMPONENT_HEALTH_KEYWORDS = (
+        _DNS_HEALTH_KEYWORDS = (
             "is coredns", "is the coredns", "coredns running", "coredns ok", "coredns health",
             "is dns", "is the dns", "dns running", "dns ok", "dns health",
+            "dns resolution", "nslookup",
+        )
+        _COMPONENT_HEALTH_KEYWORDS = (
             "is vault", "is the vault", "vault running", "vault ok",
             "is longhorn", "longhorn running", "longhorn ok",
             "is prometheus", "prometheus running", "prometheus ok",
@@ -954,6 +957,7 @@ def build_agent():
             "running properly", "running ok", "running correctly",
             "doing ok", "doing fine", "doing well", "doing good",
         )
+        is_dns_health = any(k in _oq for k in _DNS_HEALTH_KEYWORDS)
         is_component_health = any(k in _oq for k in _COMPONENT_HEALTH_KEYWORDS)
 
         is_health_summary = len(tool_results) >= 3 and not is_list_query and not is_enumeration_query
@@ -968,7 +972,7 @@ def build_agent():
                 "3. If everything is healthy, say so briefly — do not list healthy items.\n"
                 "Use plain sentences. No markdown headers. No closing remarks."
             )
-        elif is_component_health:
+        elif is_dns_health:
             synthesis_prompt = (
                 f"Question: {original_question}\n\n"
                 f"Tool Results:\n{combined}\n"
@@ -979,6 +983,18 @@ def build_agent():
                 "• One bullet per DNS resolution test result: hostname, resolved IP (or error).\n"
                 "• Final bullet: overall DNS resolution verdict (✅ working / ❌ failing).\n"
                 "Skip any section if the tool results don't contain that data. "
+                "No prose paragraphs. No preamble. No closing remarks."
+            )
+        elif is_component_health:
+            synthesis_prompt = (
+                f"Question: {original_question}\n\n"
+                f"Tool Results:\n{combined}\n"
+                "Answer in bullet point form. Cover:\n"
+                "• Overall verdict (running properly / has issues) in the first bullet.\n"
+                "• One bullet per pod: name, phase, ready status, restart count.\n"
+                "• One bullet per PVC: name, phase, capacity (if present in results).\n"
+                "Skip any section if the tool results don't contain that data. "
+                "No DNS bullets unless the question is about DNS. "
                 "No prose paragraphs. No preamble. No closing remarks."
             )
         elif is_enumeration_query and not is_comparison_query:
