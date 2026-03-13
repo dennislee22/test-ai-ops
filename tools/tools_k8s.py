@@ -2737,7 +2737,264 @@ def exec_db_query(namespace: str, sql: str,
     return header + output
 
 
-K8S_TOOLS: dict = {}
+K8S_TOOLS: dict = {
+
+    "get_pod_status": {
+        "fn":          get_pod_status,
+        "description": (
+            "List pods in a namespace. "
+            "By default only UNHEALTHY pods are returned (non-Running, not ready, or high restarts). "
+            "Set show_all=true to list ALL pods including healthy ones — ALWAYS use show_all=true "
+            "when the user asks 'how many pods', 'list pods', 'what pods are running', or "
+            "any question that requires a complete pod count or inventory."
+        ),
+        "parameters":  {
+            "namespace":   {"type": "string",  "default": "all"},
+            "show_all":    {"type": "boolean", "default": False,
+                            "description": "Set true to include healthy/running pods in the output"},
+            "raw_output":  {"type": "boolean", "default": False,
+                            "description": "Set true to return kubectl-style tabular output (use when user asks to 'show', 'display', or wants 'the output' of pods)"},
+            "phase_only":  {"type": "boolean", "default": False,
+                            "description": (
+                                "Set true when the user asks ONLY about pod phase/status "
+                                "(e.g. 'which pods are not Running', 'any pod not Running'). "
+                                "Returns ONLY pods whose phase is Pending/Failed/Unknown. "
+                                "Does NOT include Running pods with high restarts or not-ready containers. "
+                                "Use phase_only=false (default) for health/unhealthy queries."
+                            )},
+        },
+    },
+    "get_pod_logs": {
+        "fn":          get_pod_logs,
+        "description": "Fetch recent logs from a specific pod. For multi-container pods, specify container_name.",
+        "parameters":  {
+            "pod_name":       {"type": "string"},
+            "namespace":      {"type": "string",  "default": "default"},
+            "tail_lines":     {"type": "integer", "default": 50,
+                               "description": "Number of log lines to return (max 100)"},
+        },
+    },
+    "describe_pod": {
+        "fn":          describe_pod,
+        "description": (
+            "Get detailed info about a specific pod: container states, restart count, "
+            "last termination reason (e.g. OOMKilled, Error), and CPU/memory requests and limits per container. "
+            "Use this for: 'what are the resource limits for pod X', 'why did pod X crash', "
+            "'what is the memory limit for pod X', or any OOMKilled diagnosis. "
+            "This is the ONLY tool that shows per-pod resource limits and termination reasons."
+        ),
+        "parameters":  {
+            "pod_name":  {"type": "string"},
+            "namespace": {"type": "string", "default": "default"},
+        },
+    },
+
+    "get_node_health": {
+        "fn":          get_node_health,
+        "description": "Check node health, CPU/memory/disk pressure, and allocatable resources.",
+        "parameters":  {},
+    },
+    "get_gpu_info": {
+        "fn":          get_gpu_info,
+        "description": (
+            "Get GPU model, memory, count, and driver details from Kubernetes node labels and capacity. "
+            "Use for any question about GPUs in the cluster: 'what GPU does the cluster have', "
+            "'how much GPU memory', 'which node has a GPU', 'GPU model'. "
+            "Returns nvidia.com/gpu.product, gpu.memory, gpu.count, and capacity per node."
+        ),
+        "parameters":  {},
+    },
+
+    "get_events": {
+        "fn":          get_events,
+        "description": (
+            "Fetch recent K8s events. Use for diagnosing issues, errors, or warnings. "
+            "warning_only=true (default) returns only Warning events. "
+            "Set warning_only=false to include Normal events too."
+        ),
+        "parameters":  {
+            "namespace":    {"type": "string",  "default": "all"},
+            "warning_only": {"type": "boolean", "default": True,
+                             "description": "true = Warning events only; false = all events including Normal"},
+        },
+    },
+
+    "get_deployment_status": {
+        "fn":          get_deployment_status,
+        "description": "Check Deployment replica counts and health across namespaces.",
+        "parameters":  {"namespace": {"type": "string", "default": "all"}},
+    },
+    "get_daemonset_status": {
+        "fn":          get_daemonset_status,
+        "description": "Check DaemonSet scheduling health — useful for node-level agents (e.g. Longhorn, CNI).",
+        "parameters":  {"namespace": {"type": "string", "default": "all"}},
+    },
+    "get_statefulset_status": {
+        "fn":          get_statefulset_status,
+        "description": "Check StatefulSet replica counts — useful for databases and Longhorn components.",
+        "parameters":  {"namespace": {"type": "string", "default": "all"}},
+    },
+    "get_job_status": {
+        "fn":          get_job_status,
+        "description": "Check batch Job and CronJob run status — highlights failed jobs.",
+        "parameters":  {"namespace": {"type": "string", "default": "all"}},
+    },
+    "get_hpa_status": {
+        "fn":          get_hpa_status,
+        "description": "Check HorizontalPodAutoscaler targets and whether any are pinned at max replicas.",
+        "parameters":  {"namespace": {"type": "string", "default": "all"}},
+    },
+
+    "get_pvc_status": {
+        "fn":          get_pvc_status,
+        "description": (
+            "Check PersistentVolumeClaims — access mode (RWO/RWX/ROX), capacity, storage class, bound volume. "
+            "Returns a grouped summary by access mode + storage class (concise, fast). "
+            "Set detail=true only when asked about a specific workload's individual PVC names. "
+            "Use namespace='longhorn-system' for Longhorn storage, namespace='vault-system' for Vault."
+        ),
+        "parameters":  {
+            "namespace": {"type": "string", "default": "all"},
+            "detail":    {"type": "boolean", "default": False,
+                          "description": "Set true only to list individual PVC names (slower on large namespaces)."},
+        },
+    },
+    "get_persistent_volumes": {
+        "fn":          get_persistent_volumes,
+        "description": (
+            "List all PersistentVolumes with phase, capacity, reclaim policy, storage class, "
+            "and bound claim (namespace/PVC name). Use for PV-level questions: reclaim policy, "
+            "cross-namespace PV ownership, or unbound PVs. "
+            "Do NOT use just to check access modes — get_pvc_status already includes access modes."
+        ),
+        "parameters":  {},
+    },
+
+    "get_service_status": {
+        "fn":          get_service_status,
+        "description": "List Services and highlight those with no pod selector (potential misconfigs).",
+        "parameters":  {"namespace": {"type": "string", "default": "all"}},
+    },
+    "get_ingress_status": {
+        "fn":          get_ingress_status,
+        "description": (
+            "List Ingress rules, hostnames, ports, and load balancer IPs/addresses. "
+            "Can find which ingress and namespace serve a specific hostname (FQDN) or port. "
+            "ALWAYS search ALL namespaces by default. "
+            "Use cases: "
+            "'which namespace has ingress port 443' → get_ingress_status(port=443) "
+            "'which namespace serves hostname X' → get_ingress_status(name='X.example.com') "
+            "'list all ingresses in cdp namespace' → get_ingress_status(namespace='cdp') "
+            "'list all cluster ingresses' → get_ingress_status(namespace='all')"
+        ),
+        "parameters":  {
+            "namespace": {"type": "string", "default": "all",
+                          "description": "Namespace to list ingresses in. Default 'all' searches every namespace."},
+            "name":      {"type": "string", "default": "",
+                          "description": (
+                              "Ingress name OR hostname/FQDN. "
+                              "If it contains dots it is treated as a hostname and ALL namespaces are searched. "
+                              "Example: 'console-cdp.apps.dlee155.cldr.example'"
+                          )},
+            "port":      {"type": "integer", "default": 0,
+                          "description": (
+                              "Filter ingresses by port number. "
+                              "Use port=443 to find all ingresses exposing HTTPS/TLS. "
+                              "Use port=80 to find HTTP-only ingresses."
+                          )},
+        },
+    },
+
+    "get_configmap_list": {
+        "fn":          get_configmap_list,
+        "description": (
+            "List ConfigMaps in a namespace — useful for checking configuration drift. "
+            "Use filter_keys to search for configmaps containing specific key names "
+            "(e.g. filter_keys=['username','password'] to find credential configmaps)."
+        ),
+        "parameters":  {
+            "namespace":   {"type": "string", "default": "default"},
+            "filter_keys": {"type": "array",  "default": None,
+                            "description": "Optional list of key name substrings to filter by."},
+        },
+    },
+    "get_secrets": {
+        "fn":          get_secrets,
+        "description": (
+            "List or search secrets in a namespace. "
+            "Use filter_keys=['username','password','user','pass'] to find secrets "
+            "containing credential keys. "
+            "Use filter_keys=['tls','cert','ca'] for certificate searches. "
+            "If name is provided, returns all keys of that specific secret. "
+            "Whether values are shown or hidden is controlled by the user's Security settings — do NOT pass a decode argument."
+        ),
+        "parameters": {
+            "namespace":   {"type": "string", "default": "default"},
+            "name":        {"type": "string", "default": ""},
+            "filter_keys": {"type": "array",  "default": None,
+                            "description": "Optional list of key name substrings to filter by."},
+        },
+    },
+    "get_resource_quotas": {
+        "fn":          get_resource_quotas,
+        "description": "Check ResourceQuotas and current usage — useful when pods fail to schedule.",
+        "parameters":  {"namespace": {"type": "string", "default": "all"}},
+    },
+    "get_limit_ranges": {
+        "fn":          get_limit_ranges,
+        "description": "List LimitRanges that enforce default CPU/memory constraints per namespace.",
+        "parameters":  {"namespace": {"type": "string", "default": "all"}},
+    },
+
+    "get_service_accounts": {
+        "fn":          get_service_accounts,
+        "description": "List ServiceAccounts in a namespace.",
+        "parameters":  {"namespace": {"type": "string", "default": "default"}},
+    },
+    "get_cluster_role_bindings": {
+        "fn":          get_cluster_role_bindings,
+        "description": "List ClusterRoleBindings — useful for auditing broad RBAC permissions.",
+        "parameters":  {},
+    },
+
+    "get_namespace_status": {
+        "fn":          get_namespace_status,
+        "description": "List all namespaces with their status and pod count. ALWAYS use this when the user asks 'how many namespaces', 'list namespaces', 'namespaces with number of pods', or wants a namespace count.",
+        "parameters":  {},
+    },
+    "get_namespace_resource_summary": {
+        "fn":          get_namespace_resource_summary,
+        "description": (
+            "Aggregate CPU and memory requests/limits for ALL pods in a namespace in a single call. "
+            "Returns total requested CPU (millicores and cores) and memory (MiB/GiB) for the namespace, "
+            "plus a per-pod breakdown. "
+            "Use this for: 'total cpu request for all pods in namespace X', "
+            "'how much memory is requested in namespace X', "
+            "'count cpu/memory requests in namespace X', "
+            "'sum of cpu requests in X'. "
+            "NEVER call describe_pod in a loop to aggregate resources — always use this tool instead."
+        ),
+        "parameters": {
+            "namespace": {
+                "type": "string",
+                "description": "Kubernetes namespace to summarise resources for.",
+            },
+        },
+    },
+}
+
+K8S_TOOLS["kubectl_exec"] = {
+    "fn":          kubectl_exec,
+    "description": (
+        "Execute a read-only kubectl command against the cluster. "
+        "Use for any kubectl get/describe/logs/top/rollout/auth/api-resources/version/cluster-info command. "
+        "Do NOT use for shell pipes, awk, grep, or multi-command chains — those are unsupported. "
+        "KUBECTL_ALLOW_WRITES controls whether write verbs (apply, delete, patch, scale, etc.) are permitted."
+    ),
+    "parameters": {
+        "command": {"type": "string", "description": "Full kubectl command string, e.g. 'kubectl get pods -n cdp'"},
+    },
+}
 
 K8S_TOOLS["exec_db_query"] = {
     "fn":          exec_db_query,
