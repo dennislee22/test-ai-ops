@@ -941,6 +941,40 @@ def get_pv_usage(threshold: int = 80) -> str:
         except Exception:
             return ""
 
+    def _longhorn_crd_usage(vol_name: str, ns: str, pvc_name: str, sc: str, threshold: int):
+        """Try Longhorn CRD for usage. Returns (entry_str, is_error) tuple.
+        entry_str is the formatted result or error message.
+        is_error=True means it should go to errors list, False means results list."""
+        try:
+            custom = _k8s.CustomObjectsApi()
+            lh_vol = custom.get_namespaced_custom_object(
+                "longhorn.io", "v1beta2", "longhorn-system", "volumes", vol_name
+            )
+            actual_raw = lh_vol.get("status", {}).get("actualSize")
+            total_raw  = lh_vol.get("spec", {}).get("size")
+            if actual_raw is None or total_raw is None:
+                return (f"  {ns}/{pvc_name}: Longhorn CRD found but actualSize/spec.size fields missing — skipped", True)
+            actual = int(actual_raw or 0)
+            total  = int(total_raw  or 0)
+            if total == 0:
+                return (f"  {ns}/{pvc_name}: Longhorn CRD found but spec.size=0 (volume not provisioned yet) — skipped", True)
+            if actual == 0:
+                total_gib = round(total / (1024**3), 2)
+                return (f"  {ns}/{pvc_name}: Longhorn CRD spec.size={total_gib}Gi but actualSize=0 (usage unverified) — skipped", True)
+            pct = round((actual / total) * 100, 1)
+            used_gib  = round(actual / (1024**3), 2)
+            total_gib = round(total  / (1024**3), 2)
+            avail_gib = round((total - actual) / (1024**3), 2)
+            flag = "🔴" if pct >= 90 else ("🟠" if pct >= threshold else "🟢")
+            entry = (
+                f"  {flag} {ns}/{pvc_name}  {pct}% used  "
+                f"({used_gib}Gi used / {total_gib}Gi total, {avail_gib}Gi free)  "
+                f"class:{sc}  source:longhorn-crd"
+            )
+            return (entry, False)
+        except Exception:
+            return (None, True)
+
     try:
         pvcs = _core.list_persistent_volume_claim_for_all_namespaces()
         pvs  = {pv.metadata.name: pv for pv in _core.list_persistent_volume().items}
@@ -989,50 +1023,28 @@ def get_pv_usage(threshold: int = 80) -> str:
                     break
 
         if not pod_hit or not mount_path:
-            # Fallback: try Longhorn CRD (volumes.longhorn.io) for usage when no running pod
-            try:
-                custom = _k8s.CustomObjectsApi()
-                lh_vol = custom.get_namespaced_custom_object(
-                    "longhorn.io", "v1beta2", "longhorn-system", "volumes", vol_name
-                )
-                # status.size is <none> in Longhorn — total capacity is in spec.size
-                # status.actualSize = actual consumed bytes on disk (used size)
-                actual_raw = lh_vol.get("status", {}).get("actualSize")
-                total_raw  = lh_vol.get("spec", {}).get("size")
-                # Guard: if either field is missing/null/zero, CRD data is unreliable
-                if actual_raw is None or total_raw is None:
-                    errors.append(f"  {ns}/{pvc_name}: Longhorn CRD found but actualSize/spec.size fields missing — skipped")
-                    continue
-                actual = int(actual_raw or 0)
-                total  = int(total_raw  or 0)
-                if total == 0:
-                    errors.append(f"  {ns}/{pvc_name}: Longhorn CRD found but spec.size=0 (volume may not be provisioned yet) — skipped")
-                    continue
-                if actual == 0:
-                    # actualSize=0 is valid for an empty volume but also occurs when
-                    # Longhorn has not yet collected usage — flag it as unverified
-                    total_gib = round(total / (1024**3), 2)
-                    errors.append(f"  {ns}/{pvc_name}: Longhorn CRD spec.size={total_gib}Gi but actualSize=0 (usage unverified, no running pod) — skipped")
-                    continue
-                pct = round((actual / total) * 100, 1)
-                used_gib  = round(actual / (1024**3), 2)
-                total_gib = round(total  / (1024**3), 2)
-                avail_gib = round((total - actual) / (1024**3), 2)
-                flag = "🔴" if pct >= 90 else ("🟠" if pct >= threshold else "🟢")
-                results.append((pct, (
-                    f"  {flag} {ns}/{pvc_name}  {pct}% used  "
-                    f"({used_gib}Gi used / {total_gib}Gi total, {avail_gib}Gi free)  "
-                    f"class:{sc}  source:longhorn-crd  (no running pod)"
-                )))
-                continue
-            except Exception:
-                pass
-            errors.append(f"  {ns}/{pvc_name}: no running pod found and Longhorn CRD unavailable — skipped")
+            # Fallback: try Longhorn CRD when no running pod found
+            entry, is_error = _longhorn_crd_usage(vol_name, ns, pvc_name, sc, threshold)
+            if entry and not is_error:
+                pct_val = float(entry.split("%")[0].split()[-1])
+                results.append((pct_val, entry + "  (no running pod)"))
+            elif entry:
+                errors.append(entry)
+            else:
+                errors.append(f"  {ns}/{pvc_name}: no running pod found and Longhorn CRD unavailable — skipped")
             continue
 
         df_out = _exec_df(pod_hit, ns, mount_path, container=pod_container)
         if not df_out:
-            errors.append(f"  {ns}/{pvc_name}: df exec failed on pod {pod_hit} container {pod_container} — skipped")
+            # df failed — try Longhorn CRD as fallback before giving up
+            entry, is_error = _longhorn_crd_usage(vol_name, ns, pvc_name, sc, threshold)
+            if entry and not is_error:
+                pct_val = float(entry.split("%")[0].split()[-1])
+                results.append((pct_val, entry + f"  (df failed on pod {pod_hit})"))
+            elif entry:
+                errors.append(entry)
+            else:
+                errors.append(f"  {ns}/{pvc_name}: df exec failed on pod {pod_hit} container {pod_container} and Longhorn CRD unavailable — skipped")
             continue
 
         parts = df_out.split()
