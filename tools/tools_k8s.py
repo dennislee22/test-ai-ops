@@ -923,14 +923,19 @@ def get_pv_usage(threshold: int = 80) -> str:
             pass
         return 0.0
 
-    def _exec_df(pod_name: str, namespace: str, mount_path: str) -> str:
+    def _exec_df(pod_name: str, namespace: str, mount_path: str, container: str = None) -> str:
         try:
+            kwargs = dict(
+                command=["/bin/sh", "-c", f"df -k --output=used,avail {mount_path} 2>/dev/null | tail -1"],
+                stderr=False, stdin=False, stdout=True, tty=False,
+                _preload_content=True,
+            )
+            if container:
+                kwargs["container"] = container
             resp = _k8s_stream(
                 _core.connect_get_namespaced_pod_exec,
                 pod_name, namespace,
-                command=["/bin/sh", "-c", f"df -k {mount_path} 2>/dev/null | tail -1"],
-                stderr=False, stdin=False, stdout=True, tty=False,
-                _preload_content=True,
+                **kwargs,
             )
             return resp.strip() if isinstance(resp, str) else ""
         except Exception:
@@ -963,8 +968,9 @@ def get_pv_usage(threshold: int = 80) -> str:
         except ApiException:
             continue
 
-        pod_hit = None
-        mount_path = None
+        pod_hit       = None
+        pod_container = None
+        mount_path    = None
         for pod in pods.items:
             if pod.status.phase != "Running":
                 continue
@@ -973,8 +979,9 @@ def get_pv_usage(threshold: int = 80) -> str:
                     for container in (pod.spec.containers or []):
                         for vm in (container.volume_mounts or []):
                             if vm.name == vol.name:
-                                pod_hit    = pod.metadata.name
-                                mount_path = vm.mount_path
+                                pod_hit       = pod.metadata.name
+                                pod_container = container.name
+                                mount_path    = vm.mount_path
                                 break
                         if pod_hit:
                             break
@@ -988,22 +995,24 @@ def get_pv_usage(threshold: int = 80) -> str:
                 lh_vol = custom.get_namespaced_custom_object(
                     "longhorn.io", "v1beta2", "longhorn-system", "volumes", vol_name
                 )
+                # status.size is <none> in Longhorn — total capacity is in spec.size
+                # status.actualSize = actual consumed bytes on disk (used size)
                 actual_raw = lh_vol.get("status", {}).get("actualSize")
-                total_raw  = lh_vol.get("status", {}).get("size")
+                total_raw  = lh_vol.get("spec", {}).get("size")
                 # Guard: if either field is missing/null/zero, CRD data is unreliable
                 if actual_raw is None or total_raw is None:
-                    errors.append(f"  {ns}/{pvc_name}: Longhorn CRD found but actualSize/size fields missing — skipped")
+                    errors.append(f"  {ns}/{pvc_name}: Longhorn CRD found but actualSize/spec.size fields missing — skipped")
                     continue
                 actual = int(actual_raw or 0)
                 total  = int(total_raw  or 0)
                 if total == 0:
-                    errors.append(f"  {ns}/{pvc_name}: Longhorn CRD found but size=0 (volume may not be provisioned yet) — skipped")
+                    errors.append(f"  {ns}/{pvc_name}: Longhorn CRD found but spec.size=0 (volume may not be provisioned yet) — skipped")
                     continue
                 if actual == 0:
                     # actualSize=0 is valid for an empty volume but also occurs when
                     # Longhorn has not yet collected usage — flag it as unverified
                     total_gib = round(total / (1024**3), 2)
-                    errors.append(f"  {ns}/{pvc_name}: Longhorn CRD size={total_gib}Gi but actualSize=0 (usage unverified, no running pod) — skipped")
+                    errors.append(f"  {ns}/{pvc_name}: Longhorn CRD spec.size={total_gib}Gi but actualSize=0 (usage unverified, no running pod) — skipped")
                     continue
                 pct = round((actual / total) * 100, 1)
                 used_gib  = round(actual / (1024**3), 2)
@@ -1021,19 +1030,20 @@ def get_pv_usage(threshold: int = 80) -> str:
             errors.append(f"  {ns}/{pvc_name}: no running pod found and Longhorn CRD unavailable — skipped")
             continue
 
-        df_out = _exec_df(pod_hit, ns, mount_path)
+        df_out = _exec_df(pod_hit, ns, mount_path, container=pod_container)
         if not df_out:
-            errors.append(f"  {ns}/{pvc_name}: df exec failed on pod {pod_hit} — skipped")
+            errors.append(f"  {ns}/{pvc_name}: df exec failed on pod {pod_hit} container {pod_container} — skipped")
             continue
 
         parts = df_out.split()
-        if len(parts) < 5:
+        if len(parts) < 2:
             errors.append(f"  {ns}/{pvc_name}: unexpected df output: {df_out!r} — skipped")
             continue
 
         try:
-            used_kb  = int(parts[2])
-            avail_kb = int(parts[3])
+            # df --output=used,avail gives exactly: used_kb avail_kb
+            used_kb  = int(parts[0])
+            avail_kb = int(parts[1])
             total_kb = used_kb + avail_kb
             pct      = round((used_kb / total_kb) * 100, 1) if total_kb > 0 else 0.0
         except (ValueError, ZeroDivisionError):
