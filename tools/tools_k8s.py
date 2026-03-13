@@ -2737,6 +2737,8 @@ def exec_db_query(namespace: str, sql: str,
     return header + output
 
 
+K8S_TOOLS: dict = {}
+
 K8S_TOOLS["exec_db_query"] = {
     "fn":          exec_db_query,
     "description": (
