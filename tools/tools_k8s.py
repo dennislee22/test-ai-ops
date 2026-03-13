@@ -1115,25 +1115,77 @@ def get_coredns_health() -> str:
     except ApiException:
         lines.append("\n  ⚠ Could not retrieve CoreDNS service.")
 
+    def _exec_in_pod(pod_name: str, ns: str, cmd: str) -> str:
+        try:
+            resp = _k8s_stream(
+                _core.connect_get_namespaced_pod_exec,
+                pod_name, ns,
+                command=["/bin/sh", "-c", cmd],
+                stderr=True, stdin=False, stdout=True, tty=False,
+                _preload_content=True,
+            )
+            return resp.strip() if isinstance(resp, str) else ""
+        except Exception as exc:
+            return f"[exec failed: {exc}]"
+
     if running_pods:
-        test_pod = running_pods[0]
-        test_targets = ["kubernetes.default.svc.cluster.local", "kube-dns.kube-system.svc.cluster.local"]
-        lines.append("\n  DNS resolution test (nslookup from CoreDNS pod):")
-        for target in test_targets:
-            try:
-                resp = _k8s_stream(
-                    _core.connect_get_namespaced_pod_exec,
-                    test_pod.metadata.name, DNS_NS,
-                    command=["/bin/sh", "-c", f"nslookup {target} 2>&1 || echo FAILED"],
-                    stderr=False, stdin=False, stdout=True, tty=False,
-                    _preload_content=True,
-                )
-                output = (resp.strip() if isinstance(resp, str) else "").replace("\n", " ")
-                ok = "FAILED" not in output and "can't resolve" not in output.lower() and "error" not in output.lower()
-                flag = "✅" if ok else "❌"
-                lines.append(f"    {flag} {target}: {'resolved' if ok else output[:120]}")
-            except Exception as exc:
-                lines.append(f"    ⚠ {target}: exec failed — {exc}")
+        lines.append("\n  DNS resolution test:")
+
+        test_pod_name = running_pods[0].metadata.name
+
+        resolv = _exec_in_pod(test_pod_name, DNS_NS, "cat /etc/resolv.conf 2>/dev/null")
+        lines.append(f"  /etc/resolv.conf (from {test_pod_name}):")
+        for rline in resolv.splitlines():
+            lines.append(f"    {rline}")
+
+        nameserver = ""
+        search_domain = ""
+        for rline in resolv.splitlines():
+            rline = rline.strip()
+            if rline.startswith("nameserver"):
+                parts = rline.split()
+                if len(parts) >= 2:
+                    nameserver = parts[1]
+            if rline.startswith("search"):
+                parts = rline.split()
+                if len(parts) >= 2:
+                    search_domain = parts[1]
+
+        test_targets = []
+        if search_domain:
+            test_targets.append(f"console-cdp.apps.{search_domain}")
+        try:
+            ingresses = _net.list_ingress_for_all_namespaces()
+            for ing in (ingresses.items or []):
+                for rule in (ing.spec.rules or []):
+                    if rule.host:
+                        test_targets.append(rule.host)
+                        break
+                if len(test_targets) >= 3:
+                    break
+        except Exception:
+            pass
+
+        if not test_targets:
+            test_targets = ["kubernetes.default.svc.cluster.local"]
+
+        ns_flag = f"@{nameserver}" if nameserver else ""
+        lines.append(f"\n  nslookup tests (nameserver: {nameserver or 'default'}, search: {search_domain or 'none'}):")
+        for target in test_targets[:3]:
+            cmd = f"nslookup {target} {ns_flag} 2>&1"
+            output = _exec_in_pod(test_pod_name, DNS_NS, cmd)
+            ok = (
+                output
+                and "[exec failed" not in output
+                and "can't resolve" not in output.lower()
+                and "nxdomain" not in output.lower()
+                and "server can't find" not in output.lower()
+                and "FAILED" not in output
+            )
+            flag = "✅" if ok else "❌"
+            lines.append(f"    {flag} nslookup {target} {ns_flag}")
+            for oline in output.splitlines():
+                lines.append(f"       {oline}")
     else:
         lines.append("\n  ⚠ DNS resolution test skipped — no running CoreDNS pod available.")
 
@@ -1502,6 +1554,61 @@ def get_cluster_role_bindings() -> str:
         return "\n".join(lines)
     except ApiException as e:
         return f"K8s API error: {e.reason}"
+
+def get_pod_images(namespace: str = "all") -> str:
+    try:
+        pods = (_core.list_pod_for_all_namespaces()
+                if namespace == "all"
+                else _core.list_namespaced_pod(namespace=namespace))
+    except ApiException as e:
+        return f"K8s API error: {e.reason}"
+
+    if not pods.items:
+        return f"No pods found in namespace '{namespace}'."
+
+    image_id_map = {}
+    for pod in pods.items:
+        for cs in (pod.status.container_statuses or []):
+            if cs.image and cs.image_id:
+                image_id_map[cs.image] = cs.image_id
+
+    rows = []
+    for pod in sorted(pods.items, key=lambda p: (p.metadata.namespace, p.metadata.name)):
+        ns_name  = pod.metadata.namespace
+        pod_name = pod.metadata.name
+        phase    = pod.status.phase or "Unknown"
+
+        cs_by_name = {cs.name: cs for cs in (pod.status.container_statuses or [])}
+
+        for c in (pod.spec.containers or []):
+            image     = c.image or "?"
+            cs        = cs_by_name.get(c.name)
+            image_id  = (cs.image_id or "") if cs else ""
+
+            digest = ""
+            if "@sha256:" in image_id:
+                digest = "sha256:" + image_id.split("@sha256:")[-1][:12] + "…"
+            elif "@sha256:" in image:
+                digest = "sha256:" + image.split("@sha256:")[-1][:12] + "…"
+
+            tag = ""
+            if ":" in image and "@" not in image:
+                tag = image.split(":")[-1]
+            elif "@" in image:
+                tag = image.split("@")[0].split(":")[-1] if ":" in image.split("@")[0] else "latest"
+
+            rows.append(
+                f"  {ns_name}/{pod_name}  [{c.name}]  "
+                f"image:{image}"
+                + (f"  digest:{digest}" if digest else "")
+                + f"  phase:{phase}"
+            )
+
+    if not rows:
+        return f"No containers found in namespace '{namespace}'."
+
+    header = f"Pod images in '{namespace}' ({len(pods.items)} pods):"
+    return header + "\n" + "\n".join(rows)
 
 def get_namespace_status() -> str:
     try:
@@ -3069,6 +3176,21 @@ K8S_TOOLS: dict = {
     },
 }
 
+K8S_TOOLS["get_pod_images"] = {
+    "fn":          get_pod_images,
+    "description": (
+        "List the container image and version for every pod in a namespace (or cluster-wide). "
+        "Returns the full image reference (registry/repo:tag) from pod spec, plus the resolved "
+        "SHA256 digest from container status where available — the digest is the true immutable "
+        "version regardless of tag. "
+        "Use this tool for any query about image versions, what version is running, "
+        "which image tag is deployed, or to compare image versions across pods."
+    ),
+    "parameters": {
+        "namespace": {"type": "string", "default": "all"},
+    },
+}
+
 K8S_TOOLS["get_unhealthy_pods_detail"] = {
     "fn":          get_unhealthy_pods_detail,
     "description": (
@@ -3093,8 +3215,11 @@ K8S_TOOLS["get_coredns_health"] = {
     "description": (
         "Check CoreDNS health in the cluster. Finds CoreDNS pods in kube-system (handles standard, "
         "RKE2 rke2-coredns-*, and other distributions), reports pod phase/readiness/restarts, "
-        "checks the CoreDNS ClusterIP service, and runs a live nslookup DNS resolution test from "
-        "inside a CoreDNS pod to verify that internal cluster service resolution is working. "
+        "checks the CoreDNS ClusterIP service. Then runs a real DNS resolution test by: "
+        "(1) reading /etc/resolv.conf from inside the CoreDNS pod to get the actual nameserver IP "
+        "and search domain, (2) running nslookup against real ingress hostnames discovered from "
+        "the cluster (e.g. console-cdp.apps.<domain>) using that nameserver — exactly as a pod "
+        "in the cluster would resolve names. "
         "Use this for any query about CoreDNS, DNS resolution, pod DNS, service discovery, "
         "or whether pods can resolve internal cluster services."
     ),

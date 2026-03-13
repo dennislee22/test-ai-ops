@@ -24,6 +24,7 @@ BYPASSABLE_TOOLS = {
     "get_ingress_status",
     "get_secrets",
     "get_configmap_list",
+    "get_pod_images",
     "kubectl_exec",
 }
 

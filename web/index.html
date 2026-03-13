@@ -918,6 +918,8 @@ NUM_GPU=0</code></pre>
 
         <h3>Networking &amp; Ingress</h3>
         <span class="gl-tag gl-tag-cluster">CLUSTER</span>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-cluster"></div><div class="gl-ex-body"><span class="gl-ex-text">is CoreDNS doing ok?</span><button class="gl-copy-btn" onclick="glCopy(this,'is CoreDNS doing ok?')">copy</button></div></div>
+        <div class="gl-ex-note">Checks CoreDNS pod health in kube-system, reads /etc/resolv.conf, and runs a live nslookup against a real cluster hostname to verify DNS resolution end-to-end.</div>
         <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-cluster"></div><div class="gl-ex-body"><span class="gl-ex-text">which namespace contains ingress port 443?</span><button class="gl-copy-btn" onclick="glCopy(this,'which namespace contains ingress port 443?')">copy</button></div></div>
         <div class="gl-ex-note">Searches all ingress resources across namespaces for TLS / port-443 exposure.</div>
 
@@ -1792,6 +1794,7 @@ async function loadIngestedFiles() {
 const EXAMPLES = [
   'What can you do?',
   'Is the Vault doing ok?',
+  'Is CoreDNS doing ok?',
   'Show me all the nodes\' status',
   'Any pod is currently not Running?',
   'What storage class is Vault using?',

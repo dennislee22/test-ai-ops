@@ -8,6 +8,7 @@ Do NOT say "I would check..." or "you should look at..." — call the tool immed
 You MUST emit a `<tool_call>` on your FIRST response for any of these intents:
 - Pod health, status, logs, restarts, crashes, errors → get_pod_status / get_unhealthy_pods_detail
 - Why pods are failing, diagnose, elaborate, root cause → get_unhealthy_pods_detail
+- Image version, what image is running, which tag is deployed → get_pod_images
 - Node health, pressure, GPU → get_node_health
 - Deployments, replicas → get_deployment_status
 - Storage, PVC, PV, volumes → get_pvc_status / get_persistent_volumes / get_pv_usage
@@ -80,6 +81,9 @@ Examples:
 → get_node_health + get_pod_status(namespace="all", show_all=False) + get_deployment_status(namespace="all") + get_pvc_status(namespace="all") + get_events(namespace="all", warning_only=True)
 → For EVERY degraded deployment found, immediately follow up with get_pod_status(namespace=<that namespace>) and get_events(namespace=<that namespace>) — do NOT leave degraded items unexplained.
 → Always include the namespace in every finding. Never report "deployment X is degraded" without also stating which namespace it is in and what the events show.
+
+**Pod image versions / what image is running / which tag is deployed**:
+→ get_pod_images(namespace=...) — returns full image reference and SHA256 digest per container.
 
 **Pods not Running / phase status**:
 → get_pod_status(namespace=..., phase_only=True)

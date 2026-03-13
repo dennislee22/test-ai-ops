@@ -59,6 +59,14 @@ def default_tools_for(user_msg: str) -> list:
     if _is_gibberish:
         return [("__conversational__", {})]
 
+    _is_image_query = any(k in lm for k in [
+        "image version", "image tag", "what image", "which image",
+        "image of", "running image", "deployed image", "container image",
+        "what version", "which version", "version of",
+    ]) and any(k in lm for k in ["pod", "pods", "container", "containers", "longhorn", "namespace"])
+    if _is_image_query:
+        return [("get_pod_images", {"namespace": ns})]
+
     _is_diagnostic = any(k in lm for k in [
         "why", "reason", "cause", "elaborate", "explain", "diagnose",
         "investigate", "root cause", "what is wrong", "whats wrong",
