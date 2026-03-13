@@ -987,15 +987,19 @@ def build_agent():
             )
         elif is_component_health:
             synthesis_prompt = (
+                "RULES:\n"
+                "1. Answer ONLY from the tool results below. Do NOT invent any pod names, "
+                "deployment names, PVC names, or any resource names not explicitly present in the results.\n"
+                "2. If a tool result is a single summary sentence (e.g. 'All pods are healthy and Running'), "
+                "copy that sentence exactly — do NOT expand it, do NOT add pod names.\n"
+                "3. If a tool result contains no data or is empty, skip it — do not mention it.\n"
+                "4. Your answer must include ALL details from the tool results — do not omit or summarise any pod, PVC, or event data.\n"
+                "5. No DNS content unless the question explicitly asks about DNS.\n"
+                "\n"
                 f"Question: {original_question}\n\n"
                 f"Tool Results:\n{combined}\n"
-                "Answer in bullet point form. Cover:\n"
-                "• Overall verdict (running properly / has issues) in the first bullet.\n"
-                "• One bullet per pod: name, phase, ready status, restart count.\n"
-                "• One bullet per PVC: name, phase, capacity (if present in results).\n"
-                "Skip any section if the tool results don't contain that data. "
-                "No DNS bullets unless the question is about DNS. "
-                "No prose paragraphs. No preamble. No closing remarks."
+                "Answer in bullet points. First bullet: overall verdict. "
+                "Subsequent bullets: only facts explicitly stated in the tool results above."
             )
         elif is_enumeration_query and not is_comparison_query:
             synthesis_prompt = (

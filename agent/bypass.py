@@ -92,6 +92,17 @@ def should_bypass_llm(tool_name: str, args: dict,
 
     lq = user_q.lower()
 
+    # If the tool already returned a self-contained summary sentence, bypass
+    # directly — do not send back to LLM just because the question had "ok" or "health".
+    _SUMMARY_PATTERNS = (
+        "all pods are healthy",
+        "all pods are in running",
+        "no unhealthy pods",
+        "no pods found",
+    )
+    if any(p in output.lower() for p in _SUMMARY_PATTERNS):
+        return True
+
     if any(re.search(pat, lq) for pat in ALWAYS_SYNTHESISE):
         return False
 
