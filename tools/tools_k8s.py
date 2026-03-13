@@ -3375,6 +3375,7 @@ def exec_db_query(namespace: str, sql: str,
             f"--connect-timeout=10 --batch --silent "
             f"{db_arg} -e '{safe_sql}'"
         )
+        _final_sql = sql   # original SQL — used later for column-header extraction
         exec_cmd = ["/bin/sh", "-c", cmd]
 
     elif db_type == "postgres":
@@ -3420,20 +3421,39 @@ def exec_db_query(namespace: str, sql: str,
                 f"WHERE table_name = '{tbl}' ORDER BY ordinal_position"
             )
 
-        # Translate MySQL user queries to PostgreSQL equivalents
+        # Translate MySQL user queries to PostgreSQL equivalents.
+        #
+        # IMPORTANT: mysql.user has columns (user, host, password).
+        # PostgreSQL equivalents:
+        #   user     → pg_shadow.usename
+        #   host     → pg_shadow has no per-user host restriction; use 'localhost' literal
+        #   password → pg_shadow.passwd  (hashed, but present — do NOT omit)
+        #
+        # Always rewrite to pg_shadow (not pg_user) so the password hash column is
+        # available.  Alias column names back to match the MySQL column names so the
+        # LLM can read them correctly without confusion.
         if re.search(r"mysql\.user", pg_sql, re.IGNORECASE):
+            # Pattern: SELECT user, host FROM mysql.user  (the exact query that broke)
             pg_sql = re.sub(
                 r"SELECT\s+user\s*,\s*host\s+FROM\s+mysql\.user",
-                "SELECT usename AS user, 'localhost' AS host FROM pg_catalog.pg_user",
+                "SELECT usename AS user, 'localhost' AS host, passwd AS password FROM pg_catalog.pg_shadow",
                 pg_sql, flags=re.IGNORECASE
             )
+            # Pattern: SELECT user, host, password FROM mysql.user
+            pg_sql = re.sub(
+                r"SELECT\s+user\s*,\s*host\s*,\s*password\s+FROM\s+mysql\.user",
+                "SELECT usename AS user, 'localhost' AS host, passwd AS password FROM pg_catalog.pg_shadow",
+                pg_sql, flags=re.IGNORECASE
+            )
+            # Fallback: any remaining FROM mysql.user → pg_shadow
             pg_sql = re.sub(
                 r"FROM\s+mysql\.user",
                 "FROM pg_catalog.pg_shadow",
                 pg_sql, flags=re.IGNORECASE
             )
-            pg_sql = re.sub(r"\buser\b", "usename", pg_sql, flags=re.IGNORECASE)
-            pg_sql = re.sub(r"\bpassword\b", "passwd", pg_sql, flags=re.IGNORECASE)
+            # Rewrite bare column name references that weren't caught above
+            pg_sql = re.sub(r"\buser\b(?!\s+AS)", "usename", pg_sql, flags=re.IGNORECASE)
+            pg_sql = re.sub(r"\bpassword\b(?!\s+AS)", "passwd", pg_sql, flags=re.IGNORECASE)
 
         # Translate SELECT user() / SELECT current_user()
         if re.match(r"^\s*SELECT\s+(current_user|user)\s*\(\s*\)\s*$", pg_sql, re.IGNORECASE):
@@ -3464,6 +3484,7 @@ def exec_db_query(namespace: str, sql: str,
 
                 f"psql -U postgres {db_flag} -t -A -c '{safe_sql}'"
             )
+        _final_sql = pg_sql   # translated SQL — used later for column-header extraction
         exec_cmd = ["/bin/sh", "-c", cmd]
 
     else:
@@ -3499,6 +3520,40 @@ def exec_db_query(namespace: str, sql: str,
 
     if len(output) > _KUBECTL_MAX_OUT:
         output = output[:_KUBECTL_MAX_OUT] + f"\n...[output truncated at {_KUBECTL_MAX_OUT} chars]"
+
+    # ── Column-header injection ──────────────────────────────────────────────
+    # psql -t -A produces bare pipe-delimited rows with NO header row.
+    # Without headers the LLM cannot reliably tell which value is username,
+    # which is password, which is host, etc.  We extract column names from the
+    # SELECT clause and prepend them as a header row so the model always has
+    # labelled context.
+    def _extract_columns(sql_text: str) -> list[str]:
+        """Best-effort extraction of SELECT column aliases or names."""
+        m = re.match(r"^\s*SELECT\s+(.+?)\s+FROM\b", sql_text, re.IGNORECASE | re.DOTALL)
+        if not m:
+            return []
+        cols_raw = m.group(1)
+        cols = []
+        for col in cols_raw.split(","):
+            col = col.strip()
+            # Prefer AS alias
+            alias_m = re.search(r"\bAS\s+(\w+)\s*$", col, re.IGNORECASE)
+            if alias_m:
+                cols.append(alias_m.group(1))
+                continue
+            # Use last token (function calls, table.col, etc.)
+            token = re.split(r"[\s.(]", col)[-1].strip(")'\"")
+            cols.append(token if token else col)
+        return cols
+
+    # Use the final translated SQL for column extraction
+    _sql_for_cols = _final_sql
+    _cols = _extract_columns(_sql_for_cols)
+
+    if _cols:
+        col_header = "|".join(_cols)
+        col_sep    = "|".join("-" * max(len(c), 4) for c in _cols)
+        output = col_header + "\n" + col_sep + "\n" + output
 
     header = (f"DB query result  [{db_type.upper()} · pod={pod_name} · ns={namespace}"
               + (f" · db={db_name}" if db_name else "") + "]\n"
@@ -3982,14 +4037,28 @@ K8S_TOOLS["exec_db_query"] = {
         "set container='db' to target the correct database container explicitly. "
         "Credentials (username, password, database name) are automatically discovered from the "
         "pod's environment variables, Kubernetes Secrets, and ConfigMaps — no manual credential input needed. "
-        "Use this tool for any query involving database contents, user accounts, passwords stored in DB, "
-        "table data, or schema inspection. "
+        "Use this tool for any query involving database contents, user accounts, table data, "
+        "or schema inspection. "
+        "\n\n"
+        "CREDENTIAL QUESTIONS — DO NOT use this tool first. "
+        "For any question about usernames or passwords, ALWAYS call get_secrets() first. "
+        "Only fall back to exec_db_query if secrets contain no useful credential information. "
+        "\n\n"
         "ONLY read-only SQL is permitted (SELECT, SHOW, DESCRIBE, EXPLAIN). "
         "INSERT / UPDATE / DELETE / DROP / ALTER / TRUNCATE are blocked. "
+        "\n\n"
         "WORKFLOW for 'access db-0 of cmlwb1 and find tables in database sense': "
         "  exec_db_query(namespace='cmlwb1', pod_name='db-0', container='db', database='sense', "
         "sql=\"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'\") "
         "If the tool returns an error listing available containers, re-call with the correct container= value. "
+        "\n\n"
+        "RESULT READING — CRITICAL: "
+        "Results include a header row showing column names (e.g. 'user|host|password'). "
+        "Always read the header to identify which value is which. "
+        "The 'host' column is a connection restriction (e.g. 'localhost') — it is NOT a password. "
+        "The 'password' or 'passwd' column contains the credential hash. "
+        "Never report 'host' as the password. "
+        "\n\n"
         "MANDATORY DIALECT RETRY — this is not optional: "
         "If the error contains 'does not exist' or 'relation' or 'unknown table', "
         "the dialect guess was wrong. You MUST immediately call this tool again with the other dialect. "
@@ -3997,6 +4066,7 @@ K8S_TOOLS["exec_db_query"] = {
         "PostgreSQL error → call again with MySQL SQL (SELECT user, password FROM mysql.user). "
         "Do NOT explain to the user what SQL to run. Do NOT ask for clarification. "
         "Just call the tool again immediately with the corrected SQL. "
+        "\n\n"
         "PostgreSQL SQL examples (NEVER use DATABASE() — that is MySQL-only): "
         "\"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'\", "
         "\"SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name\", "
