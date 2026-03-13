@@ -3714,13 +3714,14 @@ K8S_TOOLS: dict = {
     "get_namespace_resource_summary": {
         "fn":          get_namespace_resource_summary,
         "description": (
-            "Aggregate CPU and memory requests/limits for ALL pods in a namespace in a single call. "
-            "Returns total requested CPU (millicores and cores) and memory (MiB/GiB) for the namespace, "
-            "plus a per-pod breakdown. "
-            "Use this for: 'total cpu request for all pods in namespace X', "
-            "'how much memory is requested in namespace X', "
-            "'count cpu/memory requests in namespace X', "
-            "'sum of cpu requests in X'. "
+            "Aggregate CPU and memory REQUESTS and LIMITS (scheduling allocations) for ALL pods "
+            "in a namespace — this is k8s scheduling data, NOT real-time consumption. "
+            "Returns total requested CPU (millicores/cores) and memory (MiB/GiB) for the namespace, "
+            "plus a per-pod breakdown of requests and limits. "
+            "Use for: 'total cpu request for namespace X', 'how much memory is requested in X', "
+            "'sum of cpu/memory requests in X', 'what are the resource limits in namespace X'. "
+            "Do NOT use for questions about actual usage, consumption, or trends — "
+            "those require query_prometheus_metrics. "
             "NEVER call describe_pod in a loop to aggregate resources — always use this tool instead."
         ),
         "parameters": {

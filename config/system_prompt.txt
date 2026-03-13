@@ -145,7 +145,7 @@ Examples:
 
 **Namespaces** (list, count, pod count per namespace): → get_namespace_status
 
-**Total CPU/memory for all pods in a namespace**:
+**Total CPU/memory REQUESTS/LIMITS for all pods in a namespace (scheduling allocations, not actual usage)**:
 → get_namespace_resource_summary(namespace=...) — ONE call, never loop describe_pod.
 
 **RBAC / roles / permissions**:
