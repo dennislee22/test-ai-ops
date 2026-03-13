@@ -3714,15 +3714,13 @@ K8S_TOOLS: dict = {
     "get_namespace_resource_summary": {
         "fn":          get_namespace_resource_summary,
         "description": (
-            "Aggregate CPU and memory REQUESTS and LIMITS (scheduling allocations) for ALL pods "
-            "in a namespace — this is k8s scheduling data, NOT real-time consumption. "
-            "Returns total requested CPU (millicores/cores) and memory (MiB/GiB) for the namespace, "
-            "plus a per-pod breakdown of requests and limits. "
-            "Use for: 'total cpu request for namespace X', 'how much memory is requested in X', "
-            "'sum of cpu/memory requests in X', 'what are the resource limits in namespace X'. "
-            "Do NOT use for questions about actual usage, consumption, or trends — "
-            "those require query_prometheus_metrics. "
-            "NEVER call describe_pod in a loop to aggregate resources — always use this tool instead."
+            "Aggregate CPU and memory REQUESTS and LIMITS for all pods in a specific namespace. "
+            "Returns total requested/limited CPU (millicores) and memory (MiB/GiB) for the namespace, "
+            "plus a per-pod breakdown. This is scheduling allocation data, NOT real-time consumption. "
+            "Use for: 'total cpu/memory requests in namespace X', 'how much memory is requested in X', "
+            "'sum of resource requests in X', 'resource limits for namespace X'. "
+            "Do NOT use for actual usage/consumption — use query_prometheus_metrics instead. "
+            "Do NOT use for per-node allocation — use get_node_resource_requests instead."
         ),
         "parameters": {
             "namespace": {
@@ -3738,47 +3736,61 @@ K8S_TOOLS["get_pod_images"] = {
     "description": (
         "List the container image and version for every pod in a namespace (or cluster-wide). "
         "Returns the full image reference (registry/repo:tag) from pod spec, plus the resolved "
-        "SHA256 digest from container status where available — the digest is the true immutable "
-        "version regardless of tag. "
-        "Use this tool for any query about image versions, what version is running, "
-        "which image tag is deployed, or to compare image versions across pods."
+        "SHA256 digest from container status — the digest is the true immutable version regardless of tag. "
+        "Use for: image versions, what version is running, which tag is deployed, image digests, "
+        "comparing image versions across pods or namespaces. "
+        "Do NOT use for pod health, status, or errors — use get_unhealthy_pods_detail for that."
     ),
     "parameters": {
-        "namespace": {"type": "string", "default": "all"},
+        "namespace": {
+            "type": "string",
+            "default": "all",
+            "description": "Namespace to list images for. Extract from question — 'in cdp' → 'cdp'. Use 'all' for cluster-wide.",
+        },
     },
 }
 
 K8S_TOOLS["get_unhealthy_pods_detail"] = {
     "fn":          get_unhealthy_pods_detail,
     "description": (
-        "Deep-diagnose all unhealthy pods in a namespace (or cluster-wide). "
-        "For every unhealthy pod this tool: (1) collects phase, readiness, restart count, "
-        "failed conditions with reasons and messages, container state with exit codes, "
-        "resource requests/limits, and recent Warning events from the cluster; "
-        "(2) fetches the last 20 lines of current logs, falling back to previous-container logs "
-        "if the current container has no output. "
-        "Use this tool — instead of get_pod_status — whenever the user asks WHY pods are failing, "
-        "wants a root cause, asks to 'elaborate', 'explain', 'diagnose', 'investigate', or says "
-        "'pods in trouble', 'what is wrong', 'what caused', or any phrasing that needs more than "
-        "a status summary."
+        "The primary tool for ALL pod health questions. "
+        "Lists every pod's phase, readiness, restart count, container state, exit codes, "
+        "resource requests/limits, recent Warning events, and last 20 log lines. "
+        "Use for: pod status, pod health, pod errors, pod restarts, pods not running, "
+        "pods crashing, CrashLoopBackOff, OOMKilled, Pending, ImagePullBackOff, "
+        "'is X running?', 'what pods are failing?', 'any unhealthy pods?', "
+        "'list pods not running', 'why is pod X crashing?', 'diagnose pod X', "
+        "'what is wrong with X', 'pods in trouble', broad cluster health checks. "
+        "Always use namespace='all' unless the user names a specific component or namespace. "
+        "After reviewing output: if a pod shows OOMKilled or CrashLoopBackOff, "
+        "immediately call rag_search with the error and component name to check known fixes."
     ),
     "parameters": {
-        "namespace": {"type": "string", "default": "all"},
+        "namespace": {
+            "type": "string",
+            "default": "all",
+            "description": (
+                "Namespace to check. Extract from question — 'in vault namespace' → 'vault-system', "
+                "'in cdp' → 'cdp'. Use 'all' (default) for cluster-wide. "
+                "Known namespace mappings: vault/vault-system → 'vault-system', "
+                "longhorn → 'longhorn-system', rancher/cattle → 'cattle-system', "
+                "cert-manager/cert → 'cert-manager', coredns/dns → 'kube-system', "
+                "prometheus/grafana/alertmanager/monitoring → 'monitoring'."
+            ),
+        },
     },
 }
 
 K8S_TOOLS["get_coredns_health"] = {
     "fn":          get_coredns_health,
     "description": (
-        "Check CoreDNS health in the cluster. Finds CoreDNS pods in kube-system (handles standard, "
-        "RKE2 rke2-coredns-*, and other distributions), reports pod phase/readiness/restarts, "
-        "checks the CoreDNS ClusterIP service. Then runs a real DNS resolution test by: "
-        "(1) reading /etc/resolv.conf from inside the CoreDNS pod to get the actual nameserver IP "
-        "and search domain, (2) running nslookup against real ingress hostnames discovered from "
-        "the cluster (e.g. console-cdp.apps.<domain>) using that nameserver — exactly as a pod "
-        "in the cluster would resolve names. "
-        "Use this for any query about CoreDNS, DNS resolution, pod DNS, service discovery, "
-        "or whether pods can resolve internal cluster services."
+        "Check CoreDNS health and DNS resolution in the cluster. "
+        "Reports CoreDNS pod phase/readiness/restarts and runs a live nslookup test against "
+        "real cluster ingress hostnames — exactly as a pod in the cluster would resolve names. "
+        "Use ONLY when the question explicitly mentions: CoreDNS, DNS, DNS resolution, "
+        "nslookup, DNS health, service discovery via DNS, or pod name resolution. "
+        "Do NOT use for general pod health, vault, longhorn, prometheus, grafana, "
+        "cert-manager, or any non-DNS question — use get_unhealthy_pods_detail for those."
     ),
     "parameters": {},
 }
@@ -3786,11 +3798,14 @@ K8S_TOOLS["get_coredns_health"] = {
 K8S_TOOLS["get_pv_usage"] = {
     "fn":          get_pv_usage,
     "description": (
-        "Check actual disk usage of all bound PersistentVolumeClaims by exec-ing df into the "
-        "pod that has each PVC mounted. Returns used/total/free GiB and usage percentage per PVC, "
-        "sorted by usage descending. Use this tool for any query about storage capacity, "
-        "PVs/PVCs nearing full, disk usage, storage running out, or which volumes are almost full. "
-        "threshold controls the warning level (default 80%)."
+        "Check actual disk usage of all bound PersistentVolumeClaims by exec-ing df "
+        "into the pod that has each PVC mounted. "
+        "Returns used/total/free GiB and usage percentage per PVC, sorted by usage descending. "
+        "Use for: disk usage, storage capacity, volumes nearing full, almost full, "
+        "'is storage running out?', 'which PVs are above X%?', 'storage running out', "
+        "'how full are the volumes?', 'any PVC above 80%?'. "
+        "Do NOT use for listing PVCs or their bound/unbound status — "
+        "use kubectl_exec('kubectl get pvc -A') for that."
     ),
     "parameters": {
         "threshold": {
@@ -3810,11 +3825,14 @@ K8S_TOOLS["get_pv_usage"] = {
 K8S_TOOLS["get_node_resource_requests"] = {
     "fn":          get_node_resource_requests,
     "description": (
-        "Returns pod resource REQUESTS and LIMITS aggregated per node — this is scheduling/allocation "
-        "data, not real-time consumption. Use for: 'what is requested per node', 'how much CPU/memory "
-        "is allocated on each node', 'which node is most heavily scheduled', 'node capacity vs requests'. "
-        "Do NOT use for questions about actual usage, CPU load, memory consumption, or time-series trends — "
-        "those require query_prometheus_metrics."
+        "Returns CPU and memory REQUESTS and LIMITS aggregated per node from the Kubernetes API. "
+        "This is scheduling/allocation data — what pods have reserved — NOT real-time consumption. "
+        "Use for: 'what is requested per node', 'how much CPU/memory is allocated on each node', "
+        "'which node is most heavily scheduled', 'node capacity vs requests', 'node pressure', "
+        "'how many pods per node', 'node resource utilisation'. "
+        "Do NOT use for actual CPU/memory consumption, load, or trends — use query_prometheus_metrics. "
+        "Do NOT use for node health, conditions, or readiness — use kubectl_exec('kubectl get nodes') or "
+        "get_unhealthy_pods_detail for that."
     ),
     "parameters": {},
 }
@@ -3881,13 +3899,50 @@ K8S_TOOLS["query_prometheus_metrics"] = {
 K8S_TOOLS["kubectl_exec"] = {
     "fn":          kubectl_exec,
     "description": (
-        "Execute a read-only kubectl command against the cluster. "
-        "Use for any kubectl get/describe/logs/top/rollout/auth/api-resources/version/cluster-info command. "
-        "Do NOT use for shell pipes, awk, grep, or multi-command chains — those are unsupported. "
-        "KUBECTL_ALLOW_WRITES controls whether write verbs (apply, delete, patch, scale, etc.) are permitted."
+        "Execute a read-only kubectl command against the cluster. Use this as the general-purpose "
+        "tool for any cluster state query not covered by a more specific tool. "
+        "IMPORTANT: Commands run via the Kubernetes API — NOT a shell. "
+        "Pipes (|), grep, awk, &&, || are NOT supported. Use -n <namespace> or -A for all namespaces. "
+        "Use for the following (with example commands): "
+        "• Node health/status/conditions: 'kubectl get nodes -o wide' or 'kubectl describe node <name>' "
+        "• Pod location ('where is X', 'which node is X on'): 'kubectl get pod -A -o wide' "
+        "• Deployments/replicas: 'kubectl get deployments -n <ns>' "
+        "• ReplicaSets: 'kubectl get replicasets -n <ns>' "
+        "• DaemonSets: 'kubectl get daemonsets -A' "
+        "• StatefulSets: 'kubectl get statefulsets -A' "
+        "• Jobs/CronJobs: 'kubectl get jobs -A' or 'kubectl get cronjobs -A' "
+        "• HPA/autoscaling: 'kubectl get hpa -A' "
+        "• Services/endpoints: 'kubectl get services -A' or 'kubectl get endpoints -n <ns>' "
+        "• Ingress: 'kubectl get ingress -A' "
+        "• ConfigMaps: 'kubectl get configmaps -n <ns>' "
+        "• Secrets (names only, not values): 'kubectl get secrets -n <ns>' "
+        "• RBAC: 'kubectl get clusterrolebindings' or 'kubectl get rolebindings -n <ns>' "
+        "• ServiceAccounts: 'kubectl get serviceaccounts -n <ns>' "
+        "• Namespaces: 'kubectl get namespaces' "
+        "• Resource quotas: 'kubectl get resourcequota -n <ns>' "
+        "• LimitRanges: 'kubectl get limitrange -n <ns>' "
+        "• PVCs (list/status): 'kubectl get pvc -A' "
+        "• PVs: 'kubectl get pv' "
+        "• Events: 'kubectl get events -n <ns> --sort-by=.lastTimestamp' "
+        "• GPU info: 'kubectl describe nodes | grep -A5 nvidia' — NOTE: grep not supported, "
+        "  use 'kubectl describe node <nodename>' instead "
+        "• Cluster version: 'kubectl version' "
+        "• API resources: 'kubectl api-resources' "
+        "Resolve namespace aliases before calling: "
+        "vault → vault-system, longhorn → longhorn-system, rancher/cattle → cattle-system, "
+        "cert-manager/cert → cert-manager, coredns/dns → kube-system, "
+        "prometheus/grafana/alertmanager/monitoring → monitoring."
     ),
     "parameters": {
-        "command": {"type": "string", "description": "Full kubectl command string, e.g. 'kubectl get pods -n cdp'"},
+        "command": {
+            "type": "string",
+            "description": (
+                "Full kubectl command. No shell pipes or redirects. "
+                "Examples: 'kubectl get nodes -o wide', 'kubectl get pod -A -o wide', "
+                "'kubectl describe node ecs-w-01.dlee155.cldr.example', "
+                "'kubectl get deployments -n cdp', 'kubectl get events -n vault-system --sort-by=.lastTimestamp'"
+            ),
+        },
     },
 }
 

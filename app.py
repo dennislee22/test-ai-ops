@@ -650,18 +650,26 @@ RAG_TOOLS = {
         "fn": rag_retrieve,
         "description": (
             "Search the internal knowledge base for known issues, runbooks, troubleshooting guides, "
-            "and operational best practices. "
-            "ALWAYS call this after describe_pod when a pod is unhealthy, crashing, OOMKilled, "
-            "CrashLoopBackOff, Pending, or not Ready — to check whether a known fix is documented. "
-            "Use the specific error or component name as the query. "
-            "When the user explicitly asks for a specific sheet (dos and donts, known issues, "
-            "prerequisites, past learnings), pass the sheet parameter to filter results to that sheet only. "
+            "dos and don'ts, prerequisites, past learnings, and operational best practices. "
+            "Call this tool in two situations: "
+            "(1) AFTER get_unhealthy_pods_detail when a pod shows OOMKilled, CrashLoopBackOff, "
+            "ImagePullBackOff, Pending, or any error — use the specific error and component as the query. "
+            "(2) DIRECTLY when the user asks about: known issues, problems, documentation, runbooks, "
+            "best practices, dos and don'ts, prerequisites, past learnings, postmortems, or WHY "
+            "something might be happening. "
+            "Call rag_search BEFORE live tools when query contains 'issues', 'problems', "
+            "'known issues', 'what could cause', 'best practice', 'how to fix'. "
+            "Call live tools BEFORE rag_search when query is about current cluster state "
+            "('is X healthy', 'how many pods', 'list pvcs'). "
+            "Pass sheet= to filter to a specific knowledge base section: "
+            "'Known Issues', 'Dos and Donts', 'Prerequisites', 'Past Learnings'. "
             "Examples: "
             "rag_search(query='CrashLoopBackOff cdp-cadence') "
             "rag_search(query='OOMKilled sense-db memory limit') "
-            "rag_search(query='dos and donts ecs cluster', sheet='Dos and Donts') "
             "rag_search(query='longhorn storage issues', sheet='Known Issues') "
+            "rag_search(query='dos and donts ecs cluster', sheet='Dos and Donts') "
             "rag_search(query='prerequisites before deploy', sheet='Prerequisites') "
+            "rag_search(query='vault incident 2024', sheet='Past Learnings') "
         ),
         "parameters": {
             "query":    {"type": "string",
