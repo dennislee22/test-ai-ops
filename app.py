@@ -1658,6 +1658,7 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
                     "status_updates":  [],
                 },
                 version="v2",
+                config={"recursion_limit": 12},
             ):
                 # Drain any pending heartbeat pings before each agent event
                 while not _hb_queue.empty():
