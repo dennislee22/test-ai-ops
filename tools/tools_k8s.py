@@ -1280,7 +1280,10 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h", step: st
                 f"pod_cpu, pod_memory, cluster_cpu, cluster_memory.")
 
     # ── Namespace filter — inject into PromQL if specified ──────────────────
+    _NS_IGNORE = {"all", "any", "every", "cluster", "cluster-wide", "clusterwide", "none", "global", "*"}
     ns = namespace.strip().lower()
+    if ns in _NS_IGNORE:
+        ns = ""
     if ns:
         # Insert {namespace="<ns>"} label selector into each metric name in the PromQL
         # Works for both container_cpu_usage{...} and bare container_cpu_usage
@@ -1383,8 +1386,32 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h", step: st
                     f"HTTP probes returned: /prometheus → {probe}, / → {probe2}. "
                     f"Pod: {prom_pod} in {prom_ns}.")
 
-    # ── Query ────────────────────────────────────────────────────────────────
+    # ── Discover available labels on container_cpu_usage ─────────────────────
     import urllib.parse as _up
+    label_url = f"{api_base}/labels?match[]=container_cpu_usage"
+    label_raw = _exec(f"curl -s --max-time 10 '{label_url}'")
+    try:
+        import json as _jl2
+        label_data = _jl2.loads(label_raw)
+        available_labels = label_data.get("data", [])
+    except Exception:
+        available_labels = []
+    has_node_label = "node" in available_labels
+
+    # ── Rewrite PromQL to group by node if node label is available ───────────
+    if has_node_label and not ns:
+        # Remap to node-level aggregation
+        if key in ("cpu", "node_cpu", "pod_cpu"):
+            promql = "sum by (node) (container_cpu_usage)"
+            title  = "Node CPU Usage (millicores)"
+        elif key in ("memory", "node_memory", "pod_memory"):
+            promql = "sum by (node) (container_memory_usage_bytes) / 1048576"
+            title  = "Node Memory Usage (MiB)"
+        node_label_note = ""  # accurate data — no caveat needed
+    else:
+        node_label_note = available_labels  # carry for debug in caveat
+
+    # ── Query ────────────────────────────────────────────────────────────────
     encoded = _up.quote(promql, safe="")
     url = (f"{api_base}/query_range"
            f"?query={encoded}"
@@ -1515,10 +1542,14 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h", step: st
     # Caveat when user likely asked for node-level data but we only have pod-level
     node_caveat = ""
     if not ns:
-        node_caveat = (
-            "\nNote: per-node metrics are unavailable (no node-exporter on this cluster). "
-            "Showing pod-level data as the closest available proxy."
-        )
+        if has_node_label:
+            node_caveat = ""  # showing real node data — no caveat needed
+        else:
+            node_caveat = (
+                "\nNote: per-node metrics are unavailable (container_cpu_usage has no 'node' label "
+                f"on this cluster; available labels: {available_labels}). "
+                "Showing pod-level data as the closest available proxy."
+            )
 
     summary_lines = [f"📊 {title} — last {duration}{cap_note}{node_caveat}"]
     for s in series_out:
@@ -3837,7 +3868,10 @@ K8S_TOOLS["query_prometheus_metrics"] = {
             "description": (
                 "Filter results to a specific Kubernetes namespace. "
                 "Extract from user question — 'in cdp namespace' → 'cdp', "
-                "'in the vault namespace' → 'vault'. Leave empty for all namespaces."
+                "'in the vault namespace' → 'vault'. "
+                "Leave EMPTY (do not pass anything) when the question is about all namespaces, "
+                "all nodes, or does not mention a specific namespace. "
+                "NEVER pass 'all', 'any', 'cluster', or similar — use empty string instead."
             ),
         },
     },
