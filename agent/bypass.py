@@ -26,6 +26,8 @@ BYPASSABLE_TOOLS = {
     "get_configmap_list",
     "get_pod_images",
     "kubectl_exec",
+    "query_prometheus_metrics",
+    "get_node_resource_requests",
 }
 
 LIST_INTENTS = (
@@ -105,6 +107,10 @@ def should_bypass_llm(tool_name: str, args: dict,
 
     # get_pv_usage output is a structured report — always bypass directly
     if tool_name == "get_pv_usage":
+        return True
+
+    # Prometheus metrics and node resource requests are structured reports — bypass directly
+    if tool_name in ("query_prometheus_metrics", "get_node_resource_requests"):
         return True
 
     if any(re.search(pat, lq) for pat in ALWAYS_SYNTHESISE):
