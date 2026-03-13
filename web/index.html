@@ -2108,11 +2108,18 @@ function renderGraphBlock(payload, container) {
     };
   });
 
-  // ── Format values ────────────────────────────────────────────────────────
+  // ── Format values — auto-scale decimal places based on magnitude ─────────
   function fmt(v) {
     if (unit === '%')     return v.toFixed(1) + '%';
     if (unit === 'cores') return v.toFixed(3);
-    if (unit === 'm')     return v.toFixed(1) + 'm';   // millicores
+    if (unit === 'm') {
+      // Auto-scale decimals: tiny values need more precision
+      if (v === 0)    return '0m';
+      if (v < 0.01)   return v.toFixed(4) + 'm';
+      if (v < 0.1)    return v.toFixed(3) + 'm';
+      if (v < 1)      return v.toFixed(2) + 'm';
+      return v.toFixed(1) + 'm';
+    }
     if (unit === 'MiB')   return v.toFixed(0) + 'Mi';
     if (unit === 'bytes') {
       if (v >= 1e9) return (v / 1e9).toFixed(2) + 'G';
@@ -2126,6 +2133,13 @@ function renderGraphBlock(payload, container) {
       return v.toFixed(0) + '/s';
     }
     return v.toFixed(1);
+  }
+
+  // ── Truncate long labels: keep start and end, elide middle ───────────────
+  function truncLabel(s, max) {
+    if (s.length <= max) return s;
+    const keep = Math.floor((max - 1) / 2);
+    return s.slice(0, keep) + '…' + s.slice(s.length - keep);
   }
 
   // ── Build SVG ────────────────────────────────────────────────────────────
@@ -2181,13 +2195,15 @@ function renderGraphBlock(payload, container) {
             + `<line x1="${ML}" y1="${MT + PH}" x2="${ML + PW}" y2="${MT + PH}" stroke="${cDim}" stroke-width="1"/>`
             + `</svg>`;
 
-  // Legend
+  // Legend — capped to same 8 series drawn in chart, labels truncated to fit
   const legend = series.slice(0, 8).map((s, i) => {
-    const col = GRAPH_COLORS[i % GRAPH_COLORS.length];
-    const lastVal = s.values.length ? fmt(s.values[s.values.length - 1][1]) : '—';
-    return `<span class="graph-legend-item">`
+    const col      = GRAPH_COLORS[i % GRAPH_COLORS.length];
+    const lastVal  = s.values.length ? fmt(s.values[s.values.length - 1][1]) : '—';
+    const shortLbl = truncLabel(s.label, 36);
+    return `<span class="graph-legend-item" title="${esc(s.label)}">`
          + `<span class="graph-legend-dot" style="background:${col}"></span>`
-         + `${esc(s.label)} <span style="color:${col};font-weight:700">${lastVal}</span>`
+         + `<span style="font-family:'IBM Plex Mono',monospace">${esc(shortLbl)}</span>`
+         + ` <span style="color:${col};font-weight:700">${lastVal}</span>`
          + `</span>`;
   }).join('');
 

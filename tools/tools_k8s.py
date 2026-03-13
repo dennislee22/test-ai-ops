@@ -1426,12 +1426,30 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h", step: st
                 + available_hint)
 
     # ── Build chart payload ─────────────────────────────────────────────────
-    # Cap series at 8 to keep the chart readable
+    total_series = len(results)
+    CHART_CAP = 8  # max series in chart
+
+    # Python-side fmt to match JS — auto-scale decimal places
+    def _fmt(v, u):
+        if u == "%":     return f"{v:.1f}%"
+        if u == "cores": return f"{v:.3f}"
+        if u == "m":
+            if v == 0:   return "0m"
+            if v < 0.01: return f"{v:.4f}m"
+            if v < 0.1:  return f"{v:.3f}m"
+            if v < 1:    return f"{v:.2f}m"
+            return f"{v:.1f}m"
+        if u == "MiB":   return f"{v:.0f}Mi"
+        if u in ("bytes", "bytes/s"):
+            if v >= 1e9: return f"{v/1e9:.2f}G"
+            if v >= 1e6: return f"{v/1e6:.1f}M"
+            if v >= 1e3: return f"{v/1e3:.0f}k"
+            return f"{v:.0f}"
+        return f"{v:.2f}"
+
     series_out = []
-    for r in results[:8]:
+    for r in results[:CHART_CAP]:
         metric_labels = r.get("metric", {})
-        # Build a readable series label
-        # Build a readable label: prefer namespace/pod, fall back to other dims
         ns_val  = metric_labels.get("namespace") or metric_labels.get("pod_namespace") or ""
         pod_val = metric_labels.get("pod")       or metric_labels.get("pod_name")      or ""
         if ns_val and pod_val:
@@ -1441,12 +1459,8 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h", step: st
         elif ns_val:
             label = ns_val
         else:
-            # fallback: instance (shorten hostname), then any first label value
             inst = metric_labels.get("instance", "")
-            if inst:
-                label = inst.split(".")[0]
-            else:
-                label = next(iter(metric_labels.values()), "unknown")
+            label = inst.split(".")[0] if inst else next(iter(metric_labels.values()), "unknown")
 
         values = r.get("values", [])
         series_out.append({
@@ -1454,12 +1468,13 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h", step: st
             "values": [[float(ts), float(v)] for ts, v in values],
         })
 
-    # Compute a text summary (last value per series)
-    summary_lines = [f"📊 {title} — last {duration}"]
+    # Text summary — in sync with chart (same CHART_CAP series, same fmt)
+    cap_note = f" (top {CHART_CAP} of {total_series})" if total_series > CHART_CAP else ""
+    summary_lines = [f"📊 {title} — last {duration}{cap_note}"]
     for s in series_out:
         if s["values"]:
             last_val = s["values"][-1][1]
-            summary_lines.append(f"  {s['label']}: {last_val:.2f} {unit}")
+            summary_lines.append(f"  {s['label']}: {_fmt(last_val, unit)}")
 
     graph_payload = _json_local.dumps({
         "title":    title,
