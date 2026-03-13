@@ -723,10 +723,7 @@ button{cursor:pointer;font-family:inherit}
       <div id="readme-pane">
 
         <h1><img src="/static/chatbot-icon.svg" width="26" height="26" style="vertical-align:middle;margin-right:6px;filter:brightness(0) invert(1)"><img src="/static/k8s-logo.svg" width="24" height="24" style="vertical-align:middle;margin-right:8px">Cloudera ECS AI Ops</h1>
-        <p>An air-gapped Kubernetes operations assistant for Cloudera ECS, powered by a local LLM (Qwen3-8B on GPU / Qwen3-8B-GGUF Q4_K_M on CPU), LangGraph agentic loop, and LanceDB RAG.</p>
-
-
-        <div class="warn">&#9888; This chatbot is <strong>read-only by default</strong> — it will never restart, delete, or modify cluster resources. Validated on Qwen3-8B running on GPU (HuggingFace Transformers) and Qwen3-8B-GGUF Q4_K_M running on CPU (llama-cpp-python). Using other self-hosted models may produce different or unexpected responses.</div>
+        <p>An air-gapped Kubernetes operations assistant for Cloudera ECS, powered by a local LLM (Qwen3-8B on GPU / Qwen3-8B-GGUF Q4_K_M on CPU), LangGraph agentic loop, and LanceDB RAG. &#9888; This chatbot is read-only by default, it will never restart, delete, or modify cluster resources. Validated on Qwen3-8B running on GPU (HF Transformers) and Qwen3-8B-GGUF Q4_K_M running on CPU (llama-cpp-python). Using other self-hosted models may produce different or unexpected responses.</p>
 
         <!-- ── ECS AI Ops Chatbot ──────────────────────────────────────── -->
         <h2 style="font-size:15px;font-family:'IBM Plex Sans',sans-serif;letter-spacing:normal"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:5px"><path d="M18 3a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-4.724l-4.762 2.857a1 1 0 0 1 -1.508 -.743l-.006 -.114v-2h-1a4 4 0 0 1 -3.995 -3.8l-.005 -.2v-8a4 4 0 0 1 4 -4zm-2.8 9.286a1 1 0 0 0 -1.414 .014a2.5 2.5 0 0 1 -3.572 0a1 1 0 0 0 -1.428 1.4a4.5 4.5 0 0 0 6.428 0a1 1 0 0 0 -.014 -1.414m-5.69 -4.286h-.01a1 1 0 1 0 0 2h.01a1 1 0 0 0 0 -2m5 0h-.01a1 1 0 0 0 0 2h.01a1 1 0 0 0 0 -2" /></svg> ECS AI Ops Chatbot</h2>
@@ -858,7 +855,6 @@ NUM_GPU=0</code></pre>
           <tr><td><strong>GPU</strong> (recommended)</td><td>Qwen3-8B (bfloat16)</td><td>8</td><td>32 GB</td><td>~20 GB</td></tr>
           <tr><td><strong>CPU only</strong></td><td>Qwen3-8B-GGUF Q4_K_M</td><td>16</td><td>16 GB</td><td>—</td></tr>
         </table>
-        <div class="warn">&#9888; GPU inference is strongly recommended for better user experience. Qwen3-8B Q4_K_M uses ~5–6 GB RAM for model weights; remaining RAM is used for the OS, embeddings, and LanceDB.</div>
 
         <!-- ── Security ───────────────────────────────────────────────── -->
         <h2>Security Notes</h2>
