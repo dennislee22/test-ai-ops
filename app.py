@@ -754,6 +754,7 @@ class AgentState(TypedDict):
     iteration: int
     status_updates: list
     direct_answer: Optional[str]
+    req_id: str
 
 def _build_llm():
     _log_ag.info(f"[LLM] Loading model: {LLM_MODEL}")
@@ -868,13 +869,13 @@ def build_agent():
     _sys_prompt = _load_system_prompt().format(custom_rules=CUSTOM_RULES or "None.")
     prompt = (_sys_prompt + "\n/no_think") if _is_qwen3 else _sys_prompt
 
-    def _default_tools_for(user_msg: str):
-        return default_tools_for(user_msg)
+    def _default_tools_for(user_msg: str, req_id: str = ""):
+        return default_tools_for(user_msg, req_id=req_id)
 
-    def _resolve_namespace(lm: str) -> str:
-        return resolve_namespace(lm)
+    def _resolve_namespace(lm: str, req_id: str = "") -> str:
+        return resolve_namespace(lm, req_id=req_id)
 
-    def _prepare_messages_for_hf(msgs: list) -> list:
+    def _prepare_messages_for_hf(msgs: list, req_id: str = "") -> list:
         if not msgs:
             return msgs
 
@@ -882,7 +883,7 @@ def build_agent():
 
         if not has_tool_results:
             filtered = [m for m in msgs if isinstance(m, (HumanMessage, SystemMessage))]
-            _log_ag.debug(f"[prepare_msgs] tool selection — passing {len(filtered)} msg(s)")
+            _log_ag.debug(f"[REQ:{req_id}] [prepare_msgs] tool selection — passing {len(filtered)} msg(s)")
             return filtered
 
         original_question = next((m.content for m in msgs if isinstance(m, HumanMessage)), "")
@@ -1156,7 +1157,7 @@ def build_agent():
 
         include_tools = True
 
-        invoke_msgs = _prepare_messages_for_hf(msgs)
+        invoke_msgs = _prepare_messages_for_hf(msgs, req_id=state.get("req_id", ""))
         chat_msgs = [{"role": "system", "content": prompt}] + _msgs_to_qwen3(invoke_msgs, include_tools)
         _log_ag.debug(f"[llm_node itr={itr}] chat_msgs count={len(chat_msgs)} has_tool_results={has_tool_results}")
 
@@ -1261,12 +1262,13 @@ def build_agent():
 
         if not tcs and not content.strip() and itr == 1 and ENABLE_FALLBACK_ROUTING:
             user_msg = next((m.content for m in reversed(msgs) if isinstance(m, HumanMessage)), "")
-            _log_ag.warning(f"[llm_node itr={itr}] complete failure — fallback routing for: {user_msg!r}")
+            _req_id = state.get("req_id", "")
+            _log_ag.warning(f"[REQ:{_req_id}] [llm_node itr={itr}] LLM produced no output — triggering fallback routing for: {user_msg!r}")
             import uuid
-            fallback = _default_tools_for(user_msg)
+            fallback = _default_tools_for(user_msg, req_id=_req_id)
 
             if fallback and fallback[0][0] == "__conversational__":
-                _log_ag.info("[llm_node] how-to query — injecting conversational prompt")
+                _log_ag.info(f"[REQ:{state.get('req_id','')}] [llm_node] how-to query — injecting conversational prompt")
 
                 conv_msgs = msgs + [HumanMessage(content=(
                     f"The user asked: {user_msg!r}\n\n"
@@ -1317,7 +1319,7 @@ def build_agent():
                        if isinstance(m, HumanMessage)), "")
 
         tcs = getattr(last, "tool_calls", []) or []
-        _log_ag.debug(f"[tool_node] executing {len(tcs)} tool call(s)")
+        _log_ag.debug(f"[REQ:{state.get('req_id','')}] [tool_node] executing {len(tcs)} tool call(s)")
 
         direct_answer = None
 
@@ -1333,7 +1335,7 @@ def build_agent():
                     f"[tool_node] get_secrets decode override: "
                     f"llm_supplied={llm_decode} → server_toggle={server_decode}")
 
-            _log_ag.info(f"[tool_node] calling tool={name!r} args={args!r}")
+            _log_ag.info(f"[REQ:{state.get('req_id','')}] [tool_node] calling tool={name!r} args={args!r}")
             tools_called.append(name)
             if name == "kubectl_exec" and "command" in args:
                 updates.append(f"$ {args['command']}")
@@ -1341,13 +1343,14 @@ def build_agent():
                 updates.append(f"⚙️ {name}")
 
             out = _call_tool(name, args, all_tools)
-            _log_ag.debug(f"[tool_node] {name} result preview: {str(out)[:200]!r}")
+            _log_ag.debug(f"[REQ:{state.get('req_id','')}] [tool_node] {name} result preview: {str(out)[:200]!r}")
             results.append(ToolMessage(content=out, tool_call_id=tc["id"]))
 
-            if len(tcs) == 1 and should_bypass_llm(name, args, out, user_q):
-                _log_ag.info(f"[tool_node] LLM bypass — returning tool output directly for {name!r}")
+            _req_id = state.get("req_id", "")
+            if len(tcs) == 1 and should_bypass_llm(name, args, out, user_q, req_id=_req_id):
+                _log_ag.info(f"[REQ:{_req_id}] [tool_node] LLM bypass — returning tool output directly for {name!r}")
                 updates.append("⚡ Direct output (LLM synthesis skipped)")
-                direct_answer = build_direct_answer(name, out, user_q)
+                direct_answer = build_direct_answer(name, out, user_q, req_id=_req_id)
 
         return {
             "messages":        results,
@@ -1447,10 +1450,11 @@ async def run_agent(user_message: str) -> dict:
     t0 = time.time()
     logger.info(f"[REQ:{req_id}] agent.ainvoke starting")
     final = await agent.ainvoke({
-        "messages": [HumanMessage(content=user_message)],
+        "messages":        [HumanMessage(content=user_message)],
         "tool_calls_made": [],
-        "iteration": 0,
-        "status_updates": [f"🤖 Model: {LLM_MODEL}"],
+        "iteration":       0,
+        "status_updates":  [f"🤖 Model: {LLM_MODEL}"],
+        "req_id":          req_id,
     })
     elapsed = time.time() - t0
     last    = final["messages"][-1]
@@ -1533,6 +1537,7 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
                     "tool_calls_made": [],
                     "iteration":       0,
                     "status_updates":  [],
+                    "req_id":          req_id,
                 },
                 version="v2",
                 config={"recursion_limit": 12},
@@ -1645,6 +1650,7 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
                         "tool_calls_made": [],
                         "iteration":       0,
                         "status_updates":  [],
+                        "req_id":          req_id,
                     }),
                     timeout=_STREAM_TIMEOUT,
                 )
@@ -1831,6 +1837,7 @@ async def chat_stream(req: ChatRequest):
     if not req.message.strip():
         raise HTTPException(400, "Empty message")
     logger.info(f"[API] POST /chat/stream  message={req.message!r:.120}  decode_secrets={req.decode_secrets}  history_turns={len(req.history)}")
+    logger.info(f"[API] Question: {req.message!r:.200}")
     _decode_secrets_ctx.set(req.decode_secrets)
     logger.debug(f"[API] ContextVar set: decode_secrets={_decode_secrets_ctx.get()}")
 

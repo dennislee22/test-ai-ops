@@ -3420,6 +3420,25 @@ def exec_db_query(namespace: str, sql: str,
                 f"WHERE table_name = '{tbl}' ORDER BY ordinal_position"
             )
 
+        # Translate MySQL user queries to PostgreSQL equivalents
+        if re.search(r"mysql\.user", pg_sql, re.IGNORECASE):
+            pg_sql = re.sub(
+                r"SELECT\s+user\s*,\s*host\s+FROM\s+mysql\.user",
+                "SELECT usename AS user, 'localhost' AS host FROM pg_catalog.pg_user",
+                pg_sql, flags=re.IGNORECASE
+            )
+            pg_sql = re.sub(
+                r"FROM\s+mysql\.user",
+                "FROM pg_catalog.pg_shadow",
+                pg_sql, flags=re.IGNORECASE
+            )
+            pg_sql = re.sub(r"\buser\b", "usename", pg_sql, flags=re.IGNORECASE)
+            pg_sql = re.sub(r"\bpassword\b", "passwd", pg_sql, flags=re.IGNORECASE)
+
+        # Translate SELECT user() / SELECT current_user()
+        if re.match(r"^\s*SELECT\s+(current_user|user)\s*\(\s*\)\s*$", pg_sql, re.IGNORECASE):
+            pg_sql = "SELECT current_user"
+
         safe_sql = pg_sql.replace("'", "'\\''")
 
         host = creds.get("host") or ""

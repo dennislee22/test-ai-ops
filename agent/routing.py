@@ -1,4 +1,7 @@
 import re
+import logging
+
+_log = logging.getLogger("agent.routing")
 
 NS_ALIASES = {
     "vault":      "vault-system",
@@ -23,23 +26,29 @@ NS_ALIASES = {
 }
 
 
-def resolve_namespace(lm: str) -> str:
+def resolve_namespace(lm: str, req_id: str = "") -> str:
+    tag = f"[REQ:{req_id}] " if req_id else ""
     m = re.search(r'(?:^|\s)(?:in|for|namespace|ns)\s+([a-z0-9-]+)', lm)
     if m:
         raw = m.group(1)
         if raw not in ("all", "namespace", "ns", "the", "this"):
-            return NS_ALIASES.get(raw, raw)
+            resolved = NS_ALIASES.get(raw, raw)
+            _log.debug(f"{tag}[routing] namespace resolved: {raw!r} → {resolved!r} (explicit pattern)")
+            return resolved
 
     for keyword, real_ns in NS_ALIASES.items():
         if keyword in lm:
+            _log.debug(f"{tag}[routing] namespace resolved: {keyword!r} keyword → {real_ns!r}")
             return real_ns
 
+    _log.debug(f"{tag}[routing] namespace resolved: no match → 'all'")
     return "all"
 
 
-def default_tools_for(user_msg: str) -> list:
+def default_tools_for(user_msg: str, req_id: str = "") -> list:
+    tag = f"[REQ:{req_id}] " if req_id else ""
     lm = user_msg.lower().strip()
-    ns = resolve_namespace(lm)
+    ns = resolve_namespace(lm, req_id=req_id)
 
     _is_howto = (
         re.search(r'\b(teach|explain|show)\s+(me\s+)?(how\s+(you|to|do\s+you)|step\s+by\s+step)', lm)
@@ -49,6 +58,7 @@ def default_tools_for(user_msg: str) -> list:
         or re.search(r'\b(demonstrate|walkthrough|walk\s+me\s+through)\b', lm)
     )
     if _is_howto:
+        _log.info(f"{tag}[routing] FALLBACK → __conversational__ (how-to / self-referential)")
         return [("__conversational__", {})]
 
     _is_gibberish = (
@@ -60,6 +70,7 @@ def default_tools_for(user_msg: str) -> list:
         ]))
     )
     if _is_gibberish:
+        _log.info(f"{tag}[routing] FALLBACK → __conversational__ (gibberish / too short)")
         return [("__conversational__", {})]
 
     _is_image_query = any(k in lm for k in [
@@ -68,6 +79,7 @@ def default_tools_for(user_msg: str) -> list:
         "what version", "which version", "version of",
     ]) and any(k in lm for k in ["pod", "pods", "container", "containers", "longhorn", "namespace"])
     if _is_image_query:
+        _log.info(f"{tag}[routing] FALLBACK → get_pod_images(namespace={ns!r})")
         return [("get_pod_images", {"namespace": ns})]
 
     _is_coredns_query = any(k in lm for k in [
@@ -76,6 +88,7 @@ def default_tools_for(user_msg: str) -> list:
         "is dns", "is coredns", "is the dns", "is the coredns",
     ])
     if _is_coredns_query:
+        _log.info(f"{tag}[routing] FALLBACK → get_coredns_health()")
         return [("get_coredns_health", {})]
 
     _is_diagnostic = any(k in lm for k in [
@@ -89,6 +102,7 @@ def default_tools_for(user_msg: str) -> list:
     ]) and any(k in lm for k in ["pod", "pods", "container", "containers"])
 
     if _is_diagnostic:
+        _log.info(f"{tag}[routing] FALLBACK → get_unhealthy_pods_detail(namespace={ns!r}) (diagnostic)")
         return [("get_unhealthy_pods_detail", {"namespace": ns})]
 
     _is_pod_health = any(k in lm for k in [
@@ -97,6 +111,7 @@ def default_tools_for(user_msg: str) -> list:
         "pending", "evicted",
     ])
     if _is_pod_health:
+        _log.info(f"{tag}[routing] FALLBACK → get_pod_status(namespace={ns!r}) (pod health)")
         return [("get_pod_status", {"namespace": ns, "show_all": False})]
 
     _is_cluster_health = any(k in lm for k in [
@@ -105,6 +120,7 @@ def default_tools_for(user_msg: str) -> list:
         "whats wrong", "check",
     ])
     if _is_cluster_health:
+        _log.info(f"{tag}[routing] FALLBACK → broad cluster health tools (namespace={ns!r})")
         return [
             ("get_node_health", {}),
             ("get_pod_status", {"namespace": ns, "show_all": False}),
@@ -113,4 +129,5 @@ def default_tools_for(user_msg: str) -> list:
             ("get_events", {"namespace": ns, "warning_only": True}),
         ]
 
+    _log.info(f"{tag}[routing] FALLBACK → default (get_node_health + get_pod_status, namespace={ns!r})")
     return [("get_node_health", {}), ("get_pod_status", {"namespace": ns, "show_all": False})]
