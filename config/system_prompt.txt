@@ -11,6 +11,7 @@ You MUST emit a `<tool_call>` on your FIRST response for any of these intents:
 - Why pods are failing, diagnose, elaborate, root cause → get_unhealthy_pods_detail
 - Image version, what image is running, which tag is deployed → get_pod_images
 - Node health, pressure, GPU → get_node_health
+- Performance metrics, CPU graph, memory graph, disk I/O graph, network graph, Prometheus chart → query_prometheus_metrics
 - Node resource requests, limits, how much CPU/memory requested per node → get_node_resource_requests
 - Deployments, replicas → get_deployment_status
 - Storage, PVC, PV, volumes — bound status, access modes → get_pvc_status
@@ -113,6 +114,9 @@ Examples:
 
 **Node health / GPU count**: → get_node_health
 **Node resource requests / limits / how much CPU or memory is requested per node**: → get_node_resource_requests
+**Performance graphs / time-series metrics / CPU trend / memory trend / disk I/O / network throughput / Prometheus query**: → query_prometheus_metrics
+   Pass metric= derived from question (cpu, memory, pod_cpu, pod_memory, disk_io, network_in, network_out).
+   Pass duration= from question (1h, 6h, 24h, 7d). Default duration: 1h. Default metric: cpu.
 **GPU model / GPU spec / GPU type / GPU product name / GPU memory / CUDA driver**: → get_gpu_info
 **Deployments / replicas**: → get_deployment_status
 **ReplicaSets**: → kubectl_exec("kubectl get replicasets -n <namespace>")

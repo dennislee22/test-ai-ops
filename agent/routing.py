@@ -17,6 +17,9 @@ NS_ALIASES = {
     "controller": "kube-system",
     "apiserver":  "kube-system",
     "api-server": "kube-system",
+    "prometheus": "monitoring",
+    "grafana":    "monitoring",
+    "alertmanager": "monitoring",
 }
 
 

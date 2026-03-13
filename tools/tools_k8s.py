@@ -1186,6 +1186,201 @@ def get_pv_usage(threshold: int = 80) -> str:
 
     return "\n".join(lines)
 
+# ── Prometheus metrics tool ──────────────────────────────────────────────────
+
+def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h", step: str = "60s") -> str:
+    """
+    Query Prometheus for time-series performance metrics and return tagged JSON
+    for inline SVG chart rendering in the frontend.
+
+    Discovers the Prometheus server pod automatically (any namespace, any pod
+    whose name contains 'prometheus-server'), then execs curl against the
+    Prometheus HTTP API (query_range).
+
+    Returns a §GRAPH§...§GRAPH§ tagged JSON block that the frontend renders
+    as an inline SVG chart, plus a human-readable text summary.
+    """
+    import json as _json_local
+    import time as _time
+    from kubernetes.stream import stream as _k8s_stream
+
+    # ── PromQL templates ────────────────────────────────────────────────────
+    METRIC_MAP = {
+        # CPU
+        "cpu":          ("CPU Usage per Node (%)",
+                         "100 - (avg by (instance) (rate(node_cpu_seconds_total{mode='idle'}[5m])) * 100)",
+                         "%"),
+        "node_cpu":     ("CPU Usage per Node (%)",
+                         "100 - (avg by (instance) (rate(node_cpu_seconds_total{mode='idle'}[5m])) * 100)",
+                         "%"),
+        # Memory
+        "memory":       ("Memory Usage per Node (%)",
+                         "100 - ((node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100)",
+                         "%"),
+        "node_memory":  ("Memory Usage per Node (%)",
+                         "100 - ((node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100)",
+                         "%"),
+        # Pod CPU
+        "pod_cpu":      ("Pod CPU Usage (cores)",
+                         "sum by (pod, namespace) (rate(container_cpu_usage_seconds_total{container!='',pod!=''}[5m]))",
+                         "cores"),
+        # Pod Memory
+        "pod_memory":   ("Pod Memory Usage (MiB)",
+                         "sum by (pod, namespace) (container_memory_working_set_bytes{container!='',pod!=''}) / 1048576",
+                         "MiB"),
+        # PVC disk I/O
+        "disk_io":      ("PVC Disk I/O (bytes/s)",
+                         "sum by (persistentvolumeclaim, namespace) (rate(kubelet_volume_stats_used_bytes[5m]))",
+                         "bytes/s"),
+        "pvc_io":       ("PVC Disk I/O (bytes/s)",
+                         "sum by (persistentvolumeclaim, namespace) (rate(kubelet_volume_stats_used_bytes[5m]))",
+                         "bytes/s"),
+        # Generic fallback
+        "network_in":   ("Network Receive (bytes/s)",
+                         "sum by (instance) (rate(node_network_receive_bytes_total{device!='lo'}[5m]))",
+                         "bytes/s"),
+        "network_out":  ("Network Transmit (bytes/s)",
+                         "sum by (instance) (rate(node_network_transmit_bytes_total{device!='lo'}[5m]))",
+                         "bytes/s"),
+    }
+    key = metric.lower().replace(" ", "_").replace("-", "_")
+    title, promql, unit = METRIC_MAP.get(key, (
+        f"Metric: {metric}",
+        metric,   # treat raw input as PromQL if not in map
+        "value",
+    ))
+
+    # ── Duration → seconds ─────────────────────────────────────────────────
+    def _dur_seconds(s):
+        s = s.strip().lower()
+        mul = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+        try:
+            return int(s[:-1]) * mul.get(s[-1], 1)
+        except Exception:
+            return 3600
+
+    dur_sec = _dur_seconds(duration)
+    end_ts  = int(_time.time())
+    start_ts = end_ts - dur_sec
+
+    # ── Discover Prometheus pod ─────────────────────────────────────────────
+    prom_pod = None
+    prom_ns  = None
+    prom_container = "prometheus-server"
+    try:
+        pods = _core.list_pod_for_all_namespaces(field_selector="status.phase=Running")
+        for p in pods.items:
+            n = p.metadata.name.lower()
+            if "prometheus-server" in n and "operator" not in n:
+                # pick the right container
+                cnames = [c.name for c in (p.spec.containers or [])]
+                cname  = "prometheus-server" if "prometheus-server" in cnames else (cnames[0] if cnames else "prometheus-server")
+                prom_pod       = p.metadata.name
+                prom_ns        = p.metadata.namespace
+                prom_container = cname
+                break
+    except Exception as e:
+        return f"Could not list pods to find Prometheus: {e}"
+
+    if not prom_pod:
+        return ("No running Prometheus server pod found. "
+                "Ensure a pod with 'prometheus-server' in its name is running.")
+
+    # ── Detect Prometheus base path ─────────────────────────────────────────
+    # Some installs use /prometheus prefix, others use /
+    def _exec(cmd):
+        try:
+            resp = _k8s_stream(
+                _core.connect_get_namespaced_pod_exec,
+                prom_pod, prom_ns,
+                command=["/bin/sh", "-c", cmd],
+                container=prom_container,
+                stderr=True, stdin=False, stdout=True, tty=False,
+                _preload_content=True,
+            )
+            return resp.strip() if isinstance(resp, str) else ""
+        except Exception as exc:
+            return f"[exec error: {exc}]"
+
+    # Try /prometheus/api/v1 first (like your cluster), then /api/v1
+    base_url = "http://localhost:9090"
+    probe = _exec(f"curl -s -o /dev/null -w '%{{http_code}}' '{base_url}/prometheus/api/v1/query?query=up'")
+    if probe.strip() == "200":
+        api_base = f"{base_url}/prometheus/api/v1"
+    else:
+        probe2 = _exec(f"curl -s -o /dev/null -w '%{{http_code}}' '{base_url}/api/v1/query?query=up'")
+        if probe2.strip() == "200":
+            api_base = f"{base_url}/api/v1"
+        else:
+            return (f"Prometheus API not reachable at {base_url}. "
+                    f"HTTP probes returned: /prometheus → {probe}, / → {probe2}. "
+                    f"Pod: {prom_pod} in {prom_ns}.")
+
+    # ── Query ────────────────────────────────────────────────────────────────
+    import urllib.parse as _up
+    encoded = _up.quote(promql, safe="")
+    url = (f"{api_base}/query_range"
+           f"?query={encoded}"
+           f"&start={start_ts}&end={end_ts}&step={step}")
+    raw = _exec(f"curl -s --max-time 15 '{url}'")
+    if raw.startswith("[exec error"):
+        return raw
+
+    try:
+        data = _json_local.loads(raw)
+    except Exception:
+        return f"Prometheus returned non-JSON response:\n{raw[:500]}"
+
+    if data.get("status") != "success":
+        return f"Prometheus query failed: {data.get('error', data)}"
+
+    results = data.get("data", {}).get("result", [])
+    if not results:
+        return (f"No data returned for metric '{metric}' over the last {duration}. "
+                f"The PromQL may not match any active series on this cluster.\n"
+                f"PromQL used: {promql}")
+
+    # ── Build chart payload ─────────────────────────────────────────────────
+    # Cap series at 8 to keep the chart readable
+    series_out = []
+    for r in results[:8]:
+        metric_labels = r.get("metric", {})
+        # Build a readable series label
+        label_parts = []
+        for lk in ("instance", "pod", "namespace", "persistentvolumeclaim", "device"):
+            if lk in metric_labels:
+                v = metric_labels[lk]
+                # Shorten hostnames like ecs-m-01.dlee155.cldr.example → ecs-m-01
+                if "." in v and lk == "instance":
+                    v = v.split(".")[0]
+                label_parts.append(v)
+        label = "/".join(label_parts) if label_parts else str(metric_labels)
+
+        values = r.get("values", [])
+        series_out.append({
+            "label": label,
+            "values": [[float(ts), float(v)] for ts, v in values],
+        })
+
+    # Compute a text summary (last value per series)
+    summary_lines = [f"📊 {title} — last {duration}"]
+    for s in series_out:
+        if s["values"]:
+            last_val = s["values"][-1][1]
+            summary_lines.append(f"  {s['label']}: {last_val:.2f} {unit}")
+
+    graph_payload = _json_local.dumps({
+        "title":    title,
+        "unit":     unit,
+        "duration": duration,
+        "series":   series_out,
+    }, separators=(",", ":"))
+
+    summary = "\n".join(summary_lines)
+    return f"{summary}\n§GRAPH§{graph_payload}§GRAPH§"
+
+
+
 def get_coredns_health() -> str:
     from kubernetes.stream import stream as _k8s_stream
 
@@ -3432,6 +3627,51 @@ K8S_TOOLS["get_node_resource_requests"] = {
         "'node resource utilization', 'which node has the most requests', 'resource pressure per node'."
     ),
     "parameters": {},
+}
+
+
+K8S_TOOLS["query_prometheus_metrics"] = {
+    "fn":          query_prometheus_metrics,
+    "description": (
+        "Query Prometheus for real-time performance metrics and render an inline time-series chart. "
+        "Use for: CPU usage per node, memory usage per node, pod CPU/memory usage, PVC disk I/O, "
+        "network throughput, or any PromQL metric. "
+        "Supported metric shortcuts: 'cpu' (node CPU %), 'memory' (node memory %), "
+        "'pod_cpu' (pod CPU cores), 'pod_memory' (pod memory MiB), "
+        "'disk_io' (PVC I/O bytes/s), 'network_in', 'network_out'. "
+        "You may also pass a raw PromQL expression as the metric parameter. "
+        "duration sets the time window (e.g. '1h', '6h', '24h', '7d'). "
+        "step controls resolution (e.g. '60s', '5m')."
+    ),
+    "parameters": {
+        "metric": {
+            "type": "string",
+            "default": "cpu",
+            "description": (
+                "Metric shortcut or raw PromQL. Shortcuts: cpu, memory, pod_cpu, pod_memory, "
+                "disk_io, network_in, network_out. Extract from user question — "
+                "'CPU usage' → 'cpu', 'memory' → 'memory', 'pod memory' → 'pod_memory', "
+                "'disk I/O' or 'PVC I/O' → 'disk_io'. Default: 'cpu'."
+            ),
+        },
+        "duration": {
+            "type": "string",
+            "default": "1h",
+            "description": (
+                "Time window to query. Extract from user question — "
+                "'last hour' → '1h', 'last 6 hours' → '6h', 'today' / 'last 24 hours' → '24h', "
+                "'last week' → '7d'. Default: '1h'."
+            ),
+        },
+        "step": {
+            "type": "string",
+            "default": "60s",
+            "description": (
+                "Query resolution. Use '60s' for ≤6h windows, '5m' for ≤24h, '15m' for >24h. "
+                "Auto-scale: if duration is >24h, use '15m'; if >6h, use '5m'; else '60s'."
+            ),
+        },
+    },
 }
 
 K8S_TOOLS["kubectl_exec"] = {
