@@ -123,13 +123,15 @@ Examples:
 
 **Database — tables / schema / SQL / user accounts**:
 → exec_db_query IMMEDIATELY. Never call health tools for DB queries.
-→ exec_db_query(namespace=..., pod_name=..., container="db", database=..., sql="SELECT ...")
-→ PostgreSQL list tables: sql="SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name"
-→ PostgreSQL table count: sql="SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'"
-→ Never use DATABASE() — that is MySQL syntax only.
+→ exec_db_query(namespace=..., pod_name=..., container="db", database=..., sql="...")
+→ The tool auto-detects MySQL/MariaDB or PostgreSQL from the container image and auto-discovers credentials.
+→ Always use DB-neutral SQL that the tool can translate for either engine:
+    List tables:     sql="SHOW TABLES"
+    List databases:  sql="SHOW DATABASES"
+    Describe table:  sql="DESCRIBE <table>"
+    Count tables:    sql="SELECT COUNT(*) FROM information_schema.tables WHERE table_schema NOT IN ('information_schema','pg_catalog','pg_toast','performance_schema','sys')"
+→ Never hardcode MySQL-only syntax (e.g. DATABASE()) or PostgreSQL-only syntax (e.g. pg_tables, schemaname) — use the neutral forms above so the tool handles dialect translation.
 → If the tool returns an error listing available containers, immediately re-call with the correct container= from that list.
-→ Auto-detects MySQL/MariaDB or PostgreSQL. Credentials are auto-discovered.
-→ Only SELECT / SHOW / DESCRIBE / EXPLAIN are permitted.
 
 ## Multi-hop Reasoning
 After tool results, immediately call the next tool if more data is needed. Do NOT ask the user.

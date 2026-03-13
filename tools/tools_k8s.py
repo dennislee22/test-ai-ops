@@ -2650,23 +2650,40 @@ def exec_db_query(namespace: str, sql: str,
                 pod_name, namespace, container_name, user, password)
             _log.info(f"[exec_db_query] postgres db auto-discovered: {db_name!r}")
 
-        # MySQL: table_schema=DATABASE()  →  PostgreSQL: table_schema='public'
-        # (information_schema.tables covers the connected database only)
+        # MySQL: table_schema=DATABASE()  →  PostgreSQL: any non-system schema
         pg_sql = re.sub(
             r"table_schema\s*=\s*DATABASE\s*\(\s*\)",
-            "table_schema='public'",
+            "table_schema NOT IN ('information_schema','pg_catalog','pg_toast')",
             safe_sql,
             flags=re.IGNORECASE,
         )
-        # MySQL: SHOW TABLES  →  list tables in connected db
+        # Neutral COUNT: strip MySQL-only system schemas that don't exist in PG
+        pg_sql = re.sub(
+            r"'performance_schema'\s*,\s*'sys'\s*",
+            "",
+            pg_sql,
+            flags=re.IGNORECASE,
+        )
+        # MySQL: SHOW TABLES  →  list tables in connected db (all non-system schemas)
         if re.match(r"^\s*SHOW\s+TABLES\s*$", pg_sql, re.IGNORECASE):
             pg_sql = (
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema='public' ORDER BY table_name"
+                "SELECT schemaname || '.' || tablename AS table "
+                "FROM pg_tables "
+                "WHERE schemaname NOT IN ('information_schema','pg_catalog','pg_toast') "
+                "ORDER BY schemaname, tablename"
             )
         # MySQL: SHOW DATABASES  →  PostgreSQL equivalent
         if re.match(r"^\s*SHOW\s+DATABASES\s*$", pg_sql, re.IGNORECASE):
             pg_sql = "SELECT datname FROM pg_database ORDER BY datname"
+        # MySQL: DESCRIBE <table>  →  PostgreSQL equivalent
+        _desc = re.match(r"^\s*DESCRIBE\s+(\S+)\s*$", pg_sql, re.IGNORECASE)
+        if _desc:
+            tbl = _desc.group(1).strip("`\"'")
+            pg_sql = (
+                f"SELECT column_name, data_type, is_nullable, column_default "
+                f"FROM information_schema.columns "
+                f"WHERE table_name = '{tbl}' ORDER BY ordinal_position"
+            )
 
         safe_sql = pg_sql  # use the rewritten SQL from here on
 
@@ -2686,12 +2703,14 @@ def exec_db_query(namespace: str, sql: str,
                 f"{db_flag} --no-password -t -A -c '{safe_sql}'"
             )
         else:
-            # Local socket — peer/trust auth; PGPASSWORD set as fallback
+            # Local socket — try peer/trust auth first, then fall back to postgres superuser
             cmd = (
                 f"{pg_env}psql {user_flag} {db_flag} "
                 f"--no-password -t -A -c '{safe_sql}' 2>&1 || "
-                # fallback: drop -U (use OS user inside the container)
-                f"psql {db_flag} -t -A -c '{safe_sql}'"
+                # fallback 1: drop -U (use OS user inside the container)
+                f"psql {db_flag} -t -A -c '{safe_sql}' 2>&1 || "
+                # fallback 2: use postgres superuser (handles UID 999 / no OS user)
+                f"psql -U postgres {db_flag} -t -A -c '{safe_sql}'"
             )
         exec_cmd = ["/bin/sh", "-c", cmd]
 
