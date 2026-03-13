@@ -943,6 +943,17 @@ def build_agent():
             parts.append(f"--- TOOL RESULT {i} ---\n{body}\n")
         combined = "".join(parts)
 
+        _PV_USAGE_KEYWORDS = (
+            "nearing capacity", "nearing their", "storage capacity", "storage usage",
+            "pv usage", "pvc usage", "pv full", "pvc full", "disk usage",
+            "almost full", "running out", "how full", "above 80", "above 90",
+            "which pv", "which pvs", "which pvc", "which pvcs",
+        )
+        is_pv_usage = (
+            any(k in _oq for k in _PV_USAGE_KEYWORDS)
+            or any(getattr(tr, "name", "") == "get_pv_usage" for tr in tool_results)
+        )
+
         _DNS_HEALTH_KEYWORDS = (
             "is coredns", "is the coredns", "coredns running", "coredns ok", "coredns health",
             "is dns", "is the dns", "dns running", "dns ok", "dns health",
@@ -971,6 +982,19 @@ def build_agent():
                 "2. If any problems exist, list them specifically: name the exact pod, node, deployment, PVC, or event with the issue and its state.\n"
                 "3. If everything is healthy, say so briefly — do not list healthy items.\n"
                 "Use plain sentences. No markdown headers. No closing remarks."
+            )
+        elif is_pv_usage:
+            synthesis_prompt = (
+                "RULES:\n"
+                "1. Reproduce the tool output in full — do NOT summarise or compress any section.\n"
+                "2. Include every PVC entry: those nearing capacity, those within capacity, AND those skipped.\n"
+                "3. For skipped entries, show the exact reason from the tool output (e.g. actualSize=0, CRD missing, no running pod).\n"
+                "4. Do NOT replace skipped details with vague phrases like 'encountered issues' or 'no mounted pod'.\n"
+                "5. Answer ONLY from the tool results — do not invent any PVC names or usage figures.\n"
+                "\n"
+                f"Question: {original_question}\n\n"
+                f"Tool Results:\n{combined}\n"
+                "Present the full storage usage report exactly as structured in the tool results above."
             )
         elif is_dns_health:
             synthesis_prompt = (
