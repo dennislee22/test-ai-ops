@@ -1352,7 +1352,22 @@ def build_agent():
     def router(state: AgentState) -> Literal["tools", "end"]:
 
         if state.get("iteration", 0) >= 6: return "end"
-        return "tools" if getattr(state["messages"][-1], "tool_calls", None) else "end"
+
+        last = state["messages"][-1]
+        tcs  = getattr(last, "tool_calls", None)
+        if not tcs:
+            return "end"
+
+        # Hard stop: never call the same tool with identical args twice
+        already = state.get("tool_calls_made", [])
+        pending = [tc["name"] for tc in tcs]
+        if already and all(name in already for name in pending):
+            _log_ag.warning(
+                f"[router] duplicate tool call detected: {pending} already in {already} — forcing end"
+            )
+            return "end"
+
+        return "tools"
 
     g = StateGraph(AgentState)
     g.add_node("llm", llm_node)

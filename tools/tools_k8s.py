@@ -964,10 +964,14 @@ def get_pv_usage(threshold: int = 80) -> str:
             pct = round((actual / total) * 100, 1)
             used_gib  = round(actual / (1024**3), 2)
             total_gib = round(total  / (1024**3), 2)
-            avail_gib = round((total - actual) / (1024**3), 2)
-            flag = "🔴" if pct >= 90 else ("🟠" if pct >= threshold else "🟢")
+            avail_gib = round(max(0, total - actual) / (1024**3), 2)
+            # actualSize can exceed spec.size due to Longhorn replica overhead —
+            # cap display pct at 100% but preserve real value in label for visibility
+            display_pct = min(pct, 100.0)
+            pct_label = f"{pct}% used (Longhorn replica overhead)" if pct > 100 else f"{pct}% used"
+            flag = "🔴" if display_pct >= 90 else ("🟠" if display_pct >= threshold else "🟢")
             entry = (
-                f"  {flag} {ns}/{pvc_name}  {pct}% used  "
+                f"  {flag} {ns}/{pvc_name}  {pct_label}  "
                 f"({used_gib}Gi used / {total_gib}Gi total, {avail_gib}Gi free)  "
                 f"class:{sc}  source:longhorn-crd"
             )
