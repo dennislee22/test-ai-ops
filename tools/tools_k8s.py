@@ -1056,11 +1056,15 @@ def get_coredns_health() -> str:
         p for p in all_pods.items
         if any(pat in p.metadata.name.lower() for pat in DNS_PATTERNS)
         and "autoscaler" not in p.metadata.name.lower()
+        and not p.metadata.name.lower().startswith("helm-install-")
+        and (p.status.phase or "").lower() != "succeeded"
     ]
     autoscaler_pods = [
         p for p in all_pods.items
         if any(pat in p.metadata.name.lower() for pat in DNS_PATTERNS)
         and "autoscaler" in p.metadata.name.lower()
+        and not p.metadata.name.lower().startswith("helm-install-")
+        and (p.status.phase or "").lower() != "succeeded"
     ]
 
     if not dns_pods:
