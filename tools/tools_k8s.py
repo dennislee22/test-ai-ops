@@ -495,6 +495,91 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
 
     return "\n".join(out)
 
+
+def get_node_resource_requests() -> str:
+    """Aggregate CPU/memory requests and limits per node from all running pods."""
+    def _parse_cpu(s: str) -> float:
+        """Return millicores as float."""
+        s = s.strip()
+        if s.endswith("m"):
+            return float(s[:-1])
+        try:
+            return float(s) * 1000
+        except ValueError:
+            return 0.0
+
+    def _parse_mem(s: str) -> float:
+        """Return MiB as float."""
+        s = s.strip()
+        for suffix, factor in [("Ti", 1024*1024), ("Gi", 1024), ("Mi", 1),
+                                ("Ki", 1/1024), ("T", 1000*1024), ("G", 1000),
+                                ("M", 1), ("K", 1/1024)]:
+            if s.endswith(suffix):
+                try:
+                    return float(s[:-len(suffix)]) * factor
+                except ValueError:
+                    return 0.0
+        try:
+            return float(s) / (1024 * 1024)
+        except ValueError:
+            return 0.0
+
+    try:
+        nodes = _core.list_node()
+        all_pods = _core.list_pod_for_all_namespaces(field_selector="status.phase=Running")
+    except ApiException as e:
+        return f"K8s API error: {e.reason}"
+
+    node_alloc = {}
+    for node in nodes.items:
+        alloc = node.status.allocatable or {}
+        node_alloc[node.metadata.name] = {
+            "cpu_alloc_m":  _parse_cpu(alloc.get("cpu", "0")),
+            "mem_alloc_mi": _parse_mem(alloc.get("memory", "0")),
+            "cpu_req_m": 0.0, "cpu_lim_m": 0.0,
+            "mem_req_mi": 0.0, "mem_lim_mi": 0.0,
+            "pod_count": 0,
+        }
+
+    for pod in all_pods.items:
+        node_name = pod.spec.node_name or ""
+        if node_name not in node_alloc:
+            continue
+        node_alloc[node_name]["pod_count"] += 1
+        for c in (pod.spec.containers or []):
+            res = c.resources
+            if not res:
+                continue
+            req = res.requests or {}
+            lim = res.limits   or {}
+            node_alloc[node_name]["cpu_req_m"]  += _parse_cpu(req.get("cpu", "0"))
+            node_alloc[node_name]["cpu_lim_m"]  += _parse_cpu(lim.get("cpu", "0"))
+            node_alloc[node_name]["mem_req_mi"] += _parse_mem(req.get("memory", "0"))
+            node_alloc[node_name]["mem_lim_mi"] += _parse_mem(lim.get("memory", "0"))
+
+    lines = ["Node resource requests and limits (running pods):"]
+    for node in nodes.items:
+        name = node.metadata.name
+        d = node_alloc.get(name)
+        if not d:
+            continue
+        cpu_a  = d["cpu_alloc_m"]
+        mem_a  = d["mem_alloc_mi"]
+        cpu_rp = round(d["cpu_req_m"]  / cpu_a  * 100, 1) if cpu_a  else 0
+        cpu_lp = round(d["cpu_lim_m"]  / cpu_a  * 100, 1) if cpu_a  else 0
+        mem_rp = round(d["mem_req_mi"] / mem_a  * 100, 1) if mem_a  else 0
+        mem_lp = round(d["mem_lim_mi"] / mem_a  * 100, 1) if mem_a  else 0
+        lines.append(
+            f"  {name}  pods:{d['pod_count']}\n"
+            f"    CPU  requests:{d['cpu_req_m']:.0f}m ({cpu_rp}%)  "
+            f"limits:{d['cpu_lim_m']:.0f}m ({cpu_lp}%)  "
+            f"allocatable:{cpu_a:.0f}m\n"
+            f"    MEM  requests:{d['mem_req_mi']:.0f}Mi ({mem_rp}%)  "
+            f"limits:{d['mem_lim_mi']:.0f}Mi ({mem_lp}%)  "
+            f"allocatable:{mem_a:.0f}Mi"
+        )
+    return "\n".join(lines)
+
 def get_node_health() -> str:
     try:
         nodes = _core.list_node()
@@ -3335,6 +3420,18 @@ K8S_TOOLS["get_pv_usage"] = {
             ),
         },
     },
+}
+
+
+K8S_TOOLS["get_node_resource_requests"] = {
+    "fn":          get_node_resource_requests,
+    "description": (
+        "Aggregate CPU and memory requests and limits per node by summing across all running pods. "
+        "Returns requests and limits in millicores/MiB with percentage of allocatable capacity per node. "
+        "Use for: 'what resources are requested per node', 'how much CPU/memory is requested on each node', "
+        "'node resource utilization', 'which node has the most requests', 'resource pressure per node'."
+    ),
+    "parameters": {},
 }
 
 K8S_TOOLS["kubectl_exec"] = {
