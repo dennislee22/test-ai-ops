@@ -982,7 +982,43 @@ def get_pv_usage(threshold: int = 80) -> str:
                     break
 
         if not pod_hit or not mount_path:
-            errors.append(f"  {ns}/{pvc_name}: no running pod found with this PVC mounted — skipped")
+            # Fallback: try Longhorn CRD (volumes.longhorn.io) for usage when no running pod
+            try:
+                custom = _k8s.CustomObjectsApi()
+                lh_vol = custom.get_namespaced_custom_object(
+                    "longhorn.io", "v1beta2", "longhorn-system", "volumes", vol_name
+                )
+                actual_raw = lh_vol.get("status", {}).get("actualSize")
+                total_raw  = lh_vol.get("status", {}).get("size")
+                # Guard: if either field is missing/null/zero, CRD data is unreliable
+                if actual_raw is None or total_raw is None:
+                    errors.append(f"  {ns}/{pvc_name}: Longhorn CRD found but actualSize/size fields missing — skipped")
+                    continue
+                actual = int(actual_raw or 0)
+                total  = int(total_raw  or 0)
+                if total == 0:
+                    errors.append(f"  {ns}/{pvc_name}: Longhorn CRD found but size=0 (volume may not be provisioned yet) — skipped")
+                    continue
+                if actual == 0:
+                    # actualSize=0 is valid for an empty volume but also occurs when
+                    # Longhorn has not yet collected usage — flag it as unverified
+                    total_gib = round(total / (1024**3), 2)
+                    errors.append(f"  {ns}/{pvc_name}: Longhorn CRD size={total_gib}Gi but actualSize=0 (usage unverified, no running pod) — skipped")
+                    continue
+                pct = round((actual / total) * 100, 1)
+                used_gib  = round(actual / (1024**3), 2)
+                total_gib = round(total  / (1024**3), 2)
+                avail_gib = round((total - actual) / (1024**3), 2)
+                flag = "🔴" if pct >= 90 else ("🟠" if pct >= threshold else "🟢")
+                results.append((pct, (
+                    f"  {flag} {ns}/{pvc_name}  {pct}% used  "
+                    f"({used_gib}Gi used / {total_gib}Gi total, {avail_gib}Gi free)  "
+                    f"class:{sc}  source:longhorn-crd  (no running pod)"
+                )))
+                continue
+            except Exception:
+                pass
+            errors.append(f"  {ns}/{pvc_name}: no running pod found and Longhorn CRD unavailable — skipped")
             continue
 
         df_out = _exec_df(pod_hit, ns, mount_path)
