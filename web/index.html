@@ -934,8 +934,6 @@ NUM_GPU=0</code></pre>
         <span class="gl-tag gl-tag-secret">SECRET</span>
         <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-secret"></div><div class="gl-ex-body"><span class="gl-ex-text">what SSL certificates does the cdp namespace have?</span><button class="gl-copy-btn" onclick="glCopy(this,'what SSL certificates does the cdp namespace have?')">copy</button></div></div>
         <div class="gl-ex-note">Lists TLS/cert secrets in the cdp namespace. Enable <strong>Show Secret Values</strong> in Settings to decode.</div>
-        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-secret"></div><div class="gl-ex-body"><span class="gl-ex-text">show me cdp-private-installer-db-root-cert certificate in the cdp namespace and use openssl to decode it</span><button class="gl-copy-btn" onclick="glCopy(this,'show me cdp-private-installer-db-root-cert certificate in the cdp namespace and use openssl to decode it')">copy</button></div></div>
-        <div class="gl-ex-note">First retrieves the cert from the secret, then gets a running pod name, then pipes the literal base64 value through <code>openssl x509 -text -noout</code> inside that pod — shows subject, issuer, validity, SANs, and key usage.</div>
         <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-secret"></div><div class="gl-ex-body"><span class="gl-ex-text">what is the username and password for the SQL user for db-0 in cmlwb1 namespace?</span><button class="gl-copy-btn" onclick="glCopy(this,'what is the username and password for the SQL user for db-0 in cmlwb1 namespace?')">copy</button></div></div>
         <div class="gl-ex-note">Locates credentials from secrets in cmlwb1. Requires <strong>Show Secret Values</strong> to be enabled.</div>
 

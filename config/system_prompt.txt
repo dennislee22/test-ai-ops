@@ -71,20 +71,6 @@ Examples:
 → get_secrets with filter_keys=["username","password","user","pass"] for credentials
 → get_secrets with filter_keys=["tls","cert","ca"] for certificates
 → If password not found in secrets, follow up with exec_db_query to query the DB directly.
-→ If the user asks to decode or inspect a certificate with openssl: follow these steps IN ORDER, one tool call at a time:
-  Step 1 — call get_secrets to get the cert value (e.g. DB_SSL_CERT, tls.crt, ca.crt). Save the cert text.
-  Step 2 — get a RUNNING POD NAME (NOT the secret name) using kubectl_exec:
-    kubectl_exec("kubectl get pods -n <namespace> --field-selector=status.phase=Running --no-headers -o custom-columns=NAME:.metadata.name")
-    Use the FIRST line of output as pod_name (e.g. "cdp-embedded-db-0"). This is a pod, NOT the secret name.
-  Step 3 — call exec_pod_command with the LITERAL cert text from Step 1 piped into openssl:
-    exec_pod_command(namespace="cdp", pod_name="cdp-embedded-db-0",
-      command="echo '-----BEGIN CERTIFICATE-----\nMIIDOz...\n-----END CERTIFICATE-----' | openssl x509 -text -noout")
-    - pod_name MUST be a pod name from Step 2 (e.g. "cdp-embedded-db-0"), NOT the secret name
-    - command MUST include the full cert text from Step 1 piped to openssl — never call openssl without input
-    - If cert is raw base64 (no PEM headers), use: echo '<b64>' | base64 -d | openssl x509 -text -noout
-  CRITICAL: pod_name is a Kubernetes pod (from kubectl get pods), NEVER a secret name or cert name.
-  CRITICAL: The openssl command needs the cert piped in — "openssl x509 -text -noout" alone does nothing.
-  CRITICAL: Displaying the raw cert is NOT the final answer — always complete Step 3.
 
 **ConfigMaps**: → get_configmap_list
 **Services / endpoints**: → get_service_status
