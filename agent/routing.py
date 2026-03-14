@@ -21,7 +21,6 @@ NS_ALIASES = {
     "apiserver":  "kube-system",
     "api-server": "kube-system",
     "prometheus": "monitoring",
-    "grafana":    "monitoring",
     "alertmanager": "monitoring",
 }
 
@@ -50,12 +49,29 @@ def default_tools_for(user_msg: str, req_id: str = "") -> list:
     lm = user_msg.lower().strip()
     ns = resolve_namespace(lm, req_id=req_id)
 
+    # "don't run" / "just explain" phrasing — BUT only a pure how-to, not
+    # a follow-up asking for cluster-specific output (e.g. "can you make the yaml
+    # specific based on the current cluster state?" needs live tools).
+    _explicit_no_run = bool(
+        re.search(r"don\'?t\s+run|do\s+not\s+run|without\s+running|just\s+explain", lm)
+        or re.search(r"don\'?t\s+execute|no\s+tools|no\s+commands", lm)
+    )
+    # A follow-up asking for specificity / current state overrides the no-run flag
+    _wants_cluster_specific = bool(
+        re.search(r"more\s+specific|based\s+on\s+(the\s+)?current|specific.*yaml|yaml.*specific", lm)
+        or re.search(r"current\s+state|actual\s+(cluster|config|setup|environment)", lm)
+        or re.search(r"(make|can\s+you|could\s+you).*specific", lm)
+    )
     _is_howto = (
-        re.search(r'\b(teach|explain|show)\s+(me\s+)?(how\s+(you|to|do\s+you)|step\s+by\s+step)', lm)
-        or re.search(r'\bhow\s+do\s+you\b', lm)
-        or re.search(r'\bhow\s+(can|does)\s+(you|the\s+(bot|assistant|chatbot))\b', lm)
-        or re.search(r'\bwhat\s+(can|do)\s+you\s+(do|support|handle|know)\b', lm)
-        or re.search(r'\b(demonstrate|walkthrough|walk\s+me\s+through)\b', lm)
+        not _wants_cluster_specific  # cluster-specific follow-up re-engages tools
+        and (
+            _explicit_no_run
+            or re.search(r'\b(teach|explain|show)\s+(me\s+)?(how\s+(you|to|do\s+you)|step\s+by\s+step)', lm)
+            or re.search(r'\bhow\s+do\s+you\b', lm)
+            or re.search(r'\bhow\s+(can|does)\s+(you|the\s+(bot|assistant|chatbot))\b', lm)
+            or re.search(r'\bwhat\s+(can|do)\s+you\s+(do|support|handle|know)\b', lm)
+            or re.search(r'\b(demonstrate|walkthrough|walk\s+me\s+through)\b', lm)
+        )
     )
     if _is_howto:
         _log.info(f"{tag}[routing] FALLBACK → __conversational__ (how-to / self-referential)")

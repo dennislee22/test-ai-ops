@@ -610,7 +610,13 @@ def rag_retrieve(query: str, top_k: int = TOP_K, doc_type: Optional[str] = None,
         except Exception as e:
             _log_rag.warning(f"[RAG/Docs] Search failed: {e}")
 
-    return "\n\n---\n\n".join(sections) if sections else "No relevant documentation found."
+    if sections:
+        return "\n\n---\n\n".join(sections)
+    # Distinguish empty KB (nothing ingested) from a real search with no hits.
+    # excel_count and docs_count were set earlier in this function.
+    if excel_count == 0 and docs_count == 0:
+        return "KB_EMPTY: No documents have been ingested into the knowledge base."
+    return "No relevant documentation found."
 
 def get_doc_stats() -> dict:
     try:
@@ -670,7 +676,9 @@ RAG_TOOLS = {
             "rag_search(query='longhorn storage issues') — no sheet, searches everything "
             "rag_search(query='what are the dos and donts', sheet='Dos and Donts') — user asked explicitly "
             "rag_search(query='prerequisites before deploy', sheet='Prerequisites') — user asked explicitly "
-            "rag_search(query='vault incident 2024', sheet='Past Learnings') — user asked explicitly"
+            "rag_search(query='vault incident 2024', sheet='Past Learnings') — user asked explicitly "
+            "IMPORTANT: if the result starts with KB_EMPTY: the knowledge base has not been ingested yet. "
+            "In that case relay the message as-is — do NOT answer from training data."
         ),
         "parameters": {
             "query":    {"type": "string",
@@ -1348,7 +1356,17 @@ def build_agent():
             results.append(ToolMessage(content=out, tool_call_id=tc["id"]))
 
             _req_id = state.get("req_id", "")
-            if len(tcs) == 1 and should_bypass_llm(name, args, out, user_q, req_id=_req_id):
+            # KB_EMPTY sentinel: rag_search found nothing ingested → ingest reminder
+            if name == "rag_search" and isinstance(out, str) and out.startswith("KB_EMPTY:"):
+                _log_ag.info(f"[REQ:{_req_id}] [tool_node] KB empty — returning ingest prompt directly")
+                updates.append("⚠️ Knowledge base is empty")
+                direct_answer = (
+                    "⚠️ " + _MSG_NO_INGEST + "\n\n"
+                    "Use the ⚙ Settings → RAG Documents panel to upload and ingest "
+                    "your knowledge base files before querying known issues, "
+                    "dos and don'ts, prerequisites, or past learnings."
+                )
+            elif len(tcs) == 1 and should_bypass_llm(name, args, out, user_q, req_id=_req_id):
                 _log_ag.info(f"[REQ:{_req_id}] [tool_node] LLM bypass — returning tool output directly for {name!r}")
                 updates.append("⚡ Direct output (LLM synthesis skipped)")
                 direct_answer = build_direct_answer(name, out, user_q, req_id=_req_id)
@@ -2180,7 +2198,44 @@ async def api_rag_query(query: str, top_k: int = 50, sheet: Optional[str] = None
     except Exception as e:
         return _JSONResponse(status_code=500, content={"error": str(e)})
 
+_MSG_NO_INGEST = (
+    "No results found. The knowledge base appears to be empty — "
+    "no documents have been ingested yet. "
+    "Please go to ⚙ Settings → RAG Documents to upload and ingest your knowledge base files."
+)
+
+_KB_TOPIC_KEYWORDS = [
+    # ECS / platform
+    "longhorn", "ecs", "cdp", "cloudera", "rancher", "vault", "prometheus",
+    "grafana", "cert-manager", "coredns", "ingress", "pvc", "pv", "storageclass",
+    # question types
+    "known issue", "known problem", "list issue", "unresolved", "open issue",
+    "dos and don", "best practice", "prerequisite", "prereq",
+    "past learning", "postmortem", "incident", "what went wrong",
+    "runbook", "playbook", "troubleshoot", "fix", "remediation",
+    # k8s errors
+    "crashloop", "oomkill", "imagepull", "pending", "evicted",
+    "not running", "not ready", "node pressure",
+    # versions
+    "1.5", "1.6", "sp1", "sp2", "upgrade",
+]
+
+def _is_kb_topic(question: str) -> bool:
+    """Return True if the question is clearly about ECS/KB topics."""
+    ql = question.lower()
+    return any(k in ql for k in _KB_TOPIC_KEYWORDS)
+
+
 def _llm_synthesise(context: str, question: str, top_k: int = 50, max_tokens: int = 0) -> str:
+    # Hard guard: if context is empty/None and the question is about a KB topic,
+    # return the ingest reminder immediately — never pass to the LLM.
+    # Local LLMs reliably ignore system-prompt-only instructions when context is absent,
+    # so this must be enforced in code, not just in the prompt.
+    if not context or not context.strip() or context == "No relevant documentation found.":
+        if _is_kb_topic(question):
+            return _MSG_NO_INGEST
+        # Non-KB topics (greetings, identity): fall through to LLM for a short intro response
+
     try:
         tok, mdl, is_q3 = globals()["_kb_tokenizer"], globals()["_kb_model"], globals()["_kb_is_qwen3"]
     except KeyError:
@@ -2200,20 +2255,17 @@ def _llm_synthesise(context: str, question: str, top_k: int = 50, max_tokens: in
         "- For past learnings: include timeline, root cause chain, exact fix applied, and preventive action.\n"
         "- Never simplify, summarise away details, or use vague language like 'check the logs' — be specific.\n"
         "- Format structured data as labelled blocks (Problem, Root Cause, Fix, Command, etc.).\n\n"
-        "When NO knowledge base context is provided, apply these rules in order:\n"
-        "1. If the question is a single letter, partial word (e.g. 'wh', 'li', 'how', 'ab'), "
-        "random characters, or too vague to understand: respond ONLY with: "
+        "When NO knowledge base context is provided:\n"
+        "- If the question is too short or vague (single letters, partial words): respond ONLY with: "
         "'Sorry, I didn't quite understand your question. Could you rephrase it? "
         "For example: list known issues with Longhorn, what are the prerequisites, what are the dos and don'ts.'\n"
-        "2. If the question is a greeting or asks who you are / what you can do: briefly introduce yourself "
-        "as the ECS Knowledge Bot and mention you search a knowledge base of runbooks, known issues, "
-        "prerequisites, dos and don'ts, and past learnings. Add that no documents have been ingested yet "
-        "and the user should go to Settings \u2192 RAG Documents.\n"
-        "3. If the question is clearly about ECS knowledge base topics (known issues, Longhorn, ingress, storage, "
-        "prerequisites, dos and don'ts, past learnings, runbooks, ECS components, Kubernetes errors): "
-        "respond ONLY with: 'No results found. Please ensure your RAG documents have been ingested "
-        "via Settings \u2192 RAG Documents.'\n"
-        "4. For anything else (conversational, general questions): respond naturally and helpfully in 1-2 sentences."
+        "- If the question is about ECS, Longhorn, CDP, Kubernetes errors, known issues, prerequisites, "
+        "dos and don'ts, past learnings, runbooks, or any operational topic: "
+        "respond ONLY with the exact string: '"
+        + _MSG_NO_INGEST
+        + "'\n"
+        "- For greetings or identity questions: briefly introduce yourself as the ECS Knowledge Bot.\n"
+        "- NEVER fabricate, invent, or guess content not in the context. If no context: say no results found."
     )
     if context:
         user_msg = (
@@ -2311,6 +2363,13 @@ async def api_kb_ask(req: KbAskRequest):
         no_rag = not context.strip() or context == "No relevant documentation found."
         rag_ctx = None if no_rag else context
 
+        # Hard short-circuit: if the KB is empty and the question is about an ECS/KB topic,
+        # return the "please ingest" message directly — do NOT call the LLM, which would
+        # otherwise fabricate a plausible-sounding but completely invented answer.
+        if no_rag and _is_kb_topic(req.q):
+            logger.info("[API/kb/ask] no_rag + kb_topic → returning ingest prompt (skipping LLM)")
+            return {"answer": _MSG_NO_INGEST, "query": req.q, "top_k": top_k}
+
         logger.info(f"[API/kb/ask] calling _llm_synthesise (rag_found={not no_rag})")
         answer = await _asyncio.get_event_loop().run_in_executor(
             None, lambda: _llm_synthesise(rag_ctx, req.q, top_k, req.max_tokens)
@@ -2366,6 +2425,14 @@ async def api_kb_stream(req: KbAskRequest):
                 import re as _re
                 m = _re.search(r'(\d+) match', context)
                 match_count = int(m.group(1)) if m else "?"
+
+            # Hard short-circuit: empty KB + KB topic → ingest prompt, no LLM call.
+            if no_rag and _is_kb_topic(q):
+                logger.info("[api_kb_stream] no_rag + kb_topic → returning ingest prompt (skipping LLM)")
+                elapsed = round(_time.time() - start, 1)
+                yield _sse({"type": "result", "answer": _MSG_NO_INGEST, "query": q, "elapsed": elapsed, "top_k": top_k})
+                return
+
             yield _sse({"type": "status", "text": f"Found {match_count} match(es) — synthesising answer…" if not no_rag else "No matches found — generating response…"})
 
             answer = await _asyncio.get_event_loop().run_in_executor(
