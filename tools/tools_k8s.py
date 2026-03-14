@@ -3572,7 +3572,7 @@ K8S_TOOLS: dict = {
             "any question that requires a complete pod count or inventory."
         ),
         "parameters":  {
-            "namespace":   {"type": "string",  "default": "all"},
+            "namespace":   {"type": "string",  "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
             "show_all":    {"type": "boolean", "default": False,
                             "description": "Set true to include healthy/running pods in the output"},
             "raw_output":  {"type": "boolean", "default": False,
@@ -3592,7 +3592,7 @@ K8S_TOOLS: dict = {
         "description": "Fetch recent logs from a specific pod. For multi-container pods, specify container_name.",
         "parameters":  {
             "pod_name":       {"type": "string"},
-            "namespace":      {"type": "string",  "default": "default"},
+            "namespace":      {"type": "string",  "default": "default", "description": "Namespace to query. Defaults to 'default' — only override when the user explicitly names a namespace."},
             "tail_lines":     {"type": "integer", "default": 50,
                                "description": "Number of log lines to return (max 100)"},
         },
@@ -3608,7 +3608,7 @@ K8S_TOOLS: dict = {
         ),
         "parameters":  {
             "pod_name":  {"type": "string"},
-            "namespace": {"type": "string", "default": "default"},
+            "namespace": {"type": "string", "default": "default", "description": "Namespace to query. Defaults to 'default' — only override when the user explicitly names a namespace."},
         },
     },
 
@@ -3636,7 +3636,7 @@ K8S_TOOLS: dict = {
             "Set warning_only=false to include Normal events too."
         ),
         "parameters":  {
-            "namespace":    {"type": "string",  "default": "all"},
+            "namespace":    {"type": "string",  "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
             "warning_only": {"type": "boolean", "default": True,
                              "description": "true = Warning events only; false = all events including Normal"},
         },
@@ -3645,27 +3645,27 @@ K8S_TOOLS: dict = {
     "get_deployment_status": {
         "fn":          get_deployment_status,
         "description": "Check Deployment replica counts and health across namespaces.",
-        "parameters":  {"namespace": {"type": "string", "default": "all"}},
+        "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
     },
     "get_daemonset_status": {
         "fn":          get_daemonset_status,
         "description": "Check DaemonSet scheduling health — useful for node-level agents (e.g. Longhorn, CNI).",
-        "parameters":  {"namespace": {"type": "string", "default": "all"}},
+        "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
     },
     "get_statefulset_status": {
         "fn":          get_statefulset_status,
         "description": "Check StatefulSet replica counts — useful for databases and Longhorn components.",
-        "parameters":  {"namespace": {"type": "string", "default": "all"}},
+        "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
     },
     "get_job_status": {
         "fn":          get_job_status,
         "description": "Check batch Job and CronJob run status — highlights failed jobs.",
-        "parameters":  {"namespace": {"type": "string", "default": "all"}},
+        "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
     },
     "get_hpa_status": {
         "fn":          get_hpa_status,
         "description": "Check HorizontalPodAutoscaler targets and whether any are pinned at max replicas.",
-        "parameters":  {"namespace": {"type": "string", "default": "all"}},
+        "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
     },
 
     "get_pvc_status": {
@@ -3674,10 +3674,18 @@ K8S_TOOLS: dict = {
             "Check PersistentVolumeClaims — access mode (RWO/RWX/ROX), capacity, storage class, bound volume. "
             "Returns a grouped summary by access mode + storage class (concise, fast). "
             "Set detail=true only when asked about a specific workload's individual PVC names. "
-            "Use namespace='longhorn-system' for Longhorn storage, namespace='vault-system' for Vault."
+            "NAMESPACE RULE — CRITICAL: if the user does not name a specific namespace, "
+            "ALWAYS use namespace='all'. Never infer or guess a namespace (e.g. 'longhorn-system', "
+            "'vault-system') when none was stated. Only scope to a specific namespace when the user "
+            "explicitly names one (e.g. 'PVCs in longhorn-system', 'PVCs for vault')."
         ),
         "parameters":  {
-            "namespace": {"type": "string", "default": "all"},
+            "namespace": {"type": "string",  "default": "all",
+                          "description": (
+                              "Namespace to query. DEFAULT is 'all' — use this whenever the user does "
+                              "not explicitly name a namespace. Only override when the user's question "
+                              "names a namespace directly."
+                          )},
             "detail":    {"type": "boolean", "default": False,
                           "description": "Set true only to list individual PVC names (slower on large namespaces)."},
         },
@@ -3696,7 +3704,7 @@ K8S_TOOLS: dict = {
     "get_service_status": {
         "fn":          get_service_status,
         "description": "List Services and highlight those with no pod selector (potential misconfigs).",
-        "parameters":  {"namespace": {"type": "string", "default": "all"}},
+        "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
     },
     "get_ingress_status": {
         "fn":          get_ingress_status,
@@ -3736,7 +3744,7 @@ K8S_TOOLS: dict = {
             "(e.g. filter_keys=['username','password'] to find credential configmaps)."
         ),
         "parameters":  {
-            "namespace":   {"type": "string", "default": "default"},
+            "namespace":   {"type": "string", "default": "default", "description": "Namespace to query. Defaults to 'default' — only override when the user explicitly names a namespace."},
             "filter_keys": {"type": "array",  "default": None,
                             "description": "Optional list of key name substrings to filter by."},
         },
@@ -3752,7 +3760,8 @@ K8S_TOOLS: dict = {
             "Whether values are shown or hidden is controlled by the user's Security settings — do NOT pass a decode argument."
         ),
         "parameters": {
-            "namespace":   {"type": "string", "default": "default"},
+            "namespace":   {"type": "string", "default": "default",
+                            "description": "Namespace to query. Defaults to 'default' — only override when the user explicitly names a namespace."},
             "name":        {"type": "string", "default": ""},
             "filter_keys": {"type": "array",  "default": None,
                             "description": "Optional list of key name substrings to filter by."},
@@ -3761,18 +3770,23 @@ K8S_TOOLS: dict = {
     "get_resource_quotas": {
         "fn":          get_resource_quotas,
         "description": "Check ResourceQuotas and current usage — useful when pods fail to schedule.",
-        "parameters":  {"namespace": {"type": "string", "default": "all"}},
+        "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
     },
     "get_limit_ranges": {
         "fn":          get_limit_ranges,
         "description": "List LimitRanges that enforce default CPU/memory constraints per namespace.",
-        "parameters":  {"namespace": {"type": "string", "default": "all"}},
+        "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
     },
 
     "get_service_accounts": {
         "fn":          get_service_accounts,
-        "description": "List ServiceAccounts in a namespace.",
-        "parameters":  {"namespace": {"type": "string", "default": "default"}},
+        "description": (
+            "List ServiceAccounts in a namespace. "
+            "Use for: auditing which service accounts exist, checking whether a workload's "
+            "expected service account is present, RBAC troubleshooting, or verifying that "
+            "a service account referenced by a pod spec actually exists in the namespace."
+        ),
+        "parameters":  {"namespace": {"type": "string", "default": "default", "description": "Namespace to query. Defaults to 'default' — only override when the user explicitly names a namespace."}},
     },
     "get_cluster_role_bindings": {
         "fn":          get_cluster_role_bindings,
@@ -3813,7 +3827,10 @@ K8S_TOOLS["get_pod_images"] = {
         "SHA256 digest from container status — the digest is the true immutable version regardless of tag. "
         "Use for: image versions, what version is running, which tag is deployed, image digests, "
         "comparing image versions across pods or namespaces. "
-        "Do NOT use for pod health, status, or errors — use get_unhealthy_pods_detail for that."
+        "Do NOT use for pod health, status, or errors — use get_unhealthy_pods_detail for that. "
+        "OUTPUT FORMAT: present results as one bullet per pod showing the image — NOT health fields. "
+        "Format: '- `namespace/pod-name` [container]: registry/image:tag'. "
+        "NEVER show 'Running | Restarts | Cause' for image queries — those fields do not apply here."
     ),
     "parameters": {
         "namespace": {

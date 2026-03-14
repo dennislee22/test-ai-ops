@@ -524,25 +524,24 @@ def rag_retrieve(query: str, top_k: int = TOP_K, doc_type: Optional[str] = None,
             qvec = embed_text(query)
             sheet_filter = f"sheet = '{sheet}'" if sheet else None
 
-            try:
-                unresolved_filter = "present = 'Yes'"
-                if sheet_filter:
-                    unresolved_filter = f"present = 'Yes' AND {sheet_filter}"
-                _uq = excel_tbl.search(qvec, vector_column_name="vector").where(unresolved_filter)
-                unresolved = _uq.limit(top_k).to_list()
-            except Exception:
-                unresolved = []
-
+            # Single search pass across ALL sheets — no Known Issues priority bias.
+            # When no sheet filter is given, every sheet is searched equally so the
+            # best semantic match wins regardless of which table it comes from.
+            # Unresolved Known Issues are still highlighted visually in the output,
+            # but they are NOT artificially promoted in ranking.
             _aq = excel_tbl.search(qvec, vector_column_name="vector")
             if sheet_filter:
                 _aq = _aq.where(sheet_filter)
-            all_hits = _aq.limit(top_k).to_list()
+            # Fetch extra candidates so de-duplication leaves us with top_k
+            all_hits = _aq.limit(top_k * 2).to_list()
 
+            # De-duplicate by id, preserve score order (LanceDB returns by distance asc)
             seen, merged = set(), []
-            for r in (unresolved + all_hits):
+            for r in all_hits:
                 if r["id"] not in seen:
                     seen.add(r["id"])
                     merged.append(r)
+            merged = merged[:top_k]
 
             if merged:
                 lines = [f"📋 Knowledge Base ({len(merged)} match(es)):\n"]
@@ -661,15 +660,17 @@ RAG_TOOLS = {
             "'known issues', 'what could cause', 'best practice', 'how to fix'. "
             "Call live tools BEFORE rag_search when query is about current cluster state "
             "('is X healthy', 'how many pods', 'list pvcs'). "
-            "Pass sheet= to filter to a specific knowledge base section: "
-            "'Known Issues', 'Dos and Donts', 'Prerequisites', 'Past Learnings'. "
+            "Pass sheet= ONLY when the user explicitly asks for a specific category. "
+            "Leave sheet= empty (default) for all other queries — this searches ALL sheets "
+            "and returns the best semantic match regardless of which table it comes from. "
+            "Valid sheet values: 'Known Issues', 'Dos and Donts', 'Prerequisites', 'Past Learnings'. "
             "Examples: "
-            "rag_search(query='CrashLoopBackOff cdp-cadence') "
-            "rag_search(query='OOMKilled sense-db memory limit') "
-            "rag_search(query='longhorn storage issues', sheet='Known Issues') "
-            "rag_search(query='dos and donts ecs cluster', sheet='Dos and Donts') "
-            "rag_search(query='prerequisites before deploy', sheet='Prerequisites') "
-            "rag_search(query='vault incident 2024', sheet='Past Learnings') "
+            "rag_search(query='CrashLoopBackOff cdp-cadence') — no sheet, searches everything "
+            "rag_search(query='OOMKilled sense-db') — no sheet, searches everything "
+            "rag_search(query='longhorn storage issues') — no sheet, searches everything "
+            "rag_search(query='what are the dos and donts', sheet='Dos and Donts') — user asked explicitly "
+            "rag_search(query='prerequisites before deploy', sheet='Prerequisites') — user asked explicitly "
+            "rag_search(query='vault incident 2024', sheet='Past Learnings') — user asked explicitly"
         ),
         "parameters": {
             "query":    {"type": "string",
