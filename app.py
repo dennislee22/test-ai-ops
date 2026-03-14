@@ -77,8 +77,6 @@ LANCEDB_DIR     = os.getenv("LANCEDB_DIR",         str(_HERE / "lancedb"))
 CUSTOM_RULES    = os.getenv("CUSTOM_RULES",        "").strip()
 
 ENABLE_FALLBACK_ROUTING: bool = True
-# Toggle for skipping LLM synthesis on single-tool diagnostic outputs
-ENABLE_DIRECT_BYPASS: bool = os.getenv("ENABLE_DIRECT_BYPASS", "false").lower() in ("true", "1", "yes")
 
 _MAX_NEW_TOKENS: int = int(os.getenv("MAX_NEW_TOKENS", "4096"))
 
@@ -804,7 +802,7 @@ def build_agent():
                     "your knowledge base files before querying known issues, "
                     "dos and don'ts, prerequisites, or past learnings."
                 )
-            elif ENABLE_DIRECT_BYPASS and len(tcs) == 1 and should_bypass_llm(name, args, out, user_q, req_id=_req_id):
+            elif len(tcs) == 1 and should_bypass_llm(name, args, out, user_q, req_id=_req_id):
                 _log_ag.info(f"[REQ:{_req_id}] [tool_node] LLM bypass — returning tool output directly for {name!r}")
                 updates.append("⚡ Direct output (LLM synthesis skipped)")
                 direct_answer = build_direct_answer(name, out, user_q, req_id=_req_id)
@@ -1993,7 +1991,6 @@ async def api_get_config():
         "kubectl_max_chars": _tk._KUBECTL_MAX_OUT,
         "max_new_tokens":    _MAX_NEW_TOKENS,
         "llm_timeout":       _LLM_TIMEOUT,
-        "enable_direct_bypass": ENABLE_DIRECT_BYPASS,
     }
 
 @api.post("/config", summary="Update runtime configuration (e.g. KUBECTL_MAX_CHARS)")
@@ -2020,12 +2017,6 @@ async def api_set_config(body: dict):
         _LLM_TIMEOUT = val
         updated["llm_timeout"] = val
         logger.info(f"[Config] LLM_TIMEOUT updated to {val}s")
-    if "enable_direct_bypass" in body:
-        global ENABLE_DIRECT_BYPASS
-        val = str(body["enable_direct_bypass"]).lower() in ("true", "1", "yes")
-        ENABLE_DIRECT_BYPASS = val
-        updated["enable_direct_bypass"] = val
-        logger.info(f"[Config] ENABLE_DIRECT_BYPASS updated to {val}")
     if not updated:
         return _JSONResponse(status_code=400, content={"error": "No recognised config keys in body"})
     return {"ok": True, "updated": updated}
