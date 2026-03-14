@@ -1,0 +1,2607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<!-- Disable Cloudflare email obfuscation for this app -->
+<meta name="cf-2fa-verify" content="no-obfuscate"/>
+<title>ECS AI Ops</title>
+<link rel="icon" type="image/svg+xml" href="/static/k8s-logo.svg"/>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{font-family:'IBM Plex Sans',sans-serif}
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+textarea:focus{outline:none}
+button{cursor:pointer;font-family:inherit}
+
+/* ── Theme variables (Midnight defaults) ─────────────────────────────────── */
+:root{
+  --bg:#030712;--headerBg:#070d1a;--border:#0f1f35;
+  --accent:#38bdf8;--accent2:#7dd3fc;
+  --msgBg:#070d1a;--inputBg:#0a0f1e;
+  --userBg:#0f172a;--userBorder:#1e293b;
+  --statusBg:#040b14;--dimText:#475569;--bodyText:#cbd5e1;
+  --tooltipBg:#0a1628;--tooltipText:#94a3b8;
+  --panelBg:#020a14;--panelBorder:#0f1f35;--panelLabel:#7dd3fc;--panelDim:#475569;
+  --textMain:#e2e8f0;--inputText:#e2e8f0;
+  --shimmer:linear-gradient(90deg,#38bdf8 0%,#818cf8 25%,#c084fc 50%,#38bdf8 75%,#00C1DE 100%);
+}
+
+/* ── Animations ──────────────────────────────────────────────────────────── */
+@keyframes pls{0%,100%{opacity:1}50%{opacity:.2}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes shimmer{0%{background-position:-500px 0}100%{background-position:500px 0}}
+@keyframes dotPulse{0%,80%,100%{opacity:.2}40%{opacity:1}}
+@keyframes inferPulse{0%,100%{opacity:1}50%{opacity:.5}}
+
+/* ── Title shimmer ───────────────────────────────────────────────────────── */
+.shiny{
+  background:var(--shimmer);background-size:500px 100%;
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  background-clip:text;animation:shimmer 4s linear infinite;
+}
+.shiny-solid{
+  -webkit-text-fill-color:unset !important;background:none !important;
+  animation:none !important;color:var(--solidTitle,#f96702) !important;
+}
+.fade-up{animation:fadeUp .25s ease}
+
+/* ── App layout ──────────────────────────────────────────────────────────── */
+#app{height:100vh;display:flex;flex-direction:column;background:var(--bg);color:var(--textMain)}
+
+/* Header */
+#hdr{
+  padding:10px 20px;border-bottom:1px solid var(--border);
+  background:var(--headerBg);display:flex;align-items:center;gap:12px;flex-shrink:0;
+  position:relative;z-index:100;
+}
+#logos{display:flex;align-items:center;gap:8px;flex-shrink:0}
+#logos img{object-fit:contain;display:block}
+#title-block{display:flex;flex-direction:column;gap:2px}
+#ttl{font-size:19px;font-weight:700;font-family:'IBM Plex Sans',sans-serif;letter-spacing:-.02em;line-height:1}
+#subtitle{font-size:11px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;display:flex;align-items:center;gap:8px;max-width:600px;overflow:hidden}
+#hdr-right{margin-left:auto;display:flex;align-items:center;gap:14px}
+#email-link{font-size:11px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;text-decoration:none;transition:color .2s}
+#email-link:hover{color:var(--accent2)}
+
+/* Theme dots */
+#theme-row{display:flex;align-items:center;gap:5px}
+#theme-label{font-size:10px;color:var(--dimText);font-family:'IBM Plex Mono',monospace}
+.tdot{
+  width:20px;height:20px;border-radius:50%;border:2px solid transparent;
+  cursor:pointer;padding:0;transition:border-color .15s,transform .12s;flex-shrink:0;
+}
+.tdot:hover{transform:scale(1.25)}
+.tdot.active{border-color:var(--accent)}
+#theme-name{font-size:10px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;min-width:56px}
+
+/* Ready dot */
+#rdot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+@keyframes rdotPulse{0%,100%{opacity:1}50%{opacity:.3}}
+#rdot.ready{animation:rdotPulse 1.6s ease-in-out infinite}
+#rtxt{font-size:11px;color:var(--dimText);font-family:'IBM Plex Mono',monospace}
+
+/* Settings gear button — no circle, slow rotation */
+@keyframes gearSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+
+/* ── Settings pane (full inline pane, no overlay) ────────────────────────── */
+#settings-pane{
+  flex:1;display:none;overflow:hidden;
+  font-family:'IBM Plex Sans',sans-serif;color:var(--textMain);
+}
+#settings-pane.active{display:flex;flex-direction:row}
+
+/* Left nav sidebar */
+.stab-sidebar{
+  width:180px;flex-shrink:0;
+  background:var(--headerBg);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;padding:20px 0;gap:2px;
+}
+.stab-sidebar-title{
+  font-size:10px;font-weight:700;font-family:'IBM Plex Mono',monospace;
+  color:var(--dimText);letter-spacing:.1em;text-transform:uppercase;
+  padding:0 18px 12px;
+}
+.stab{
+  display:flex;align-items:center;gap:9px;
+  padding:10px 18px;font-size:12px;font-weight:600;
+  font-family:'IBM Plex Mono',monospace;
+  border:none;background:none;cursor:pointer;
+  color:var(--dimText);text-align:left;width:100%;
+  border-left:3px solid transparent;
+  transition:color .15s,background .15s,border-color .15s;
+}
+.stab:hover{color:var(--accent2);background:var(--inputBg)22}
+.stab.active{
+  color:var(--accent2);background:var(--inputBg);
+  border-left-color:var(--accent);
+}
+.stab-icon{font-size:14px;flex-shrink:0}
+
+/* Right content area */
+.stab-content{flex:1;overflow-y:auto;display:flex;flex-direction:column}
+.stab-pane{display:none;flex-direction:column;gap:14px;padding:28px 32px;flex:1}
+.stab-pane.active{display:flex}
+.stab-pane-title{
+  font-size:15px;font-weight:700;color:var(--accent2);
+  font-family:'IBM Plex Mono',monospace;letter-spacing:.04em;
+  padding-bottom:14px;border-bottom:1px solid var(--border);flex-shrink:0;
+}
+.stab-pane p{font-size:12px;color:var(--textMain);font-family:'IBM Plex Mono',monospace;margin:0}
+#kube-textarea,.stab-textarea{
+  width:100%;height:180px;resize:vertical;
+  background:var(--inputBg);border:1px solid var(--border);
+  border-radius:8px;padding:12px;font-size:12px;
+  font-family:'IBM Plex Mono',monospace;color:var(--inputText);
+  line-height:1.5;transition:border-color .18s;
+}
+#kube-textarea:focus,.stab-textarea:focus{outline:none;border-color:var(--accent)}
+.stab-status{font-size:12px;font-family:'IBM Plex Mono',monospace;min-height:18px}
+.modal-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:auto;padding-top:8px}
+.modal-btn{
+  padding:9px 20px;border-radius:8px;font-size:13px;font-weight:600;
+  font-family:'IBM Plex Mono',monospace;cursor:pointer;transition:all .15s;border:none;
+}
+.modal-btn-primary{background:var(--accent);color:#000}
+.modal-btn-primary:hover{filter:brightness(1.15)}
+.modal-btn-cancel{background:var(--border);color:var(--dimText);display:none}
+.modal-btn-cancel:hover{color:var(--textMain)}
+/* Drop zone */
+#drop-zone{
+  border:2px dashed var(--accent2);border-radius:10px;
+  padding:20px;text-align:center;cursor:pointer;
+  font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--accent2);
+  transition:border-color .18s,background .18s;
+}
+#drop-zone.drag-over{border-color:var(--accent);background:var(--inputBg)}
+#drop-zone input[type=file]{display:none}
+#drop-zone-label{font-size:12px;color:var(--accent2);margin-bottom:4px;display:block;font-weight:600}
+/* Ingest results table */
+#ingest-results{
+  font-family:'IBM Plex Mono',monospace;font-size:11px;
+  border:1px solid var(--border);border-radius:8px;overflow:hidden;max-height:160px;overflow-y:auto;
+}
+.ir-row{
+  display:grid;grid-template-columns:1fr 70px 55px;gap:4px;
+  padding:5px 10px;border-bottom:1px solid var(--border)22;align-items:center;
+}
+.ir-row:last-child{border-bottom:none}
+.ir-row.hdr{background:var(--inputBg);color:var(--panelLabel);font-weight:700;font-size:10px;letter-spacing:.05em}
+.ir-status-ok{color:#22c55e}.ir-status-skip{color:#f59e0b}.ir-status-err{color:#ef4444}
+/* RAG stats bar */
+#rag-stats-bar{
+  display:flex;gap:12px;font-family:'IBM Plex Mono',monospace;font-size:12px;
+  color:var(--textMain);background:var(--inputBg);border-radius:6px;padding:7px 10px;
+}
+.rs-val{color:var(--accent2);font-weight:700;margin-left:3px}
+
+/* ── Tech Preview inline banner (replaces ⚡ GPU subtitle row) ──────────── */
+@keyframes headerTicker{
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+#header-ticker-wrap{
+  overflow:hidden;white-space:nowrap;flex:1;min-width:0;
+  mask-image:linear-gradient(to right,transparent 0%,black 6%,black 94%,transparent 100%);
+  -webkit-mask-image:linear-gradient(to right,transparent 0%,black 6%,black 94%,transparent 100%);
+}
+#header-ticker{
+  display:inline-block;
+  animation:headerTicker 28s linear infinite;
+  font-family:'IBM Plex Mono',monospace;font-size:10px;
+  color:var(--accent2);padding-right:120px;
+}
+#header-ticker:hover{animation-play-state:paused;cursor:default;}
+#header-ticker a{color:var(--accent);text-decoration:none;}
+#header-ticker a:hover{text-decoration:underline;}
+
+/* ── Body (chat + panels) ────────────────────────────────────────────────── */
+#body{flex:1;display:flex;overflow:hidden}
+#chat-col{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+
+/* Main tab bar (AI Ops | README) */
+#main-tabs{
+  display:flex;align-items:center;gap:0;
+  border-bottom:1px solid var(--border);background:var(--headerBg);
+  padding:0 22px;flex-shrink:0;
+}
+.mtab{
+  padding:9px 16px;font-size:12px;font-weight:600;
+  font-family:'IBM Plex Mono',monospace;color:#94a3b8;
+  border:none;background:none;cursor:pointer;
+  border-bottom:2px solid transparent;margin-bottom:-1px;
+  transition:color .15s,border-color .15s;
+}
+.mtab:hover{color:var(--accent2)}
+.mtab.active{color:var(--accent2);border-bottom-color:var(--accent)}
+
+/* Chat pane */
+#chat-pane{flex:1;display:flex;flex-direction:column;overflow:hidden}
+#messages{flex:1;overflow-y:auto;padding:18px 22px}
+
+/* README pane */
+#readme-pane{
+  flex:1;overflow-y:auto;display:none;
+  padding:28px 36px;
+  font-family:'IBM Plex Sans',sans-serif;font-size:14px;
+  color:var(--bodyText);line-height:1.75;
+}
+#readme-pane.active{display:block}
+
+/* Guidelines pane */
+#guidelines-pane{
+  flex:1;overflow-y:auto;display:none;
+  padding:28px 36px;
+  font-family:'IBM Plex Sans',sans-serif;font-size:14px;
+  color:var(--bodyText);line-height:1.75;
+}
+#guidelines-pane h1{font-size:22px;font-weight:700;color:var(--accent2);margin-bottom:6px;font-family:'IBM Plex Sans',sans-serif}
+#guidelines-pane h2{font-size:15px;font-weight:700;color:var(--panelLabel);font-family:'IBM Plex Mono',monospace;letter-spacing:.04em;margin:28px 0 10px;padding-bottom:5px;border-bottom:1px solid var(--border)}
+#guidelines-pane h3{font-size:13px;font-weight:700;color:var(--accent2);font-family:'IBM Plex Mono',monospace;margin:18px 0 6px}
+#guidelines-pane p{margin-bottom:12px}
+#guidelines-pane code{font-family:'IBM Plex Mono',monospace;font-size:12px;background:var(--inputBg);border:1px solid var(--border);border-radius:4px;padding:1px 5px;color:var(--accent2)}
+#guidelines-pane table{border-collapse:collapse;font-size:12.5px;font-family:'IBM Plex Mono',monospace;margin:10px 0 18px;width:100%}
+#guidelines-pane th{background:var(--inputBg);color:var(--panelLabel);font-weight:700;padding:7px 12px;border:1px solid var(--border);text-align:left;font-size:11px;letter-spacing:.04em}
+#guidelines-pane td{padding:6px 12px;border:1px solid var(--border);color:var(--bodyText);vertical-align:top}
+#guidelines-pane tr:nth-child(even) td{background:var(--headerBg)55}
+#guidelines-pane .tip{background:var(--inputBg);border-left:3px solid var(--accent);border-radius:0 8px 8px 0;padding:10px 14px;margin:10px 0 16px;font-size:13px}
+#guidelines-pane .warn{background:#1c1200;border-left:3px solid #f59e0b;border-radius:0 8px 8px 0;padding:10px 14px;margin:10px 0 16px;font-size:13px}
+
+/* Knowledge Bot pane */
+#kb-bot-pane{
+  flex:1;overflow-y:auto;display:none;flex-direction:column;gap:0;
+  font-family:'IBM Plex Sans',sans-serif;font-size:14px;
+  color:var(--bodyText);
+}
+#kb-bot-pane.active{display:flex}
+#kb-bot-header{
+  padding:10px 24px 0;flex-shrink:0;
+}
+#kb-bot-header h2{
+  font-size:15px;font-weight:700;color:var(--accent2);
+  font-family:'IBM Plex Mono',monospace;letter-spacing:.04em;margin-bottom:4px;
+}
+#kb-bot-header p{font-size:12px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;margin:0}
+#kb-bot-body{flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:14px}
+#kb-bot-input-row{display:flex;gap:8px;align-items:flex-end;padding:14px 24px;border-top:1px solid var(--border);flex-shrink:0;background:var(--headerBg)}
+#kb-bot-input{
+  flex:1;background:var(--inputBg);border:1px solid var(--border);border-radius:8px;
+  color:var(--inputText);font-family:'IBM Plex Mono',monospace;font-size:13px;
+  padding:10px 14px;resize:none;line-height:1.5;
+}
+#kb-bot-input:focus{outline:none;border-color:var(--accent)}
+#kb-bot-send{
+  background:var(--accent);color:#000;font-weight:700;font-size:13px;
+  font-family:'IBM Plex Mono',monospace;border:none;border-radius:8px;
+  padding:10px 18px;flex-shrink:0;transition:opacity .15s;
+}
+#kb-bot-send:disabled{opacity:.4;cursor:not-allowed}
+#kb-bot-send:not(:disabled):hover{opacity:.85}
+.kb-sheet-filter{display:flex;gap:6px;flex-wrap:wrap;padding:0 24px 12px;flex-shrink:0}
+.kb-sf-btn{
+  font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:600;
+  padding:4px 10px;border-radius:4px;border:1px solid var(--border);
+  background:var(--inputBg);color:var(--dimText);transition:all .15s;
+}
+.kb-sf-btn:hover{border-color:var(--accent);color:var(--accent2)}
+.kb-sf-btn.active{background:var(--accent)22;border-color:var(--accent);color:var(--accent2)}
+.kb-answer-block{
+  background:var(--panelBg);border:2px solid var(--accent);border-radius:10px;
+  padding:18px 20px;animation:fadeUp .25s ease;
+}
+.kb-answer-q{display:flex;justify-content:space-between;align-items:baseline;
+  font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent);
+  font-weight:600;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--panelBorder);
+}
+.kb-answer-body{font-size:13px;line-height:1.75;color:var(--textMain);white-space:pre-wrap;word-break:break-word}
+.kb-answer-body table{border-collapse:collapse;width:100%;margin:10px 0;font-size:12px;font-family:'IBM Plex Mono',monospace}
+.kb-answer-body th{background:var(--inputBg);color:var(--panelLabel);font-weight:700;padding:7px 12px;border:1px solid var(--border);text-align:left;font-size:11px;letter-spacing:.04em}
+.kb-answer-body td{padding:6px 12px;border:1px solid var(--border);color:var(--bodyText);vertical-align:top}
+.kb-answer-body tr:nth-child(even) td{background:var(--headerBg)55}
+.kb-copy-btn{
+  margin-top:12px;font-size:11px;font-family:'IBM Plex Mono',monospace;
+  background:none;border:1px solid var(--accent);border-radius:4px;
+  color:var(--accent);padding:4px 12px;transition:all .15s;cursor:pointer;
+}
+.kb-copy-btn:hover{background:var(--accent);color:var(--bg)}
+.kb-spinner{display:flex;align-items:center;gap:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);padding:12px 0}
+.kb-elapsed{color:var(--accent);font-size:11px;min-width:28px}
+.kb-answer-elapsed{margin-left:auto;font-size:10px;color:var(--dimText);font-family:'IBM Plex Mono',monospace}
+.kb-spinner span{animation:dotPulse 1.4s ease-in-out infinite}
+.kb-spinner span:nth-child(2){animation-delay:.2s}
+.kb-spinner span:nth-child(3){animation-delay:.4s}
+.gl-tag{display:inline-block;font-size:10px;font-weight:700;font-family:'IBM Plex Mono',monospace;padding:2px 7px;border-radius:4px;margin-right:5px;vertical-align:middle;white-space:nowrap}
+.gl-tag-cluster{background:#0c2340;color:#38bdf8}
+.gl-tag-pod{background:#14532d;color:#86efac}
+.gl-tag-storage{background:#2d1b69;color:#c4b5fd}
+.gl-tag-secret{background:#3b1515;color:#fca5a5}
+.gl-tag-howto{background:#292524;color:#d6d3d1}
+.gl-tag-general{background:#1c1f2b;color:#94a3b8}
+.gl-tag-resource{background:#1a2e1a;color:#6ee7b7}
+.gl-tag-db{background:#1a1a2e;color:#818cf8}
+.gl-ex-row{display:flex;align-items:stretch;border-radius:6px;margin:6px 0;overflow:hidden;border:1px solid var(--border)}
+.gl-ex-bar{width:3px;flex-shrink:0}
+.gl-bar-pod{background:#86efac}.gl-bar-cluster{background:#38bdf8}.gl-bar-storage{background:#c4b5fd}
+.gl-bar-secret{background:#fca5a5}.gl-bar-howto{background:#d6d3d1}.gl-bar-general{background:#94a3b8}
+.gl-bar-resource{background:#6ee7b7}.gl-bar-db{background:#818cf8}
+.gl-ex-body{flex:1;display:flex;align-items:center;justify-content:space-between;background:var(--msgBg);padding:8px 10px 8px 12px;gap:10px}
+.gl-ex-text{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--textMain)}
+.gl-copy-btn{flex-shrink:0;background:none;border:1px solid #1e3a5f;border-radius:4px;padding:2px 8px;font-size:10px;font-family:'IBM Plex Mono',monospace;color:#38bdf8;cursor:pointer;transition:all .15s;text-shadow:0 0 6px #38bdf855}
+.gl-copy-btn:hover{color:#fff;border-color:#38bdf8;background:#0c2340;box-shadow:0 0 8px #38bdf877,inset 0 0 6px #38bdf822;text-shadow:0 0 8px #38bdf8}
+.gl-copy-btn.copied{color:#86efac;border-color:#86efac;background:#0d2b1a;box-shadow:0 0 10px #86efac99,inset 0 0 6px #86efac22;text-shadow:0 0 8px #86efac}
+.gl-ex-note{font-size:11.5px;color:var(--dimText);margin:2px 0 10px 4px}
+#readme-pane h1{
+  font-size:22px;font-weight:700;color:var(--accent2);margin-bottom:6px;
+  font-family:'IBM Plex Sans',sans-serif;
+}
+#readme-pane h2{
+  font-size:15px;font-weight:700;color:var(--panelLabel);
+  font-family:'IBM Plex Mono',monospace;letter-spacing:.04em;
+  margin:28px 0 10px;padding-bottom:5px;border-bottom:1px solid var(--border);
+}
+#readme-pane h3{
+  font-size:13px;font-weight:700;color:var(--accent2);
+  font-family:'IBM Plex Mono',monospace;margin:18px 0 6px;
+}
+#readme-pane p{margin-bottom:12px}
+#readme-pane a{color:var(--accent);text-decoration:none}
+#readme-pane a:hover{text-decoration:underline}
+#readme-pane code{
+  font-family:'IBM Plex Mono',monospace;font-size:12px;
+  background:var(--inputBg);border:1px solid var(--border);
+  border-radius:4px;padding:1px 5px;color:var(--accent2);
+}
+#readme-pane pre{
+  background:var(--inputBg);border:1px solid var(--border);
+  border-radius:10px;padding:14px 16px;overflow-x:auto;
+  font-family:'IBM Plex Mono',monospace;font-size:12px;
+  color:var(--bodyText);line-height:1.6;margin:10px 0 16px;
+}
+#readme-pane pre code{background:none;border:none;padding:0;color:inherit}
+#readme-pane table{
+  border-collapse:collapse;font-size:12.5px;font-family:'IBM Plex Mono',monospace;
+  margin:10px 0 18px;width:100%;
+}
+#readme-pane th{
+  background:var(--inputBg);color:var(--panelLabel);
+  font-weight:700;padding:7px 12px;border:1px solid var(--border);
+  text-align:left;font-size:11px;letter-spacing:.04em;
+}
+#readme-pane td{
+  padding:6px 12px;border:1px solid var(--border);
+  color:var(--bodyText);vertical-align:top;
+}
+#readme-pane tr:nth-child(even) td{background:var(--headerBg)55}
+#readme-pane ul,#readme-pane ol{padding-left:20px;margin-bottom:12px}
+#readme-pane li{margin-bottom:5px}
+#readme-pane .rd-section{margin-bottom:8px}
+#readme-pane .badge{
+  display:inline-block;font-size:10px;font-weight:700;
+  font-family:'IBM Plex Mono',monospace;padding:2px 7px;border-radius:4px;
+  margin-right:4px;vertical-align:middle;
+}
+#readme-pane .badge-get{background:#14532d;color:#86efac}
+#readme-pane .badge-post{background:#1e3a5f;color:#93c5fd}
+#readme-pane .badge-put{background:#451a03;color:#fed7aa}
+#readme-pane .tip{
+  background:var(--inputBg);border-left:3px solid var(--accent);
+  border-radius:0 8px 8px 0;padding:10px 14px;margin:10px 0 16px;
+  font-size:13px;
+}
+#readme-pane .warn{
+  background:#78350f;border-left:4px solid #f59e0b;color:#fef3c7;
+  border-radius:0 8px 8px 0;padding:10px 14px;margin:10px 0 16px;
+  font-size:13px;
+}
+#ex-label{font-size:11px;color:#ffffff;font-family:'IBM Plex Mono',monospace;letter-spacing:.1em}
+#ex-btns{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
+#kb-ex-btns{margin-bottom:4px}
+.kb-ex-label{font-size:11px;font-family:'IBM Plex Mono',monospace;color:#ffffff;letter-spacing:.1em;text-transform:uppercase;width:100%;margin-bottom:2px}
+.ex-btn{
+  background:var(--headerBg);border:1px solid var(--border);
+  border-radius:8px;padding:6px 12px;font-size:12px;
+  color:var(--dimText);font-family:'IBM Plex Mono',monospace;transition:all .18s;
+}
+.ex-btn:hover{border-color:var(--accent);color:var(--accent2)}
+
+/* Input bar */
+#chat-token-row{padding:10px 24px 0;flex-shrink:0;background:var(--headerBg)}
+#input-bar{padding:4px 22px 12px;background:var(--headerBg);display:flex;gap:10px}
+#chat-refresh-note{padding:8px 22px 4px;font-size:11.5px;color:var(--accent);background:var(--headerBg);font-weight:500;letter-spacing:.01em;border-top:1px solid var(--border)}
+#chat-input{
+  flex:1;background:var(--inputBg);border:1px solid var(--border);
+  border-radius:10px;padding:10px 14px;color:var(--inputText);
+  font-size:14px;resize:none;transition:border-color .2s;line-height:1.5;
+}
+#chat-input:focus{border-color:var(--accent)}
+#send-btn{
+  background:var(--msgBg);border:1px solid var(--accent);border-radius:10px;
+  padding:10px 18px;color:var(--accent2);font-size:13px;
+  font-family:'IBM Plex Mono',monospace;font-weight:700;
+  transition:all .2s;align-self:stretch;min-width:82px;
+}
+#send-btn:disabled{background:var(--headerBg);border-color:var(--border);color:var(--dimText);cursor:not-allowed}
+
+/* ── Chat messages ───────────────────────────────────────────────────────── */
+.msg-user{display:flex;justify-content:flex-end;margin-bottom:14px}
+.msg-user-bubble{
+  max-width:72%;background:var(--userBg);border:1px solid var(--userBorder);
+  border-radius:14px 14px 2px 14px;padding:10px 15px;
+  font-size:14px;color:var(--bodyText);line-height:1.6;
+}
+.msg-ai{display:flex;gap:10px;align-items:flex-start;margin-bottom:18px}
+.ai-icon{
+  width:27px;height:27px;border-radius:7px;background:var(--headerBg);
+  border:1px solid var(--accent);display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;margin-top:2px;
+}
+.ai-body{flex:1;min-width:0}
+.ai-bubble{
+  background:var(--msgBg);border:1px solid var(--border);
+  border-radius:2px 14px 14px 14px;padding:13px 17px;
+  font-size:14px;color:var(--bodyText);line-height:1.75;
+  white-space:pre-wrap;word-break:break-word;
+}
+.ai-bubble.clarification{
+  border-color:var(--accent)66;
+  background:var(--statusBg);
+  color:var(--accent2);
+  font-style:italic;
+}
+.ai-meta-row{display:flex;align-items:center;justify-content:space-between;margin-top:5px}
+.ai-elapsed{font-size:10px;color:var(--dimText);font-family:'IBM Plex Mono',monospace}
+.ai-copy-row{display:flex;justify-content:flex-end}
+.copy-btn{
+  display:inline-flex;align-items:center;gap:5px;padding:3px 10px;
+  border-radius:6px;font-size:10px;font-family:'IBM Plex Mono',monospace;
+  background:var(--headerBg);border:1px solid var(--accent)55;
+  color:var(--accent2);cursor:pointer;transition:color .15s,border-color .15s,background .15s;
+}
+.copy-btn:hover{color:#fff;border-color:var(--accent);background:var(--accent)22}
+.copy-btn.copied{color:#22c55e;border-color:#22c55e88}
+.ai-tools{margin-top:5px;display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.tbadge{
+  display:inline-flex;align-items:center;gap:4px;padding:2px 8px;
+  border-radius:999px;font-size:10px;background:var(--headerBg);
+  border:1px solid var(--accent)44;color:var(--accent2);
+  font-family:'IBM Plex Mono',monospace;font-weight:700;
+}
+.tmeta{font-size:10px;color:var(--dimText);font-family:'IBM Plex Mono',monospace}
+.kubectl-log{
+  margin-top:6px;font-family:'IBM Plex Mono',monospace;font-size:10px;
+  color:var(--dimText);background:var(--panelBg);border:1px solid var(--border);
+  border-radius:6px;padding:6px 10px;display:flex;flex-direction:column;gap:2px;
+}
+.kubectl-cmd{color:#7dd3fc;white-space:pre-wrap;word-break:break-all}
+/* ── inline Prometheus graph ─────────────────────────────────────── */
+.graph-block{
+  margin-top:10px;background:var(--msgBg);border:1px solid var(--border);
+  border-radius:8px;padding:12px 14px 8px;overflow:hidden;
+}
+.graph-title{
+  font-size:10px;font-family:'IBM Plex Mono',monospace;font-weight:700;
+  color:var(--accent2);letter-spacing:.06em;text-transform:uppercase;
+  margin-bottom:8px;
+}
+.graph-svg-wrap{width:100%;overflow:hidden}
+.graph-legend{
+  display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:8px;
+}
+.graph-legend-item{
+  display:flex;align-items:center;gap:5px;
+  font-size:10px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);
+}
+.graph-legend-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.graph-no-data{font-size:12px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;padding:8px 0}
+
+/* Thinking status */
+.status-box{
+  background:var(--statusBg);border:1px solid var(--border);
+  border-radius:12px;padding:12px 15px;margin-bottom:4px;
+  font-family:'IBM Plex Mono',monospace;font-size:12px;
+  display:flex;flex-direction:column;gap:5px;
+}
+.s-label{color:var(--accent);font-size:10px;letter-spacing:.12em;margin-bottom:2px}
+.s-line{display:flex;align-items:center;gap:8px;color:var(--dimText)}
+.s-line.cur{color:var(--accent2)}
+.sdots{display:flex;gap:4px;margin-top:2px}
+.sdot{width:4px;height:4px;border-radius:50%;background:var(--dimText);animation:dotPulse 1.2s infinite}
+
+/* ── Right panels ────────────────────────────────────────────────────────── */
+#panels{display:flex;flex-shrink:0;flex-direction:column}
+/* Dashboard header banner at top of right panel */
+#panel-dashboard-hdr{
+  width:288px;flex-shrink:0;
+  background:linear-gradient(135deg,var(--accent)22,var(--accent2)11);
+  border-left:1px solid var(--panelBorder);
+  border-bottom:2px solid var(--accent)66;
+  padding:9px 12px;
+  display:flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;
+}
+#panel-dashboard-hdr .pdh-icon svg{flex-shrink:0;}
+#panel-dashboard-hdr .pdh-title{
+  font-size:10px;font-weight:700;letter-spacing:.06em;
+  color:var(--accent2);text-transform:uppercase;line-height:1.2;
+}
+#panel-dashboard-hdr .pdh-sub{font-size:9px;color:var(--panelDim);margin-top:1px}
+.panel{
+  width:288px;flex-shrink:0;
+  background:var(--panelBg);border-left:1px solid var(--panelBorder);
+  display:flex;flex-direction:column;font-family:'IBM Plex Mono',monospace;overflow:hidden;
+}
+/* GPU panel above CPU, CPU takes remaining space */
+#gpu-panel{flex-shrink:0;border-top:1px solid var(--panelBorder)}
+#cpu-panel{flex:1;min-height:0}
+.ph{  /* panel header */
+  padding:8px 12px 6px;border-bottom:1px solid var(--panelBorder);
+  display:flex;justify-content:space-between;align-items:center;flex-shrink:0;
+}
+.ph-title{color:var(--panelLabel);font-weight:700;font-size:12px;letter-spacing:.04em}
+.ph-sub{color:var(--panelDim);font-size:11px}
+.pf{ /* panel footer */
+  padding:7px 12px;border-top:1px solid var(--panelBorder);
+  display:flex;justify-content:space-between;align-items:center;flex-shrink:0;
+}
+
+/* Inference badge (footer) */
+.infer-badge{
+  display:flex;align-items:center;gap:5px;
+  font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;
+}
+.infer-dot{
+  width:7px;height:7px;border-radius:50%;flex-shrink:0;
+  animation:inferPulse 2s ease-in-out infinite;
+}
+
+/* Sparkline */
+.spark-wrap{
+  background:var(--headerBg);border:1px solid var(--panelBorder);
+  border-radius:4px;margin-bottom:6px;overflow:hidden;position:relative;
+}
+.spark-lbl{position:absolute;top:3px;right:5px;font-size:10px;color:var(--panelDim)}
+
+/* Section inside panel */
+.psec{padding:8px 12px 4px;flex-shrink:0}
+
+/* Utilisation bar (generic) */
+.util-row{display:flex;align-items:center;gap:6px;margin-bottom:3px}
+.util-lbl{font-size:11px;color:var(--panelLabel);min-width:24px}
+.util-pct{font-size:12px;font-weight:700;min-width:38px;text-align:right}
+.ubar-wrap{flex:1;position:relative;height:8px;border-radius:2px;overflow:hidden;background:var(--panelBorder)33}
+.ubar-fill{position:absolute;top:0;left:0;bottom:0;border-radius:2px;transition:width .9s ease}
+.ubar-dots{
+  position:absolute;inset:0;
+  background-image:repeating-linear-gradient(90deg,transparent,transparent 4px,var(--panelBg)66 4px,var(--panelBg)66 5px);
+}
+
+/* Dotbar (CPU total) */
+#cpu-dotbar{display:flex;gap:1px;align-items:center;overflow:hidden;flex:1}
+
+/* Cores grid */
+#cores-grid{flex:1;overflow-y:auto;padding:0 12px;display:flex;gap:8px}
+.core-col{flex:1;display:flex;flex-direction:column;gap:2px}
+.core-row{display:flex;align-items:center;gap:3px}
+.core-lbl{color:var(--panelDim);min-width:20px;font-size:10px}
+.core-track{flex:1;position:relative;height:7px}
+.core-bg{position:absolute;inset:0;background:var(--panelBorder)33;border-radius:2px}
+.core-fill{position:absolute;top:0;left:0;bottom:0;border-radius:2px;transition:width .8s ease}
+.core-dots{
+  position:absolute;inset:0;border-radius:2px;
+  background-image:repeating-linear-gradient(90deg,transparent,transparent 4px,var(--panelBg)66 4px,var(--panelBg)66 5px);
+}
+.core-pct{min-width:28px;text-align:right;font-size:10px;color:var(--panelDim)}
+
+/* Load avg section */
+.load-sec{padding:5px 12px 7px;border-top:1px solid var(--panelBorder);flex-shrink:0;display:flex;justify-content:space-between;align-items:center}
+.load-title{color:var(--panelLabel);font-weight:700;font-size:11px}
+#load-avg{color:var(--panelDim);font-size:11px;letter-spacing:.06em}
+
+/* GPU card */
+.gpu-cards-wrap{flex:1;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:12px}
+.gpu-card{
+  background:var(--headerBg);border:1px solid var(--panelBorder);
+  border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:7px;
+}
+.gpu-chdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:2px}
+.gpu-idx{color:var(--panelLabel);font-weight:700;font-size:12px}
+.gpu-name{color:var(--panelDim);font-size:10px;max-width:165px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.g-bar-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}
+.g-bar-lbl{color:var(--panelDim);font-size:11px}
+.g-bar-val{font-size:12px;font-weight:700}
+.g-track{height:9px;background:var(--panelBorder)33;border-radius:3px;position:relative;overflow:hidden}
+.g-fill{position:absolute;top:0;left:0;bottom:0;border-radius:3px;transition:width 1s ease}
+.g-stripe{
+  position:absolute;inset:0;
+  background-image:repeating-linear-gradient(90deg,transparent,transparent 4px,var(--panelBg)55 4px,var(--panelBg)55 5px);
+}
+.vram-track{height:7px;background:var(--panelBorder)33;border-radius:3px;position:relative;overflow:hidden}
+.vram-fill{position:absolute;top:0;left:0;bottom:0;border-radius:3px;transition:width 1s ease}
+.gpu-meta{display:flex;gap:10px;font-size:11px}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ═══ HEADER ══════════════════════════════════════════════════════════ -->
+  <div id="hdr">
+    <div id="logos">
+      <img src="/static/rancher-logo.svg" alt="Rancher" width="36" height="36"/>
+      <img src="/static/k8s-logo.svg"     alt="K8s"     width="32" height="32"/>
+    </div>
+    <div id="title-block">
+      <div id="ttl" class="shiny">Cloudera ECS AI Ops</div>
+      <div id="subtitle">
+        <div id="header-ticker-wrap">
+          <span id="header-ticker">This Agentic ECS AI Ops Chatbot is in Tech Preview. Please contact <a href="mailto:dennislee@cloudera.com">dennislee@cloudera.com</a> for feedback and comments.&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;This Agentic ECS AI Ops Chatbot is in Tech Preview. Please contact <a href="mailto:dennislee@cloudera.com">dennislee@cloudera.com</a> for feedback and comments.</span>
+        </div>
+      </div>
+    </div>
+    <div id="hdr-right">
+      <a id="email-link" href="mailto:dennislee@cloudera.com">&#9993; dennislee&#64;cloudera.com</a>
+      <div id="theme-row">
+        <span id="theme-label">THEME</span>
+        <button class="tdot active" data-theme="midnight"
+          style="background:linear-gradient(135deg,#38bdf8,#818cf8)" title="Midnight"></button>
+        <button class="tdot" data-theme="singapore"
+          style="background:transparent;display:flex;align-items:center;justify-content:center;overflow:hidden;border-radius:50%" title="S'pore">
+          <svg width="20" height="20" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg" style="display:block;flex-shrink:0;border-radius:50%">
+            <path d="M10 0 A10 10 0 0 1 10 20 Z" fill="#ffffff"/>
+            <path d="M10 20 A10 10 0 0 1 10 0 Z" fill="#EF3340"/>
+          </svg>
+        </button>
+        <button class="tdot" data-theme="cloudera"
+          style="background:transparent;display:flex;align-items:center;justify-content:center;overflow:hidden" title="Cloudera">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="#F96702" xmlns="http://www.w3.org/2000/svg" style="display:block;flex-shrink:0">
+            <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm.344 20.251a8.25 8.25 0 1 1 0-16.502 8.21 8.21 0 0 1 5.633 2.234L15.519 8.53a4.686 4.686 0 0 0-3.175-1.239 4.709 4.709 0 1 0 3.284 8.081l2.657 2.346a8.224 8.224 0 0 1-5.941 2.533z"/>
+          </svg>
+        </button>
+        <span id="theme-name">Midnight</span>
+      </div>
+      <span id="cluster-host" style="font-size:10px;color:var(--accent);font-family:'IBM Plex Mono',monospace">· Connected ECS: unknown</span>
+    </div>
+  </div>
+
+  <!-- ═══ BODY ═════════════════════════════════════════════════════════════ -->
+  <div id="body">
+
+    <!-- Chat column -->
+    <div id="chat-col">
+
+      <!-- ── Main tab bar ───────────────────────────────────────────────── -->
+      <div id="main-tabs">
+        <button class="mtab active" data-pane="chat-pane"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:4px"><path d="M18 3a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-4.724l-4.762 2.857a1 1 0 0 1 -1.508 -.743l-.006 -.114v-2h-1a4 4 0 0 1 -3.995 -3.8l-.005 -.2v-8a4 4 0 0 1 4 -4zm-2.8 9.286a1 1 0 0 0 -1.414 .014a2.5 2.5 0 0 1 -3.572 0a1 1 0 0 0 -1.428 1.4a4.5 4.5 0 0 0 6.428 0a1 1 0 0 0 -.014 -1.414m-5.69 -4.286h-.01a1 1 0 1 0 0 2h.01a1 1 0 0 0 0 -2m5 0h-.01a1 1 0 0 0 0 2h.01a1 1 0 0 0 0 -2" /></svg> ECS AI Ops Chatbot</button>
+        <button class="mtab" data-pane="kb-bot-pane"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="16" height="16" style="vertical-align:-3px;margin-right:5px"><path d="M 60 93 C 60 55, 140 55, 140 93 Z" fill="currentColor"/><polygon points="100,25 170,55 100,75 30,55" fill="currentColor"/><line x1="45" y1="59" x2="45" y2="95" stroke="currentColor" stroke-width="3"/><circle cx="45" cy="95" r="4" fill="currentColor"/><path d="M 40 115 L 45 95 L 50 115 Z" fill="currentColor"/><path d="M 32 125 C 12 125, 12 155, 32 155 Z" fill="currentColor" opacity="0.6"/><path d="M 168 125 C 188 125, 188 155, 168 155 Z" fill="currentColor" opacity="0.6"/><rect x="40" y="105" width="120" height="70" rx="35" fill="none" stroke="currentColor" stroke-width="16"/><circle cx="75" cy="140" r="9" fill="currentColor"/><circle cx="125" cy="140" r="9" fill="currentColor"/></svg> ECS Knowledge Bot</button>
+        <button class="mtab" data-pane="settings-pane"><span style="font-size:18px;vertical-align:-2px">&#9881;</span> Settings</button>
+        <button class="mtab" data-pane="readme-pane">&#128214; README</button>
+        <button class="mtab" data-pane="guidelines-pane">&#128203; Prompt Guidelines for ECS AI Ops Chatbot</button>
+      </div>
+
+      <!-- ── Chat pane ─────────────────────────────────────────────────── -->
+      <div id="chat-pane">
+        <div id="chat-token-row">
+          <div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;font-family:'IBM Plex Mono',monospace">
+            <label style="font-size:11px;color:var(--dimText);white-space:nowrap">
+              Max output tokens: <strong id="chat-max-tokens-val" style="color:var(--accent2)">4096</strong>
+            </label>
+            <input type="range" id="chat-max-tokens-slider" min="512" max="8192" step="512" value="4096"
+              style="width:120px;accent-color:var(--accent);cursor:pointer;height:5px"
+              title="Maximum tokens the LLM can generate per response."/>
+            <span style="font-size:10px;color:var(--panelDim)">512 — 8192</span>
+          </div>
+        </div>
+        <div id="messages">
+          <div id="examples">
+            <div id="ex-label">EXAMPLE QUERIES</div>
+            <div id="ex-btns"></div>
+          </div>
+        </div>
+        <div id="chat-refresh-note">
+          💡 <strong>Tip:</strong> Each question is treated independently (no conversation history). For best results, always narrow the query (e.g. <em>list all RWO pvc in <strong>cdp</strong> namespace</em>) to get faster and more accurate responses.
+        </div>
+        <div id="input-bar">
+          <textarea id="chat-input" rows="2"
+            placeholder="Ask about cluster health, Longhorn storage, pod issues, logs, events&hellip; (Enter to send)"></textarea>
+          <button id="send-btn">&#8594; Send</button>
+        </div>
+      </div>
+
+      <!-- ── ECS Knowledge Bot pane ───────────────────────────────────────── -->
+      <div id="kb-bot-pane">
+        <div id="kb-bot-header">
+          <div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;font-family:'IBM Plex Mono',monospace">
+            <label style="font-size:11px;color:var(--dimText);white-space:nowrap">
+              Max output tokens: <strong id="kb-topk-val" style="color:var(--accent2)">1312</strong>
+            </label>
+            <input type="range" id="kb-topk-slider"
+              min="512" max="4096" step="256" value="1312"
+              style="width:120px;accent-color:var(--accent);cursor:pointer;height:5px"
+              title="Maximum tokens the LLM can generate. Higher = longer, more detailed answers."/>
+            <span style="font-size:10px;color:var(--panelDim)">512 — 4096</span>
+          </div>
+        </div>
+        <div id="kb-bot-body">
+          <div id="kb-ex-btns">
+            <div class="kb-ex-label">EXAMPLE QUERIES</div>
+            <div style="display:flex;flex-wrap:wrap;gap:7px;margin-top:6px">
+              <button class="ex-btn">List the known issues with Longhorn in 1.5.5 SP1</button>
+              <button class="ex-btn">What can you do?</button>
+              <button class="ex-btn">What are the dos &amp; don'ts</button>
+            </div>
+          </div>
+        </div>
+        <div id="kb-bot-input-row">
+          <textarea id="kb-bot-input" rows="2" placeholder="Ask about known issues, dos &amp; don'ts, prerequisites, past learnings… (Enter to send)"></textarea>
+          <button id="kb-bot-send">&#8594; Ask</button>
+        </div>
+      </div>
+
+      <!-- ── README pane ───────────────────────────────────────────────── -->
+      <div id="readme-pane">
+
+        <h1><img src="/static/chatbot-icon.svg" width="26" height="26" style="vertical-align:middle;margin-right:6px;filter:brightness(0) invert(1)"><img src="/static/k8s-logo.svg" width="24" height="24" style="vertical-align:middle;margin-right:8px">Cloudera ECS AI Ops</h1>
+        <p>An air-gapped Kubernetes operations assistant for Cloudera ECS, powered by a local LLM (Qwen3-8B on GPU / Qwen3-8B-GGUF Q4_K_M on CPU), LangGraph agentic loop, and LanceDB RAG.</p>
+        <p>&#9888; This chatbot is read-only by default, it will never restart, delete, or modify cluster resources. Validated on Qwen3-8B running on GPU (HF Transformers) and Qwen3-8B-GGUF Q4_K_M running on CPU (llama-cpp-python). Using other self-hosted models may produce different or unexpected responses.</p>
+
+        <!-- ── ECS AI Ops Chatbot ──────────────────────────────────────── -->
+        <h2 style="font-size:15px;font-family:'IBM Plex Sans',sans-serif;letter-spacing:normal"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:5px"><path d="M18 3a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-4.724l-4.762 2.857a1 1 0 0 1 -1.508 -.743l-.006 -.114v-2h-1a4 4 0 0 1 -3.995 -3.8l-.005 -.2v-8a4 4 0 0 1 4 -4zm-2.8 9.286a1 1 0 0 0 -1.414 .014a2.5 2.5 0 0 1 -3.572 0a1 1 0 0 0 -1.428 1.4a4.5 4.5 0 0 0 6.428 0a1 1 0 0 0 -.014 -1.414m-5.69 -4.286h-.01a1 1 0 1 0 0 2h.01a1 1 0 0 0 0 -2m5 0h-.01a1 1 0 0 0 0 2h.01a1 1 0 0 0 0 -2" /></svg> ECS AI Ops Chatbot</h2>
+        <p>Each query runs through an <strong>agentic ReAct loop</strong> driven by the LLM. The LLM reads a Tool Selection Guide in its system prompt, picks the right tools, observes the results, and decides whether to chain further tool calls or synthesise a final answer. Each query is treated independently, there is no conversation history.</p>
+
+        <!-- ── ECS Knowledge Bot ──────────────────────────────────────── -->
+        <h2 style="font-size:15px;font-family:'IBM Plex Sans',sans-serif;letter-spacing:normal"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="18" height="18" style="vertical-align:-4px;margin-right:5px"><path d="M 60 93 C 60 55, 140 55, 140 93 Z" fill="currentColor"/><polygon points="100,25 170,55 100,75 30,55" fill="currentColor"/><line x1="45" y1="59" x2="45" y2="95" stroke="currentColor" stroke-width="3"/><circle cx="45" cy="95" r="4" fill="currentColor"/><path d="M 40 115 L 45 95 L 50 115 Z" fill="currentColor"/><path d="M 32 125 C 12 125, 12 155, 32 155 Z" fill="currentColor" opacity="0.6"/><path d="M 168 125 C 188 125, 188 155, 168 155 Z" fill="currentColor" opacity="0.6"/><rect x="40" y="105" width="120" height="70" rx="35" fill="none" stroke="currentColor" stroke-width="16"/><circle cx="75" cy="140" r="9" fill="currentColor"/><circle cx="125" cy="140" r="9" fill="currentColor"/></svg> ECS Knowledge Bot</h2>
+        <p>A knowledge base interface that retrieves relevant context from your ingested documents and synthesises a focused answer using the LLM — no live cluster calls. Best used for looking up runbooks, known issues, dos &amp; don'ts, prerequisites, and past learnings.</p>
+        <table>
+          <tr><th></th><th>ECS AI Ops Chatbot</th><th>ECS Knowledge Bot</th></tr>
+          <tr><td>Live cluster data</td><td>✅ Yes — kubectl, Longhorn, events</td><td>❌ No</td></tr>
+          <tr><td>Knowledge base (RAG)</td><td>✅ Yes — alongside live data</td><td>✅ Yes — primary source</td></tr>
+          <tr><td>LLM synthesis</td><td>✅ Yes — ReAct agent loop</td><td>✅ Yes — KB-focused prompt</td></tr>
+          <tr><td>Response speed</td><td>Slower (agent + tools)</td><td>Faster (RAG + direct synthesis)</td></tr>
+          <tr><td>Best for</td><td>Operational queries, health checks, diagnostics</td><td>Reference lookups, runbooks, SOPs</td></tr>
+        </table>
+        <p>Adjust the <strong>Max results</strong> slider if answers appear incomplete — increasing it retrieves more knowledge base entries per query.</p>
+
+        <!-- ── Configuring the Cluster ─────────────────────────────────── -->
+        <h2>Configuring the Cluster</h2>
+        <p>Click <strong>&#9881; Settings</strong> → <strong>Kubeconfig</strong> tab. Paste your kubeconfig YAML and click <strong>Apply</strong>. The cluster host appears in the header on success. No restart needed — you can switch clusters at any time.</p>
+
+        <pre><code>curl -s -X POST http://localhost:9000/api/kubeconfig \
+     -H 'Content-Type: application/json' \
+     -d "{\"kubeconfig\": \"$(cat ~/.kube/config | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')\"}"</code></pre>
+
+        <p>Adjust LLM input/output limits at runtime via &#9881; Settings &rarr; LLM Input/Output, or via API:</p>
+        <table>
+          <tr><th>Setting</th><th>Controls</th><th>Default</th></tr>
+          <tr><td><code>KUBECTL_MAX_CHARS</code></td><td>Characters of cluster data the LLM <strong>reads</strong></td><td>20000</td></tr>
+          <tr><td><code>MAX_NEW_TOKENS</code></td><td>Tokens the LLM <strong>writes</strong> (~4 chars/token)</td><td>4096</td></tr>
+        </table>
+        <pre><code>curl -s -X POST http://localhost:9000/api/config \
+     -H 'Content-Type: application/json' \
+     -d '{"kubectl_max_chars": 50000, "max_new_tokens": 6144}'</code></pre>
+
+        <!-- ── Knowledge Base (RAG) ────────────────────────────────────── -->
+        <h2>Knowledge Base (RAG)</h2>
+        <p>The assistant cross-references live cluster data with your runbooks, known-issues docs, and SOPs via <strong>LanceDB RAG</strong>. Both chatbots draw from the same LanceDB vector store.</p>
+
+        <h3>Via the Settings UI</h3>
+        <ol>
+          <li>Click &#9881; Settings → <strong>RAG Documents</strong> tab.</li>
+          <li>Drop <code>.md</code>, <code>.pdf</code>, <code>.txt</code>, <code>.xlsx</code>, or <code>.xls</code> files onto the drop zone.</li>
+          <li>Click <strong>Ingest</strong>. Previously ingested files with the same content are automatically skipped (deduplication is hash-based).</li>
+          <li>To replace an existing file with updated content, tick <em>Force re-ingest</em> before clicking Ingest.</li>
+        </ol>
+        <p style="font-size:11px;color:var(--dimText)">💡 All previously ingested files are listed in the <em>Ingested Files</em> panel at the bottom of the tab.</p>
+
+        <h3>Via server-side directory</h3>
+        <pre><code>python3 app.py --ingest ./docs
+python3 app.py --ingest ./docs --force   # force overwrite all</code></pre>
+
+        <!-- ── LLM ─────────────────────────────────────────────────────── -->
+        <h2>LLM — GPU vs CPU</h2>
+        <p>The application auto-detects available GPUs at startup. Use the appropriate model for your hardware:</p>
+        <table>
+          <tr><th>Hardware</th><th>Model</th><th>Backend</th><th>Response time</th></tr>
+          <tr><td><strong>GPU</strong> (recommended)</td><td><a href="https://huggingface.co/Qwen/Qwen3-8B" target="_blank">Qwen3-8B</a></td><td>HuggingFace Transformers (bfloat16)</td><td>10–30 s</td></tr>
+          <tr><td><strong>CPU only</strong></td><td><a href="https://huggingface.co/Qwen/Qwen3-8B-GGUF" target="_blank">Qwen3-8B-GGUF Q4_K_M</a></td><td>llama-cpp-python (quantized)</td><td>Several minutes</td></tr>
+        </table>
+        <p>Set <code>LLM_MODEL</code> in the <code>env</code> file. If the path ends with <code>.gguf</code> the app automatically switches to the GGUF backend — no other config change needed.</p>
+        <pre><code># GPU
+LLM_MODEL=/models/Qwen3-8B
+NUM_GPU=1
+
+# CPU (GGUF)
+LLM_MODEL=/models/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf
+NUM_GPU=0</code></pre>
+
+        <!-- ── System Prompt ───────────────────────────────────────────── -->
+        <h2>Customising the System Prompt</h2>
+        <p>The LLM's tool selection, multi-hop behaviour, and persona are controlled by <code>config/system_prompt.txt</code>. Key sections:</p>
+        <ul>
+          <li><strong>Tool Selection Guide</strong> — which tools to call for each query type</li>
+          <li><strong>Multi-hop Reasoning</strong> — when to chain calls (e.g. OOMKilled → check quotas)</li>
+          <li><strong>CRITICAL: Never Narrate</strong> — prevents the LLM from suggesting tools instead of calling them</li>
+        </ul>
+        <p>Hot-reload after editing — no restart needed:</p>
+        <pre><code>curl -s -X POST http://localhost:9000/api/reload-prompt</code></pre>
+
+        <!-- ── REST API ───────────────────────────────────────────────── -->
+        <h2>REST API</h2>
+        <div class="tip">&#128196; Interactive docs at <a href="/docs" target="_blank">/docs</a> (Swagger) &nbsp;·&nbsp; <a href="/redoc" target="_blank">/redoc</a></div>
+
+        <table>
+          <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/info</code></td><td>Model, GPU, cluster status</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/pods?ns=X</code></td><td>Pod health summary</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/nodes</code></td><td>Node health + GPU info</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/events?warn=1</code></td><td>Cluster events</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/tools</code></td><td>List all registered tools</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/system</code></td><td>Live CPU / RAM / GPU metrics</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/rag/query</code></td><td>RAG-only query (Knowledge Bot)</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/ask</code></td><td>Ask the AI (blocking)</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/chat/stream</code></td><td>Ask the AI (SSE streaming)</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/tool</code></td><td>Call a tool directly</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/kubeconfig</code></td><td>Apply a new kubeconfig</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/ingest/upload</code></td><td>Upload docs to LanceDB</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/reload-prompt</code></td><td>Hot-reload system_prompt.txt</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/prompt</code></td><td>Read current system prompt</td></tr>
+          <tr><td><span class="badge badge-put">PUT</span></td><td><code>/api/prompt</code></td><td>Update system prompt</td></tr>
+        </table>
+
+        <!-- ── Configuration ──────────────────────────────────────────── -->
+        <h2>Environment Variables</h2>
+        <table>
+          <tr><th>Variable</th><th>Default</th><th>Description</th></tr>
+          <tr><td><code>LLM_MODEL</code></td><td>Qwen/Qwen3-8B</td><td>HuggingFace model ID or local path. Set to a <code>.gguf</code> path for CPU inference.</td></tr>
+          <tr><td><code>EMBED_MODEL</code></td><td>nomic-ai/nomic-embed-text-v1.5</td><td>SentenceTransformers model ID or local path</td></tr>
+          <tr><td><code>NUM_GPU</code></td><td>auto</td><td>GPU count (0 = CPU / GGUF mode)</td></tr>
+          <tr><td><code>KUBECONFIG_PATH</code></td><td>~/kubeconfig</td><td>Path to kubeconfig (blank = in-cluster)</td></tr>
+          <tr><td><code>LOG_LEVEL</code></td><td>DEBUG</td><td>DEBUG shows full agentic loop trace</td></tr>
+          <tr><td><code>LANCEDB_DIR</code></td><td>./lancedb</td><td>LanceDB persistent storage path</td></tr>
+          <tr><td><code>CUSTOM_RULES</code></td><td>—</td><td>Site-specific rules injected into the system prompt</td></tr>
+          <tr><td><code>KUBECTL_ALLOW_WRITES</code></td><td>false</td><td>Allow write operations via kubectl_exec</td></tr>
+          <tr><td><code>ALLOW_DB_EXEC</code></td><td>true</td><td>Allow read-only SQL queries inside DB pods via exec_db_query</td></tr>
+          <tr><td><code>KUBECTL_MAX_CHARS</code></td><td>20000</td><td>Max chars of K8s tool output fed into LLM. Runtime-adjustable.</td></tr>
+          <tr><td><code>MAX_NEW_TOKENS</code></td><td>4096</td><td>Max tokens the LLM generates per response. Runtime-adjustable.</td></tr>
+          <tr><td><code>LLM_TIMEOUT</code></td><td>300s GPU / 900s CPU</td><td>Hard timeout (seconds) per request.</td></tr>
+          <tr><td><code>GGUF_N_CTX</code></td><td>32768</td><td>Context window size (GGUF / CPU mode only)</td></tr>
+          <tr><td><code>GGUF_N_THREADS</code></td><td>all cores</td><td>CPU threads for GGUF inference</td></tr>
+        </table>
+
+        <!-- ── Hardware ───────────────────────────────────────────────── -->
+        <h2>Hardware Sizing</h2>
+        <table>
+          <tr><th>Mode</th><th>Model</th><th>Min. CPU cores</th><th>Min. RAM</th><th>Min. VRAM</th></tr>
+          <tr><td><strong>GPU</strong> (recommended)</td><td>Qwen3-8B (bfloat16)</td><td>8</td><td>32 GB</td><td>25 GB</td></tr>
+          <tr><td><strong>CPU only</strong></td><td>Qwen3-8B-GGUF Q4_K_M</td><td>16</td><td>64 GB</td><td>—</td></tr>
+        </table>
+
+        <!-- ── Security ───────────────────────────────────────────────── -->
+        <h2>Security Notes</h2>
+        <ul>
+          <li>All typed K8s tools are <strong>read-only</strong> by design.</li>
+          <li><code>kubectl_exec</code> is read-only by default. Set <code>KUBECTL_ALLOW_WRITES=true</code> to enable write ops.</li>
+          <li>Secret values are hidden by default — toggle in &#9881; Settings → Security. Preference persists per browser.</li>
+          <li>Never expose this service publicly — it has direct cluster read access.</li>
+          <li>Restrict the env file: <code>chmod 600 env</code></li>
+        </ul>
+
+        <div class="tip">&#9993; Contact <a href="mailto:dennislee@cloudera.com">dennislee@cloudera.com</a> for feedback and questions.</div>
+
+      </div><!-- #readme-pane -->
+
+      <!-- ── Prompt Guidelines pane ──────────────────────────────────── -->
+      <div id="guidelines-pane">
+
+        <h1>&#128203; Prompt Guidelines for ECS AI Ops Chatbot</h1>
+        <p>Tips and examples for getting the best responses from the ECS AI Ops Chatbot.</p>
+
+
+
+        <h2>HOW THE CHATBOT DECIDES WHAT TO DO</h2>
+        <p>Every question is independent — there is no conversation history. The chatbot determines your intent and takes one of two paths:</p>
+        <table>
+          <tr><th>Path</th><th>Triggered by</th><th>What happens</th></tr>
+          <tr>
+            <td><span style="display:inline-flex;align-items:center;gap:5px;white-space:nowrap"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="184.8125 184.8125 348.53 497.84"><path style="fill:#326ce5" d="m365.3125 184.8125a46.72 46.34 0 0 0-17.906 4.531l-244.344 116.75a46.72 46.34 0 0 0-25.281 31.438L17.5 599.781a46.72 46.34 0 0 0 6.344 35.531 46.72 46.34 0 0 0 2.656 3.688l169.125 210.281a46.72 46.34 0 0 0 36.531 17.438l271.219-.016a46.72 46.34 0 0 0 36.531-17.406L708.969 638.938A46.72 46.34 0 0 0 718 599.719l-60.375-262.25a46.72 46.34 0 0 0-25.281-31.438l-244.375-116.687a46.72 46.34 0 0 0-22.656-4.531z"/><path style="fill:#ffffff" d="m367.734 274.06c-8.077.001-14.626 7.276-14.625 16.25 0 .138.028.27.031.406-.012 1.22-.071 2.688-.031 3.75.193 5.176 1.321 9.138 2 13.907 1.23 10.206 2.261 18.667 1.625 26.53-.619 2.966-2.803 5.678-4.75 7.563l-.344 6.188c-8.777.727-17.612 2.058-26.438 4.062-37.974 8.622-70.67 28.183-95.562 54.594-1.615-1.102-4.441-3.13-5.281-3.75-2.611.353-5.25 1.158-8.688-.844-6.545-4.405-12.506-10.487-19.719-17.812-3.305-3.504-5.698-6.841-9.625-10.219-.892-.767-2.253-1.805-3.25-2.594-3.07-2.448-6.691-3.724-10.188-3.844-4.496-.154-8.824 1.604-11.656 5.156-5.035 6.316-3.423 15.968 3.594 21.563.071.057.147.1.219.156.964.782 2.145 1.783 3.031 2.438 4.167 3.076 7.973 4.651 12.125 7.093 8.747 5.402 15.998 9.881 21.75 15.282 2.246 2.394 2.639 6.613 2.938 8.437l4.687 4.188c-25.093 37.763-36.707 84.41-29.844 131.937l-6.125 1.781c-1.614 2.085-3.895 5.365-6.281 6.344-7.525 2.37-15.994 3.241-26.219 4.313-4.8.399-8.942.16-14.031 1.125-1.12.212-2.681.619-3.906.906-.043.009-.082.022-.125.031-.067.016-.155.048-.219.063-8.62 2.083-14.158 10.006-12.375 17.812 1.783 7.808 10.203 12.557 18.875 10.688.063-.015.154-.017.219-.031.098-.023.184-.07.281-.094 1.209-.265 2.724-.561 3.781-.844 5.003-1.34 8.627-3.308 13.125-5.031 9.677-3.471 17.692-6.37 25.5-7.5 3.261-.256 6.697 2.012 8.406 2.969l6.375-1.094c14.67 45.483 45.414 82.245 84.344 105.313l-2.656 6.375c.957 2.475 2.013 5.825 1.3 8.269-2.839 7.361-7.701 15.131-13.238 23.793-2.681 4.002-5.424 7.108-7.844 11.688-.579 1.096-1.316 2.779-1.875 3.937-3.759 8.043-1.002 17.305 6.219 20.781 7.266 3.498 16.284-.191 20.188-8.25.005-.011.025-.02.031-.031.004-.009-.004-.023 0-.031.556-1.143 1.344-2.645 1.813-3.719 2.072-4.747 2.761-8.815 4.219-13.406 3.87-9.72 5.996-19.919 11.323-26.274 1.459-1.74 3.837-2.41 6.302-3.07l3.313-6c33.938 13.027 71.927 16.522 109.875 7.906 8.657-1.966 17.014-4.51 25.094-7.562.931 1.651 2.661 4.826 3.125 5.625 2.506.815 5.24 1.236 7.469 4.531 3.985 6.809 6.711 14.864 10.031 24.594 1.457 4.591 2.178 8.659 4.25 13.406.472 1.082 1.256 2.605 1.813 3.75 3.895 8.085 12.942 11.787 20.219 8.281 7.22-3.478 9.98-12.74 6.219-20.781-.559-1.158-1.328-2.842-1.907-3.938-2.419-4.58-5.162-7.654-7.843-11.656-5.537-8.662-10.13-15.858-12.969-23.219-1.187-3.797.201-6.158 1.125-8.625-.554-.635-1.739-4.22-2.437-5.906 40.457-23.888 70.299-62.021 84.313-106.063 1.892.297 5.181.88 6.25 1.094 2.2-1.451 4.222-3.344 8.188-3.031 7.808 1.129 15.823 4.03 25.5 7.5 4.498 1.723 8.121 3.723 13.125 5.063 1.057.283 2.572.547 3.781.813.097.024.184.071.281.094.065.014.157.017.219.031 8.672 1.867 17.094-2.879 18.875-10.688 1.781-7.807-3.754-15.732-12.375-17.812-1.254-.285-3.032-.769-4.25-1-5.089-.964-9.231-.726-14.031-1.125-10.225-1.071-18.694-1.943-26.219-4.313-3.068-1.19-5.251-4.841-6.313-6.344l-5.906-1.719c3.062-22.154 2.237-45.211-3.063-68.281-5.348-23.285-14.8-44.581-27.406-63.344 1.515-1.377 4.376-3.911 5.188-4.656.237-2.624.033-5.376 2.75-8.281 5.751-5.401 13.003-9.879 21.75-15.281 4.152-2.443 7.99-4.017 12.156-7.094.942-.696 2.229-1.798 3.219-2.594 7.015-5.596 8.631-15.248 3.594-21.562-5.037-6.314-14.797-6.909-21.813-1.313-.998.791-2.353 1.823-3.25 2.594-3.926 3.378-6.351 6.714-9.656 10.219-7.212 7.326-13.174 13.438-19.719 17.844-2.836 1.651-6.99 1.08-8.875.969l-5.563 3.969c-31.719-33.261-74.904-54.525-121.406-58.656-.13-1.949-.3-5.471-.344-6.531-1.904-1.822-4.203-3.377-4.781-7.313-.636-7.864.426-16.325 1.656-26.531.679-4.769 1.807-8.73 2-13.906.044-1.177-.026-2.884-.031-4.156-.001-8.974-6.548-16.251-14.625-16.25zm-18.312 113.438-4.344 76.718-.313.157c-.291 6.863-5.94 12.344-12.875 12.344-2.841 0-5.463-.913-7.594-2.469l-.125.063-62.906-44.594c19.334-19.011 44.063-33.06 72.563-39.531 5.206-1.182 10.41-2.059 15.594-2.688zm36.656 0c33.274 4.092 64.045 19.159 87.625 42.25l-62.5 44.313-.219-.094c-5.547 4.052-13.363 3.046-17.688-2.375-1.771-2.221-2.7-4.832-2.812-7.469l-.063-.031zm-147.625 70.875 57.438 51.375-.063.313c5.184 4.507 5.949 12.328 1.625 17.75-1.771 2.221-4.142 3.711-6.688 4.406l-.063.25-73.625 21.25c-3.747-34.265 4.329-67.574 21.375-95.344zm258.156.031c8.534 13.833 14.997 29.282 18.844 46.031 3.801 16.548 4.755 33.067 3.188 49.031l-74-21.312-.063-.313c-6.626-1.811-10.699-8.551-9.156-15.312.632-2.77 2.102-5.113 4.094-6.844l-.031-.156zm-140.657 55.313 23.531 0 14.625 18.281-5.25 22.813-21.125 10.156-21.188-10.188-5.25-22.812zm75.438 62.562c1 0 2-.05 2.969.219l.125-.156 76.156 12.875c-11.146 31.313-32.473 58.44-60.969 76.594l-29.562-71.406.094-.125c-2.716-6.31.002-13.71 6.25-16.719 1.6-.77 3.271-1.197 4.938-1.281zm-127.907.313c5.812.08 11.025 4.115 12.375 10.031.632 2.77.324 5.514-.719 7.938l.219.281-29.25 70.688c-27.347-17.549-49.129-43.824-60.781-76.063l75.5-12.813.125.157c.845-.155 1.701-.23 2.531-.219zm63.782 30.968c2.024 0 4.079.341 6.031 1.281 2.56 1.233 4.537 3.174 5.781 5.5l.281 0 37.219 67.25c-4.83 1.619-9.796 3.003-14.875 4.156-28.465 6.463-56.839 4.505-82.531-4.25l37.125-67.125.063 0c2.228-4.164 6.452-6.649 10.906-6.813z"/></svg><strong>Live cluster</strong></span></td>
+            <td>Any operational query — pods, namespaces, secrets, storage, ingress, resources, database&hellip;</td>
+            <td>Runs a read-only tool against the live ECS cluster and synthesises the result.</td>
+          </tr>
+          <tr>
+            <td><strong>&#129504; Model knowledge</strong></td>
+            <td>Must add <em>&ldquo;don&rsquo;t run it, just explain&rdquo;</em> if you want the model to describe what it would do. e.g. <em>what command do you run to get pods in a namespace? Don&rsquo;t run it, just explain.</em></td>
+            <td>No tool is called. The model uses its trained knowledge to explain the approach. Without this instruction, operational queries will always execute against the live cluster.</td>
+          </tr>
+          <tr>
+            <td><strong>&#128172; Conversational</strong></td>
+            <td>Greetings, identity questions, general chat</td>
+            <td>Responds directly &mdash; no tool is called.</td>
+          </tr>
+        </table>
+
+        <h2>EXAMPLE QUERIES BY CATEGORY</h2>
+
+        <h3>Pods &amp; Health</h3>
+        <span class="gl-tag gl-tag-pod">POD</span><span class="gl-tag gl-tag-cluster">CLUSTER</span>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-pod"></div><div class="gl-ex-body"><span class="gl-ex-text">list all pods</span><button class="gl-copy-btn" onclick="glCopy(this,'list all pods')">copy</button></div></div>
+        <div class="gl-ex-note">Lists all pods across all namespaces with their phase and ready status.</div>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-pod"></div><div class="gl-ex-body"><span class="gl-ex-text">is the vault pod doing ok?</span><button class="gl-copy-btn" onclick="glCopy(this,'is the vault pod doing ok?')">copy</button></div></div>
+        <div class="gl-ex-note">Checks pod phase, readiness, and recent restart history for any pod named vault.</div>
+
+        <h3>Namespaces</h3>
+        <span class="gl-tag gl-tag-cluster">CLUSTER</span>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-cluster"></div><div class="gl-ex-body"><span class="gl-ex-text">which namespace has the least pods?</span><button class="gl-copy-btn" onclick="glCopy(this,'which namespace has the least pods?')">copy</button></div></div>
+        <div class="gl-ex-note">Counts pods per namespace and ranks them.</div>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-cluster"></div><div class="gl-ex-body"><span class="gl-ex-text">list all namespaces with total pods</span><button class="gl-copy-btn" onclick="glCopy(this,'list all namespaces with total pods')">copy</button></div></div>
+        <div class="gl-ex-note">Returns every namespace with its pod count.</div>
+
+        <h3>Networking &amp; Ingress</h3>
+        <span class="gl-tag gl-tag-cluster">CLUSTER</span>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-cluster"></div><div class="gl-ex-body"><span class="gl-ex-text">is CoreDNS doing ok?</span><button class="gl-copy-btn" onclick="glCopy(this,'is CoreDNS doing ok?')">copy</button></div></div>
+        <div class="gl-ex-note">Checks CoreDNS pod health in kube-system, reads /etc/resolv.conf, and runs a live nslookup against a real cluster hostname to verify DNS resolution end-to-end.</div>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-cluster"></div><div class="gl-ex-body"><span class="gl-ex-text">which namespace contains ingress port 443?</span><button class="gl-copy-btn" onclick="glCopy(this,'which namespace contains ingress port 443?')">copy</button></div></div>
+        <div class="gl-ex-note">Searches all ingress resources across namespaces for TLS / port-443 exposure.</div>
+
+        <h3>Storage</h3>
+        <span class="gl-tag gl-tag-storage">STORAGE</span>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-storage"></div><div class="gl-ex-body"><span class="gl-ex-text">what storage type are pods in cdp namespace using?</span><button class="gl-copy-btn" onclick="glCopy(this,'what storage type are pods in cdp namespace using?')">copy</button></div></div>
+        <div class="gl-ex-note">Lists PVCs bound to pods in the cdp namespace, including storage class and access mode.</div>
+
+        <h3>Secrets &amp; Certificates</h3>
+        <span class="gl-tag gl-tag-secret">SECRET</span>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-secret"></div><div class="gl-ex-body"><span class="gl-ex-text">what SSL certificates does the cdp namespace have?</span><button class="gl-copy-btn" onclick="glCopy(this,'what SSL certificates does the cdp namespace have?')">copy</button></div></div>
+        <div class="gl-ex-note">Lists TLS/cert secrets in the cdp namespace. Enable <strong>Show Secret Values</strong> in Settings to decode.</div>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-secret"></div><div class="gl-ex-body"><span class="gl-ex-text">show me the cdp-private-installer-db-root-cert certificate in cdp namespace</span><button class="gl-copy-btn" onclick="glCopy(this,'show me the cdp-private-installer-db-root-cert certificate in cdp namespace')">copy</button></div></div>
+        <div class="gl-ex-note">Shows the raw certificate value from the secret. Enable <strong>Show Secret Values</strong> in Settings to see the decoded content.</div>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-secret"></div><div class="gl-ex-body"><span class="gl-ex-text">what is the username and password for the SQL user for db-0 in cmlwb1 namespace?</span><button class="gl-copy-btn" onclick="glCopy(this,'what is the username and password for the SQL user for db-0 in cmlwb1 namespace?')">copy</button></div></div>
+        <div class="gl-ex-note">Locates credentials from secrets in cmlwb1. Requires <strong>Show Secret Values</strong> to be enabled.</div>
+
+        <h3>Resources &amp; Compute</h3>
+        <span class="gl-tag gl-tag-resource">RESOURCE</span>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-cluster"></div><div class="gl-ex-body"><span class="gl-ex-text">list all statefulset in cdp namespace</span><button class="gl-copy-btn" onclick="glCopy(this,'list all statefulset in cdp namespace')">copy</button></div></div>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-resource"></div><div class="gl-ex-body"><span class="gl-ex-text">what's the cpu and ram request for cdp-embedded-db pod in cdp namespace?</span><button class="gl-copy-btn" onclick="glCopy(this,'what\'s the cpu and ram request for cdp-embedded-db pod in cdp namespace?')">copy</button></div></div>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-resource"></div><div class="gl-ex-body"><span class="gl-ex-text">calculate CPU requests for all pods in longhorn-system namespace</span><button class="gl-copy-btn" onclick="glCopy(this,'calculate CPU requests for all pods in longhorn-system namespace')">copy</button></div></div>
+        <div class="gl-ex-note">Aggregates CPU and memory requests/limits for every pod in the namespace in one call.</div>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-resource"></div><div class="gl-ex-body"><span class="gl-ex-text">which node has a GPU available and in use?</span><button class="gl-copy-btn" onclick="glCopy(this,'which node has a GPU available and in use?')">copy</button></div></div>
+        <div class="gl-ex-note">Inspects node labels and allocatable resources for GPU capacity and current allocation.</div>
+
+        <h3>Database</h3>
+        <span class="gl-tag gl-tag-db">DATABASE</span>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-db"></div><div class="gl-ex-body"><span class="gl-ex-text">get tables in db-0 of cmlwb1 namespace</span><button class="gl-copy-btn" onclick="glCopy(this,'get tables in db-0 of cmlwb1 namespace')">copy</button></div></div>
+        <div class="gl-ex-note">Finds the DB pod, auto-discovers credentials, and runs SHOW TABLES.</div>
+
+        <h3>Model Knowledge</h3>
+        <span class="gl-tag gl-tag-howto">HOW-TO</span><span class="gl-tag gl-tag-general">GENERAL</span>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-howto"></div><div class="gl-ex-body"><span class="gl-ex-text">explain how you access the database of a pod to get the table names, don't run it, just explain</span><button class="gl-copy-btn" onclick="glCopy(this,&quot;explain how you access the database of a pod to get the table names, don't run it, just explain&quot;)">copy</button></div></div>
+        <div class="gl-ex-note">Chatbot explains the exec_db_query flow: pod discovery &rarr; credential detection &rarr; SQL execution. No cluster tool is called.</div>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-general"></div><div class="gl-ex-body"><span class="gl-ex-text">what can you do?</span><button class="gl-copy-btn" onclick="glCopy(this,'what can you do?')">copy</button></div></div>
+        <div class="gl-ex-note">Lists available capabilities. No tool is called.</div>
+
+      </div><!-- #guidelines-pane -->
+
+      <!-- ── Settings pane ────────────────────────────────────────────────── -->
+      <div id="settings-pane">
+
+        <!-- Left vertical nav -->
+        <nav class="stab-sidebar">
+          <button class="stab active" data-tab="tab-cluster"><span class="stab-icon">&#128279;</span>Kubeconfig</button>
+          <button class="stab" data-tab="tab-kb"><span class="stab-icon">&#128196;</span>RAG Documents</button>
+          <button class="stab" data-tab="tab-output"><span class="stab-icon">&#127919;</span>Chatbot Settings</button>
+          <button class="stab" data-tab="tab-security"><span class="stab-icon">&#128274;</span>Security</button>
+        </nav>
+
+        <!-- Right content -->
+        <div class="stab-content">
+
+          <!-- ── Tab: Cluster ── -->
+          <div class="stab-pane active" id="tab-cluster">
+            <div class="stab-pane-title">&#128279; Kubeconfig</div>
+            <p>Paste the kubeconfig for the target Kubernetes cluster.</p>
+            <textarea id="kube-textarea" placeholder="apiVersion: v1&#10;kind: Config&#10;clusters:&#10;- cluster:&#10;    server: https://&lt;host&gt;:6443&#10;  ..."></textarea>
+            <div id="kube-status" class="stab-status"></div>
+            <div class="modal-btns">
+              <button class="modal-btn modal-btn-cancel" id="settings-cancel">Close</button>
+              <button class="modal-btn modal-btn-primary" id="settings-apply">Apply</button>
+            </div>
+          </div>
+
+          <!-- ── Tab: Knowledge Base ── -->
+          <div class="stab-pane" id="tab-kb">
+            <div class="stab-pane-title">&#128196; RAG Documents</div>
+            <p>Upload .md, .pdf, .txt, .xlsx, or .xls documents to inject into the vector database for RAG retrieval.</p>
+
+            <!-- RAG stats -->
+            <div id="rag-stats-bar">
+              <span>Chunks:<span class="rs-val" id="rs-chunks">—</span></span>
+              <span>Files:<span class="rs-val" id="rs-files">—</span></span>
+              <span>By type:<span class="rs-val" id="rs-types">—</span></span>
+            </div>
+
+            <!-- Drop zone -->
+            <div id="drop-zone">
+              <input type="file" id="doc-file-input" multiple accept=".md,.pdf,.txt,.xlsx,.xls"/>
+              <span id="drop-zone-label">Drop files here or click to browse</span>
+              <span>.md &nbsp;·&nbsp; .pdf &nbsp;·&nbsp; .txt &nbsp;·&nbsp; .xlsx &nbsp;·&nbsp; .xls</span>
+            </div>
+
+            <!-- Selected files list -->
+            <div id="selected-files" style="display:flex;flex-wrap:wrap;gap:6px;min-height:14px;margin-top:4px"></div>
+
+            <!-- Options row -->
+            <div style="display:flex;align-items:center;gap:10px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--dimText)">
+              <label style="display:flex;align-items:center;gap:5px;cursor:pointer">
+                <input type="checkbox" id="force-reingest" style="accent-color:var(--accent)"/>
+                <span style="font-size:12px;color:var(--textMain);font-family:'IBM Plex Mono',monospace">Force re-ingest — overwrite if already ingested</span>
+              </label>
+              <span style="font-size:10px;color:var(--dimText);margin-left:4px">Unchanged files are skipped automatically. Tick this only to replace updated content.</span>
+            </div>
+
+            <!-- Results table (shown after ingest) -->
+            <div id="ingest-results" style="display:none">
+              <div class="ir-row hdr"><span>File</span><span>Status</span><span>Chunks</span></div>
+              <div id="ir-body"></div>
+            </div>
+
+            <div id="kb-status" class="stab-status"></div>
+
+            <!-- Previously ingested files -->
+            <div style="margin-top:4px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);text-transform:uppercase;letter-spacing:.06em">Ingested Files</span>
+                <button onclick="loadIngestedFiles()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--dimText);font-size:10px;font-family:'IBM Plex Mono',monospace;padding:2px 8px;cursor:pointer">↺ Refresh</button>
+              </div>
+              <div id="ingested-files-list" style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--textMain);max-height:240px;overflow-y:auto">
+                <span style="color:var(--dimText)">Loading…</span>
+              </div>
+            </div>
+
+            <div class="modal-btns">
+              <button class="modal-btn modal-btn-cancel" id="kb-cancel">Close</button>
+              <button class="modal-btn modal-btn-primary" id="kb-ingest-btn" disabled>Ingest</button>
+            </div>
+          </div>
+
+          <!-- ── Tab: Output ── -->
+          <div class="stab-pane" id="tab-output">
+            <div class="stab-pane-title">&#127919; Chatbot Settings</div>
+            <div class="tip" style="border-left:3px solid #ef4444;color:var(--textMain);font-family:'IBM Plex Mono',monospace;font-size:12px;padding:8px 10px;background:var(--tooltipBg);border-radius:0 4px 4px 0;margin-bottom:4px">
+              💡 <strong style="color:#ef4444">Tip:</strong>
+              <strong>Max Input Chars</strong> controls how much cluster data the LLM <em>reads</em>. Increase if responses seem incomplete or truncated.
+            </div>
+            <div style="display:flex;flex-direction:column;gap:18px;padding:4px 0">
+
+              <div>
+                <label style="font-size:12px;color:var(--panelLabel);font-family:'IBM Plex Mono',monospace;letter-spacing:.05em;display:block;margin-bottom:6px">
+                  MAX INPUT CHARS (tool → LLM) &nbsp;<span style="color:var(--accent);font-size:14px;font-weight:700" id="max-chars-val">20,000</span>
+                </label>
+                <input type="range" id="max-chars-slider" min="5000" max="100000" step="5000" value="20000"
+                  style="width:100%;accent-color:var(--accent);cursor:pointer;height:6px"/>
+                <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--panelDim);font-family:'IBM Plex Mono',monospace;margin-top:4px">
+                  <span>5 000</span><span>50 000</span><span>100 000</span>
+                </div>
+                <p style="font-size:11px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;margin-top:4px">
+                  <code>KUBECTL_MAX_CHARS</code> — raw K8s tool output characters fed into the LLM context window.
+                </p>
+              </div>
+
+
+              <div>
+                <label style="font-size:12px;color:var(--panelLabel);font-family:'IBM Plex Mono',monospace;letter-spacing:.05em;display:block;margin-bottom:6px">
+                  LLM TIMEOUT (seconds) &nbsp;<span style="color:var(--accent);font-size:14px;font-weight:700" id="llm-timeout-val">300</span>
+                </label>
+                <input type="range" id="llm-timeout-slider" min="60" max="900" step="30" value="300"
+                  style="width:100%;accent-color:var(--accent);cursor:pointer;height:6px"/>
+                <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--panelDim);font-family:'IBM Plex Mono',monospace;margin-top:4px">
+                  <span>60s</span><span>5 min</span><span>15 min</span>
+                </div>
+                <p style="font-size:11px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;margin-top:4px">
+                  <code>LLM_TIMEOUT</code> — hard timeout per request. Increase for very large clusters or complex multi-tool queries.
+                </p>
+              </div>
+
+            </div>
+            <div id="output-status" class="stab-status"></div>
+            <div class="modal-btns">
+              <button class="modal-btn modal-btn-cancel" id="output-cancel">Close</button>
+              <button class="modal-btn modal-btn-primary" id="output-apply">Apply</button>
+            </div>
+          </div>
+
+          <!-- ── Tab: Security ── -->
+          <div class="stab-pane" id="tab-security">
+            <div class="stab-pane-title">&#128274; Security</div>
+            <div style="border-left:3px solid #f59e0b;color:var(--textMain);font-family:'IBM Plex Mono',monospace;font-size:12px;padding:8px 10px;background:var(--tooltipBg);border-radius:0 4px 4px 0;margin-bottom:14px">
+              ⚠️ <strong style="color:#f59e0b">Warning:</strong>
+              Enabling this option will show decoded secret values — including passwords, tokens, and certificates — directly in the chat. Only enable in a secure, private session.
+            </div>
+            <div style="display:flex;flex-direction:column;gap:18px;padding:4px 0">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+                <div>
+                  <div style="font-size:12px;color:var(--panelLabel);font-family:'IBM Plex Mono',monospace;letter-spacing:.05em;margin-bottom:4px">SHOW SECRET VALUES</div>
+                  <div style="font-size:11px;color:var(--dimText);font-family:'IBM Plex Mono',monospace">
+                    When enabled, K8s secret data (passwords, tokens, certs) are base64-decoded and shown in responses. Default: off.
+                  </div>
+                </div>
+                <label id="secret-toggle-label" style="position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0;cursor:pointer">
+                  <input type="checkbox" id="secret-decode-toggle" style="opacity:0;width:0;height:0">
+                  <span id="secret-toggle-track" style="position:absolute;inset:0;background:var(--border);border-radius:24px;transition:background .2s"></span>
+                  <span id="secret-toggle-thumb" style="position:absolute;left:3px;top:3px;width:18px;height:18px;background:#fff;border-radius:50%;transition:transform .2s;box-shadow:0 1px 3px #0006"></span>
+                </label>
+              </div>
+              <div id="secret-toggle-status" style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);min-height:16px">
+                🔒 Secret values are hidden (safe mode)
+              </div>
+            </div>
+            <div class="modal-btns" style="margin-top:auto">
+              <button class="modal-btn modal-btn-cancel" id="security-cancel">Close</button>
+            </div>
+          </div>
+
+        </div><!-- .stab-content -->
+      </div><!-- #settings-pane -->
+
+    </div><!-- #chat-col -->
+
+    <!-- Right panels -->
+    <div id="panels">
+
+      <!-- ── Chatbot Monitoring Dashboard header ───────────────────────────── -->
+      <div id="panel-dashboard-hdr">
+        <div class="pdh-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="12" width="4" height="9" rx="1"/><rect x="10" y="7" width="4" height="14" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/>
+          </svg>
+        </div>
+        <div>
+          <div class="pdh-title">Chatbot Monitoring Dashboard</div>
+        </div>
+      </div>
+
+      <!-- ── Inference section ─────────────────────────────────────────────── -->
+      <div class="panel" id="infer-panel" style="flex-shrink:0;border-bottom:1px solid var(--panelBorder)">
+        <div class="ph" style="gap:6px">
+          <span class="ph-title">INFERENCE</span>
+          <div id="rdot" style="background:#ef4444;box-shadow:0 0 8px #ef444488;margin-left:4px"></div>
+          <span id="rtxt" style="font-size:10px;color:var(--dimText);font-family:'IBM Plex Mono',monospace">connecting</span>
+          <div class="infer-badge" id="cpu-infer-badge" style="margin-left:auto">
+            <span id="infer-txt-cpu" style="color:var(--panelDim)">detecting&hellip;</span>
+          </div>
+        </div>
+        <div style="padding:4px 12px 8px;font-size:10px;font-family:'IBM Plex Mono',monospace;color:var(--panelDim)">
+          Model: <span id="infer-model-name" style="color:var(--accent2)">—</span>
+        </div>
+      </div>
+
+      <!-- ── GPU Panel ─────────────────────────────────────────────────────── -->
+      <div class="panel" id="gpu-panel" style="display:flex;flex-direction:column">
+        <div class="ph">
+          <span class="ph-title">GPU MONITOR</span>
+          <span class="ph-sub" id="gpu-count-lbl" style="display:none"></span>
+        </div>
+        <div class="gpu-cards-wrap" id="gpu-cards"></div>
+        <div id="gpu-none-msg" style="display:none;padding:10px 12px;font-size:11px;color:var(--panelDim);font-family:'IBM Plex Mono',monospace;text-align:center">
+          No NVIDIA GPU detected &mdash; CPU inference mode
+        </div>
+      </div>
+
+      <!-- ── CPU Panel ─────────────────────────────────────────────────────── -->
+      <div class="panel" id="cpu-panel">
+        <div class="ph">
+          <span class="ph-title">CPU MONITOR</span>
+          <span class="ph-sub" id="cpu-freq-lbl">&mdash; GHz</span>
+        </div>
+
+        <!-- Sparkline + dotbar -->
+        <div class="psec">
+          <div class="spark-wrap">
+            <svg id="sparkline" width="264" height="28" style="display:block"></svg>
+            <span class="spark-lbl">60s</span>
+          </div>
+          <!-- CPU utilisation row with dotbar -->
+          <div class="util-row" style="margin-bottom:8px">
+            <span class="util-lbl">Utilisation</span>
+            <div id="cpu-dotbar"></div>
+            <span id="cpu-total-pct" class="util-pct">&mdash;</span>
+          </div>
+        </div>
+
+        <!-- Per-core grid -->
+        <div id="cores-grid"></div>
+
+        <!-- Load avg — between CPU and RAM -->
+        <div class="load-sec">
+          <span class="load-title">LOAD AVG</span>
+          <span id="load-avg">&mdash;</span>
+        </div>
+
+        <!-- Memory utilisation -->
+        <div class="psec" style="border-top:1px solid var(--panelBorder);padding-top:8px">
+          <div style="color:var(--panelLabel);font-weight:700;font-size:11px;letter-spacing:.04em;margin-bottom:6px">RAM MONITOR</div>
+          <div class="util-row">
+            <span class="util-lbl">Utilisation</span>
+            <div class="ubar-wrap" id="mem-bar-wrap">
+              <div id="mem-fill" class="ubar-fill"></div>
+              <div class="ubar-dots"></div>
+            </div>
+            <span id="mem-pct" class="util-pct">&mdash;</span>
+          </div>
+          <div style="text-align:right;font-size:10px;color:var(--panelDim);margin-top:2px" id="mem-gb">&mdash;</div>
+        </div>
+
+      </div><!-- #cpu-panel -->
+
+    </div><!-- #panels -->
+  </div><!-- #body -->
+
+</div><!-- #app -->
+
+<script>/* v=20260312 */
+
+(function(){
+'use strict';
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAIN TABS — AI Ops | README | Prompt Guidelines
+// ═══════════════════════════════════════════════════════════════════════════
+document.querySelectorAll('.mtab').forEach(btn => {
+  btn.addEventListener('click', function() {
+    const target = this.dataset.pane;
+    document.querySelectorAll('.mtab').forEach(b => b.classList.toggle('active', b.dataset.pane === target));
+    document.getElementById('chat-pane').style.display         = (target === 'chat-pane')       ? 'flex'  : 'none';
+    document.getElementById('kb-bot-pane').classList.toggle('active', target === 'kb-bot-pane');
+    document.getElementById('readme-pane').style.display       = (target === 'readme-pane')     ? 'block' : 'none';
+    document.getElementById('settings-pane').classList.toggle('active', target === 'settings-pane');
+    document.getElementById('guidelines-pane').style.display   = (target === 'guidelines-pane') ? 'block' : 'none';
+    if(target === 'settings-pane') { loadRagStats(); loadIngestedFiles(); loadOutputConfig(); }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ECS KNOWLEDGE BOT
+// ═══════════════════════════════════════════════════════════════════════════
+(function(){
+  const body      = document.getElementById('kb-bot-body');
+  const input     = document.getElementById('kb-bot-input');
+  const sendBtn   = document.getElementById('kb-bot-send');
+  const topkSlider = document.getElementById('kb-topk-slider');
+  const topkVal    = document.getElementById('kb-topk-val');
+
+  // Results limit slider
+  topkSlider.addEventListener('input', () => {
+    topkVal.textContent = topkSlider.value;
+  });
+
+  const chatTokenSlider = document.getElementById('chat-max-tokens-slider');
+  const chatTokenVal    = document.getElementById('chat-max-tokens-val');
+  if(chatTokenSlider) chatTokenSlider.addEventListener('input', () => {
+    chatTokenVal.textContent = chatTokenSlider.value;
+  });
+
+
+  // Send on Enter (Shift+Enter = newline)
+  input.addEventListener('keydown', e => {
+    if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); askKb(); }
+  });
+  sendBtn.addEventListener('click', askKb);
+
+  document.querySelectorAll("#kb-ex-btns .ex-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      input.value = btn.textContent.trim();
+      askKb();
+    });
+  });
+
+  async function askKb(){
+    const q = input.value.trim();
+    if(!q) return;
+    input.value = '';
+    sendBtn.disabled = true;
+
+    const topK = parseInt(topkSlider.value, 10) || 50;
+
+    // Status box with elapsed timer
+    const spinner = document.createElement('div');
+    spinner.className = 'kb-spinner';
+    spinner.innerHTML = '<div class="kb-spinner-q"></div>'
+      + '<div><span class="kb-status-text">&#128218; Searching knowledge base…</span> '
+      + '<span class="kb-elapsed">0s</span></div>';
+    body.appendChild(spinner);
+    body.scrollTop = body.scrollHeight;
+
+    let _elapsed = 0;
+    const _timer = setInterval(() => {
+      _elapsed++;
+      const el = spinner.querySelector('.kb-elapsed');
+      if(el) el.textContent = _elapsed + 's';
+    }, 1000);
+
+    try {
+      const res = await fetch('/api/kb/stream', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ q, top_k: 50, max_tokens: topK })
+      });
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      while(true){
+        const {done, value} = await reader.read();
+        if(done) break;
+        buf += dec.decode(value, {stream:true});
+        const parts = buf.split('\n\n');
+        buf = parts.pop();
+        for(const part of parts){
+          const line = part.trim();
+          if(!line.startsWith('data:')) continue;
+          let payload;
+          try { payload = JSON.parse(line.slice(5).trim()); } catch{ continue; }
+          if(payload.type === 'question'){
+            const el = spinner.querySelector('.kb-spinner-q');
+            if(el){ el.textContent = '› ' + payload.text; el.style.cssText = 'font-family:\'IBM Plex Mono\',monospace;font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px'; }
+          } else if(payload.type === 'status'){
+            const el = spinner.querySelector('.kb-status-text');
+            if(el) el.textContent = '\u{1F4DA} ' + payload.text;
+          } else if(payload.type === 'result'){
+            clearInterval(_timer);
+            spinner.remove();
+            renderAnswer(q, topK, payload.answer || '(No answer)', payload.elapsed);
+          } else if(payload.type === 'error'){
+            clearInterval(_timer);
+            spinner.remove();
+            renderAnswer(q, topK, '\u26a0\ufe0f Error: ' + payload.text);
+          }
+        }
+      }
+    } catch(err) {
+      clearInterval(_timer);
+      spinner.remove();
+      renderAnswer(q, topK, '\u26a0\ufe0f Error: ' + err.message);
+    } finally {
+      clearInterval(_timer);
+      sendBtn.disabled = false;
+      input.focus();
+    }
+  }
+
+  function renderAnswer(question, topK, raw, elapsed){
+    const block = document.createElement('div');
+    block.className = 'kb-answer-block';
+
+    const qDiv = document.createElement('div');
+    qDiv.className = 'kb-answer-q';
+    qDiv.innerHTML = `<span>› ${question}</span>`
+      + (elapsed != null ? `<span class="kb-answer-elapsed">&#8987; ${elapsed}s</span>` : '');
+    block.appendChild(qDiv);
+
+    const ansDiv = document.createElement('div');
+    ansDiv.className = 'kb-answer-body';
+    ansDiv.innerHTML = formatKbAnswer(raw);
+    block.appendChild(ansDiv);
+
+    // Copy button
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'kb-copy-btn';
+    copyBtn.textContent = '⎘ Copy answer';
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(raw).then(() => {
+        copyBtn.textContent = '✓ Copied!';
+        setTimeout(() => copyBtn.textContent = '⎘ Copy answer', 2000);
+      });
+    });
+    block.appendChild(copyBtn);
+
+    body.appendChild(block);
+    body.scrollTop = body.scrollHeight;
+  }
+
+  // Convert raw RAG text to HTML — renders markdown-style tables and bold/code
+  function formatKbAnswer(text){
+    // Escape HTML first
+    let t = text
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+    // Bold **text**
+    t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+    // Inline code `text`
+    t = t.replace(/`([^`]+)`/g, '<code style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;background:var(--inputBg);border:1px solid var(--border);border-radius:3px;padding:1px 5px;color:var(--accent2)">$1</code>');
+
+    // Markdown table detection: lines that contain | separators
+    const lines = t.split('\n');
+    const out = [];
+    let inTable = false, tableLines = [];
+
+    function flushTable(){
+      if(!tableLines.length){ inTable = false; return; }
+      // First line = header, second line = separator (---), rest = rows
+      const rows = tableLines.filter(l => !/^\|[-| :]+\|$/.test(l.trim()));
+      let html = '<table>';
+      rows.forEach((row, i) => {
+        const cells = row.split('|').slice(1,-1);
+        if(i === 0){
+          html += '<tr>' + cells.map(c => `<th>${c.trim()}</th>`).join('') + '</tr>';
+        } else {
+          html += '<tr>' + cells.map(c => `<td>${c.trim()}</td>`).join('') + '</tr>';
+        }
+      });
+      html += '</table>';
+      out.push(html);
+      tableLines = [];
+      inTable = false;
+    }
+
+    for(const line of lines){
+      if(/^\|.+\|$/.test(line.trim())){
+        inTable = true;
+        tableLines.push(line.trim());
+      } else {
+        if(inTable) flushTable();
+        out.push(line);
+      }
+    }
+    if(inTable) flushTable();
+
+    return out.join('\n');
+  }
+})();
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THEMES
+// ═══════════════════════════════════════════════════════════════════════════
+const THEMES = {
+  midnight:{
+    name:'Midnight', shimmer:true,
+    '--bg':'#030712','--headerBg':'#070d1a','--border':'#0f1f35',
+    '--accent':'#38bdf8','--accent2':'#7dd3fc',
+    '--msgBg':'#070d1a','--inputBg':'#0a0f1e',
+    '--userBg':'#0f172a','--userBorder':'#1e293b',
+    '--statusBg':'#040b14','--dimText':'#475569','--bodyText':'#cbd5e1',
+    '--tooltipBg':'#0a1628','--tooltipText':'#94a3b8',
+    '--panelBg':'#020a14','--panelBorder':'#0f1f35','--panelLabel':'#7dd3fc','--panelDim':'#475569',
+    '--textMain':'#e2e8f0','--inputText':'#e2e8f0',
+    '--shimmer':'linear-gradient(90deg,#38bdf8 0%,#818cf8 25%,#c084fc 50%,#38bdf8 75%,#00C1DE 100%)',
+  },
+  singapore:{
+    // #EF3340 accent on white background
+    name:"S'pore", shimmer:false, solidTitle:'#EF3340',
+    '--bg':'#ffffff','--headerBg':'#ffffff','--border':'#fbd0d3',
+    '--accent':'#EF3340','--accent2':'#b31a27',
+    '--msgBg':'#fff5f5','--inputBg':'#ffffff',
+    '--userBg':'#fff0f0','--userBorder':'#fbd0d3',
+    '--statusBg':'#fff5f5','--dimText':'#9b1c1c','--bodyText':'#1a0000',
+    '--tooltipBg':'#ffffff','--tooltipText':'#1a0000',
+    '--panelBg':'#fff5f5','--panelBorder':'#fbd0d3','--panelLabel':'#EF3340','--panelDim':'#9b1c1c',
+    '--textMain':'#1a0000','--inputText':'#1a0000',
+    '--shimmer':'linear-gradient(90deg,#EF3340 0%,#ff6b74 40%,#EF3340 80%)',
+  },
+  cloudera:{
+    // Cloudera brand: deep navy #100045 bg, orange #F96702 accents, white/light text
+    name:'Cloudera', shimmer:true, solidTitle:'#F96702',
+    '--bg':'#100045',           // Cloudera deep navy
+    '--headerBg':'#0c0038',     // slightly darker navy for header
+    '--border':'#2d1a7a',
+    '--accent':'#F96702',       // Cloudera orange
+    '--accent2':'#ff8c2a',
+    '--msgBg':'#1a0a5e','--inputBg':'#1e1070',
+    '--userBg':'#2a0f00','--userBorder':'#F9670266',
+    '--statusBg':'#0c0038','--dimText':'#b8a9e8','--bodyText':'#e8e0ff',
+    '--tooltipBg':'#2d1a7a','--tooltipText':'#fff',
+    '--panelBg':'#160850','--panelBorder':'#2d1a7a',
+    '--panelLabel':'#F96702','--panelDim':'#9080cc',
+    '--textMain':'#f0ecff','--inputText':'#f0ecff',
+    '--shimmer':'linear-gradient(90deg,#F96702 0%,#c084fc 35%,#F96702 65%,#c084fc 100%)',
+  },
+};
+
+let curTheme = 'midnight';
+
+function applyTheme(name){
+  const t = THEMES[name];
+  if(!t) return;
+  const root = document.documentElement;
+  Object.entries(t).forEach(([k,v])=>{ if(k.startsWith('--')) root.style.setProperty(k,v); });
+  curTheme = name;
+  document.getElementById('theme-name').textContent = t.name;
+  const ttl = document.getElementById('ttl');
+  if(t.shimmer){
+    ttl.className = 'shiny';
+  } else {
+    root.style.setProperty('--solidTitle', t.solidTitle||'#333');
+    ttl.className = 'shiny-solid';
+  }
+  document.querySelectorAll('.tdot').forEach(b=>{
+    b.classList.toggle('active', b.dataset.theme === name);
+  });
+}
+
+document.querySelectorAll('.tdot').forEach(btn=>{
+  btn.onclick = function(){ applyTheme(this.dataset.theme); };
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SETTINGS PANE — inline tab, vertical nav
+// ═══════════════════════════════════════════════════════════════════════════
+const clusterHostEl = document.getElementById('cluster-host');
+
+function openSettings(tab){
+  // Switch to the settings main tab
+  document.querySelectorAll('.mtab').forEach(b => b.classList.toggle('active', b.dataset.pane === 'settings-pane'));
+  document.getElementById('chat-pane').style.display         = 'none';
+  document.getElementById('kb-bot-pane').classList.remove('active');
+  document.getElementById('readme-pane').style.display       = 'none';
+  document.getElementById('guidelines-pane').style.display   = 'none';
+  document.getElementById('settings-pane').classList.add('active');
+  if(tab) switchTab(tab);
+  if(tab === 'tab-kb') { loadRagStats(); loadIngestedFiles(); }
+  if(tab === 'tab-output') loadOutputConfig();
+}
+
+function switchTab(tabId){
+  document.querySelectorAll('.stab').forEach(b => b.classList.toggle('active', b.dataset.tab === tabId));
+  document.querySelectorAll('.stab-pane').forEach(p => p.classList.toggle('active', p.id === tabId));
+}
+
+document.querySelectorAll('.stab').forEach(btn => {
+  btn.onclick = () => {
+    switchTab(btn.dataset.tab);
+    if(btn.dataset.tab === 'tab-kb')     { loadRagStats(); loadIngestedFiles(); }
+    if(btn.dataset.tab === 'tab-output') loadOutputConfig();
+  };
+});
+
+// Close buttons are hidden (display:none in CSS) but keep handlers safe
+['settings-cancel','kb-cancel','output-cancel','security-cancel'].forEach(id => {
+  const el = document.getElementById(id);
+  if(el) el.onclick = () => {};
+});
+
+// ── Security toggle ───────────────────────────────────────────────────────────
+// Persisted in localStorage so it survives page refreshes.
+// Default: OFF (secure — values hidden until user explicitly enables).
+const _DECODE_KEY = 'ecs_decode_secrets';
+let decodeSecrets = localStorage.getItem(_DECODE_KEY) === 'true';  // false unless explicitly saved as true
+
+const secretToggle  = document.getElementById('secret-decode-toggle');
+const toggleTrack   = document.getElementById('secret-toggle-track');
+const toggleThumb   = document.getElementById('secret-toggle-thumb');
+const toggleStatus  = document.getElementById('secret-toggle-status');
+
+function applySecretToggleUI(on){
+  toggleTrack.style.background = on ? 'var(--accent)' : 'var(--border)';
+  toggleThumb.style.transform  = on ? 'translateX(20px)' : 'translateX(0)';
+  toggleStatus.innerHTML = on
+    ? '🔓 <span style="color:#f87171">Secret values will be shown in responses</span>'
+    : '🔒 Secret values are hidden (safe mode)';
+}
+
+// Restore saved state on page load
+secretToggle.checked = decodeSecrets;
+applySecretToggleUI(decodeSecrets);
+
+secretToggle.addEventListener('change', () => {
+  decodeSecrets = secretToggle.checked;
+  localStorage.setItem(_DECODE_KEY, decodeSecrets);
+  applySecretToggleUI(decodeSecrets);
+});
+
+// load current config when Output tab opens
+async function loadOutputConfig(){
+  try {
+    const r = await fetch('/api/config');
+    if(!r.ok) return;
+    const d = await r.json();
+    const v = d.kubectl_max_chars || 20000;
+    const sl = document.getElementById('max-chars-slider');
+    const vl = document.getElementById('max-chars-val');
+    if(sl){ sl.value = v; vl.textContent = v.toLocaleString(); }
+    const t = d.max_new_tokens || 4096;
+    const tsl = document.getElementById('max-tokens-slider');
+    const tvl = document.getElementById('max-tokens-val');
+    if(tsl){ tsl.value = t; tvl.textContent = t.toLocaleString(); }
+    const to = d.llm_timeout || 300;
+    const tosl = document.getElementById('llm-timeout-slider');
+    const tovl = document.getElementById('llm-timeout-val');
+    if(tosl){ tosl.value = to; tovl.textContent = to; }
+  } catch(_){}
+}
+
+// slider live update
+const maxCharsSlider = document.getElementById('max-chars-slider');
+const maxCharsVal    = document.getElementById('max-chars-val');
+if(maxCharsSlider){
+  maxCharsSlider.oninput = () => {
+    maxCharsVal.textContent = parseInt(maxCharsSlider.value).toLocaleString();
+  };
+}
+const maxTokensSlider = document.getElementById('max-tokens-slider');
+const maxTokensVal    = document.getElementById('max-tokens-val');
+if(maxTokensSlider){
+  maxTokensSlider.oninput = () => {
+    maxTokensVal.textContent = parseInt(maxTokensSlider.value).toLocaleString();
+  };
+}
+const llmTimeoutSlider = document.getElementById('llm-timeout-slider');
+const llmTimeoutVal    = document.getElementById('llm-timeout-val');
+if(llmTimeoutSlider){
+  llmTimeoutSlider.oninput = () => {
+    llmTimeoutVal.textContent = parseInt(llmTimeoutSlider.value);
+  };
+}
+
+// ── Tab 3: Output ─────────────────────────────────────────────────────────
+document.getElementById('output-apply').onclick = async () => {
+  const outputStatus = document.getElementById('output-status');
+  const charsVal   = parseInt(document.getElementById('max-chars-slider').value);
+  const tokensVal  = parseInt(document.getElementById('max-tokens-slider').value);
+  const timeoutVal = parseInt(document.getElementById('llm-timeout-slider').value);
+  outputStatus.style.color = '#60a5fa';
+  outputStatus.textContent = '⏳ Applying…';
+  try {
+    const res  = await fetch('/api/config', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({kubectl_max_chars: charsVal, max_new_tokens: tokensVal, llm_timeout: timeoutVal})
+    });
+    const data = await res.json();
+    if(res.ok && data.ok){
+      outputStatus.style.color = '#22c55e';
+      outputStatus.textContent = `✓ Input: ${charsVal.toLocaleString()} chars · Output: ${tokensVal.toLocaleString()} tokens · Timeout: ${timeoutVal}s`;
+    } else {
+      outputStatus.style.color = '#ef4444';
+      outputStatus.textContent = '✗ ' + (data.error || 'Failed to update config.');
+    }
+  } catch(err){ outputStatus.style.color='#ef4444'; outputStatus.textContent='✗ Network error: '+err.message; }
+};
+
+// ── Tab 1: Cluster ────────────────────────────────────────────────────────
+const kubeTextarea = document.getElementById('kube-textarea');
+const kubeStatus   = document.getElementById('kube-status');
+
+function extractClusterServer(yaml){
+  const m = yaml.match(/server\s*:\s*(https?:\/\/[^\s\n]+)/i);
+  return m ? m[1].trim() : null;
+}
+function serverToLabel(url){
+  try { return new URL(url).host; } catch(_){ return url; }
+}
+
+document.getElementById('settings-apply').onclick = async () => {
+  const yaml = kubeTextarea.value.trim();
+  if(!yaml){ kubeStatus.style.color='#ef4444'; kubeStatus.textContent='✗ Please paste a kubeconfig first.'; return; }
+  const serverUrl = extractClusterServer(yaml);
+  if(!serverUrl){ kubeStatus.style.color='#ef4444'; kubeStatus.textContent='✗ Could not find a server: URL in the kubeconfig.'; return; }
+  kubeStatus.style.color='#60a5fa'; kubeStatus.textContent='⏳ Applying kubeconfig…';
+  try {
+    const res  = await fetch('/api/kubeconfig', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({kubeconfig:yaml})});
+    const data = await res.json();
+    if(res.ok && data.ok){
+      const label = serverToLabel(serverUrl);
+      clusterHostEl.textContent = '· Connected ECS: ' + label;
+      clusterHostEl.style.color = 'var(--accent)';
+      const ecsNode = document.getElementById('ecs-node');
+      if(ecsNode) ecsNode.textContent = '· ECS: ' + label;
+      kubeStatus.style.color='#22c55e'; kubeStatus.textContent='✓ Connected: ' + label;
+    } else {
+      kubeStatus.style.color='#ef4444'; kubeStatus.textContent='✗ ' + (data.error||'Failed to apply kubeconfig.');
+    }
+  } catch(err){ kubeStatus.style.color='#ef4444'; kubeStatus.textContent='✗ Network error: '+err.message; }
+};
+
+// ── Tab 2: Knowledge Base ─────────────────────────────────────────────────
+const dropZone      = document.getElementById('drop-zone');
+const fileInput     = document.getElementById('doc-file-input');
+const selectedFiles = document.getElementById('selected-files');
+const kbStatus      = document.getElementById('kb-status');
+const kbIngestBtn   = document.getElementById('kb-ingest-btn');
+const ingestResults = document.getElementById('ingest-results');
+const irBody        = document.getElementById('ir-body');
+let pendingFiles    = [];
+
+async function loadRagStats(){
+  try {
+    const d = await fetch('/api/rag/stats').then(r=>r.json());
+    document.getElementById('rs-chunks').textContent = d.total_chunks ?? '—';
+    document.getElementById('rs-files').textContent  = d.files        ?? '—';
+    const types = d.by_type ? Object.entries(d.by_type).map(([k,v])=>`${k}:${v}`).join(', ') : '—';
+    document.getElementById('rs-types').textContent  = types;
+  } catch(_){}
+}
+
+function setFileList(files){
+  pendingFiles = Array.from(files).filter(f => /\.(md|pdf|txt|xlsx|xls)$/i.test(f.name));
+  const rejected = Array.from(files).length - pendingFiles.length;
+  if(pendingFiles.length){
+    const pillStyle = 'display:inline-flex;align-items:center;gap:5px;padding:3px 10px;'
+      + 'background:var(--inputBg);border:1px solid var(--accent);border-radius:20px;'
+      + 'font-size:11px;font-family:IBM Plex Mono,monospace;color:var(--accent);'
+      + 'box-shadow:0 0 6px #38bdf844;white-space:nowrap;';
+    selectedFiles.innerHTML = pendingFiles.map(f =>
+      '<span style="' + pillStyle + '">&#128206; ' + f.name + '</span>'
+    ).join('') + (rejected ? '<span style="font-size:10px;color:var(--dimText)"> (' + rejected + ' unsupported skipped)</span>' : '');
+  } else {
+    selectedFiles.innerHTML = '';
+  }
+  kbIngestBtn.disabled = pendingFiles.length === 0;
+  kbStatus.textContent = '';
+  ingestResults.style.display = 'none';
+}
+
+dropZone.onclick = () => fileInput.click();
+fileInput.onchange = (e) => setFileList(e.target.files);
+dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); };
+dropZone.ondragleave = ()  => dropZone.classList.remove('drag-over');
+dropZone.ondrop = (e) => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  setFileList(e.dataTransfer.files);
+};
+
+kbIngestBtn.onclick = async () => {
+  if(!pendingFiles.length) return;
+  kbIngestBtn.disabled = true;
+  kbStatus.style.color = '#60a5fa';
+  kbStatus.textContent = `⏳ Ingesting ${pendingFiles.length} file(s)…`;
+  ingestResults.style.display = 'none';
+
+  const form = new FormData();
+  pendingFiles.forEach(f => form.append('files', f, f.name));
+  form.append('force', document.getElementById('force-reingest').checked ? 'true' : 'false');
+
+  try {
+    const res  = await fetch('/api/ingest/upload', {method:'POST', body:form});
+    const data = await res.json();
+    if(!res.ok){ kbStatus.style.color='#ef4444'; kbStatus.textContent='✗ '+(data.error||'Upload failed.'); kbIngestBtn.disabled=false; return; }
+
+    irBody.innerHTML = '';
+    (data.results||[]).forEach(r => {
+      const row = document.createElement('div');
+      row.className = 'ir-row';
+      const cls = r.status==='ingested' ? 'ir-status-ok' : r.status==='skipped' ? 'ir-status-skip' : 'ir-status-err';
+      row.innerHTML = `<span title="${r.file}">${r.file.length>28 ? r.file.slice(0,26)+'…' : r.file}</span>`
+        + `<span class="${cls}">${r.status}</span><span>${r.chunks}</span>`;
+      irBody.appendChild(row);
+    });
+    ingestResults.style.display = 'block';
+
+    const ok  = (data.results||[]).filter(r=>r.status==='ingested').length;
+    const sk  = (data.results||[]).filter(r=>r.status==='skipped').length;
+    const err = (data.results||[]).filter(r=>r.status==='error').length;
+    kbStatus.style.color = err ? '#f59e0b' : '#22c55e';
+    kbStatus.textContent = `✓ ${ok} ingested · ${sk} skipped · ${err} error(s) · ${data.total_chunks} new chunks`;
+    pendingFiles = [];
+    selectedFiles.innerHTML = '';
+    kbIngestBtn.disabled = true;
+    fileInput.value = '';
+    loadRagStats();
+    loadIngestedFiles();
+  } catch(err){ kbStatus.style.color='#ef4444'; kbStatus.textContent='✗ Network error: '+err.message; kbIngestBtn.disabled=false; }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INGESTED FILES LIST
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadIngestedFiles() {
+  const el = document.getElementById('ingested-files-list');
+  if (!el) return;
+  try {
+    const res  = await fetch('/api/rag/files');
+    const data = await res.json();
+    const files = data.files || [];
+    if (!files.length) {
+      el.innerHTML = '<span style="color:var(--dimText)">No files ingested yet.</span>';
+      return;
+    }
+    el.innerHTML = files.map(f => {
+      const icon  = f.type === 'excel' ? '📊' : f.type === 'pdf' ? '📄' : f.type === 'markdown' ? '📝' : '📄';
+      const extra = f.type === 'excel' && f.sheets?.length
+        ? `<span style="color:var(--dimText)"> · ${f.rows} rows · ${f.sheets.join(', ')}</span>`
+        : '';
+      return `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--border)">
+        <span>${icon}</span>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${f.filename}</span>
+        ${extra}
+      </div>`;
+    }).join('');
+  } catch(e) {
+    el.innerHTML = '<span style="color:#ef4444">Failed to load files.</span>';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXAMPLE QUERIES
+// ═══════════════════════════════════════════════════════════════════════════
+const EXAMPLES = [
+  'What can you do?',
+  'Is the Vault doing ok?',
+  'Is CoreDNS doing ok?',
+  'Show me all the nodes\' status',
+  'Any pod is currently not Running?',
+  'What storage class is Vault using?',
+  'List all storage types (RWO/RWX) used by pods in cdp namespace',
+  'Check all namespaces, which pvc is not bound?',
+  'Which node has GPUs available and in use?',
+  'List all statefulset in cdp namespace',
+  'What\'s the cpu and ram request for cdp-embedded-db pod in cdp namespace?',
+];
+const exBtns = document.getElementById('ex-btns');
+EXAMPLES.forEach(ex=>{
+  const b = document.createElement('button');
+  b.className   = 'ex-btn';
+  b.textContent = ex;
+  b.onclick     = ()=> sendMessage(ex);
+  exBtns.appendChild(b);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HEALTH — populate subtitle + tooltip
+// ═══════════════════════════════════════════════════════════════════════════
+let modelName = 'qwen3:8b';
+let isGpu     = false;
+
+function updateInferenceBadge(){
+  const txt = document.getElementById('infer-txt-cpu');
+  if(!txt) return;
+  if(isGpu){
+    txt.textContent = '⚡ GPU';
+    txt.style.color = '#60a5fa';
+  } else {
+    txt.textContent = '⚙️ CPU';
+    txt.style.color = '#a78bfa';
+  }
+}
+
+async function fetchHealth(retries){
+  try{
+    const r = await fetch('/health');
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const d = await r.json();
+    modelName = d.model || 'unknown';
+    isGpu     = (d.num_gpu || 0) > 0;
+
+    // Show model name below inference badge
+    const inferModelEl = document.getElementById('infer-model-name');
+    if(inferModelEl){
+      // Show just the last path component (e.g. "Qwen3-8B" from "/models/Qwen/Qwen3-8B")
+      const shortName = (modelName || '—').split('/').pop().split('\\').pop();
+      inferModelEl.textContent = shortName;
+      inferModelEl.title = modelName; // full path on hover
+    }
+
+    const rdot = document.getElementById('rdot');
+    const rtxt = document.getElementById('rtxt');
+    rdot.style.background  = '#22c55e';
+    rdot.style.boxShadow   = '0 0 8px #22c55e88';
+    rdot.classList.add('ready');
+    rtxt.textContent = 'ready';
+
+    const el = document.getElementById('cluster-host');
+    const srv = (d.cluster_server || '').replace(/^https?:\/\//,'').trim();
+    if(srv){
+      el.textContent = '· Connected ECS: ' + srv;
+      el.style.color = 'var(--accent)';
+    } else {
+      el.textContent = '· Connected ECS: unknown';
+      el.style.color = 'var(--dimText)';
+    }
+
+    updateInferenceBadge();
+  } catch(e){
+    const rdot = document.getElementById('rdot');
+    const rtxt = document.getElementById('rtxt');
+    rdot.style.background = '#ef4444';
+    rdot.style.boxShadow  = '0 0 8px #ef444488';
+    rdot.classList.remove('ready');
+    rtxt.textContent = 'offline';
+    if(retries > 0){ setTimeout(()=>fetchHealth(retries-1), 3000); }
+  }
+}
+
+fetchHealth(10);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CHAT
+// ═══════════════════════════════════════════════════════════════════════════
+let loading  = false;
+// Each request is stateless — no conversation history is sent to the LLM.
+const msgsEl = document.getElementById('messages');
+const inpEl  = document.getElementById('chat-input');
+const sndBtn = document.getElementById('send-btn');
+const rdot   = document.getElementById('rdot');
+const rtxt   = document.getElementById('rtxt');
+const exDiv  = document.getElementById('examples');
+
+function setLoading(v){
+  loading = v;
+  sndBtn.disabled   = v;
+  sndBtn.textContent = v ? '...' : '\u2192 Send';
+  if(v){
+    rdot.style.cssText = 'background:#f59e0b;box-shadow:0 0 8px #f59e0b88;width:7px;height:7px;border-radius:50%;flex-shrink:0;animation:pls 1s infinite';
+    rtxt.textContent   = 'thinking';
+  } else {
+    rdot.style.cssText = 'background:#22c55e;box-shadow:0 0 8px #22c55e88;width:7px;height:7px;border-radius:50%;flex-shrink:0;animation:none';
+    rtxt.textContent   = 'ready';
+  }
+}
+
+function esc(s){
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function scrollBot(){ msgsEl.scrollTop = msgsEl.scrollHeight; }
+
+function appendUser(text){
+  exDiv.style.display = 'none';
+  const d = document.createElement('div');
+  d.className = 'msg-user fade-up';
+  d.innerHTML = '<div class="msg-user-bubble">'+esc(text)+'</div>';
+  msgsEl.appendChild(d);
+  scrollBot();
+}
+
+let thinkEl = null;
+
+function showThinking(updates){
+  removeThinking();
+  thinkEl = document.createElement('div');
+  thinkEl.className = 'status-box fade-up';
+  _renderThinkingContent(updates, true);
+  msgsEl.appendChild(thinkEl);
+  scrollBot();
+}
+
+function _renderAgentStatus(updates){
+  if(!thinkEl) return;
+
+  // Group updates into loop sections for display
+  // Each iteration event starts a new loop block
+  let sections = [];
+  let current = null;
+
+  updates.forEach(u => {
+    if(u.type === 'iteration'){
+      if(current) sections.push(current);
+      current = {iteration: u.iteration, label: u.text, items: [], has_tool_calls: u.has_tool_calls};
+    } else if(current) {
+      current.items.push(u);
+    } else {
+      // Pre-loop status (model info etc)
+      if(!sections.length) sections.push({iteration: 0, label: null, items: []});
+      sections[0].items.push(u);
+    }
+  });
+  if(current) sections.push(current);
+
+  const lastSection = sections[sections.length - 1];
+  let h = '<div class="s-label">AGENT STATUS — processing</div>';
+
+  sections.forEach((sec, si) => {
+    const isLastSec = si === sections.length - 1;
+
+    if(sec.label){
+      // Loop header — style differently based on whether it called tools or is synthesising
+      const isSynth = sec.label.includes('synthesising');
+      const isThinking = sec.label.includes('thinking');
+      const loopColor = isThinking ? 'var(--dimText)' : isSynth ? 'var(--accent)' : 'var(--accent)';
+      h += `<div class="s-loop-header" style="color:${loopColor};margin-top:6px;font-size:11px;font-weight:600;letter-spacing:.05em">${esc(sec.label)}</div>`;
+    }
+
+    sec.items.forEach((item, ii) => {
+      const isLast = isLastSec && ii === sec.items.length - 1;
+      const isTool = item.type === 'tool';
+      const icon = isTool ? '🔧' : '✓';
+      h += `<div class="s-line${isLast?' cur':''}" style="margin-left:${sec.label?'12px':'0'}">` +
+           `<span>${isLast && isLastSec ? '›' : icon}</span> ${esc(item.text)}</div>`;
+    });
+
+    // Show dots after the last item of the last section
+    if(isLastSec && sec.items.length === 0 && sec.label){
+      h += '<div class="sdots" style="margin-left:12px">'
+         + '<div class="sdot" style="animation-delay:0s"></div>'
+         + '<div class="sdot" style="animation-delay:.2s"></div>'
+         + '<div class="sdot" style="animation-delay:.4s"></div>'
+         + '</div>';
+    }
+  });
+
+  // Always show animated dots at bottom while processing
+  if(lastSection && lastSection.items.length > 0){
+    h += '<div class="sdots">'
+       + '<div class="sdot" style="animation-delay:0s"></div>'
+       + '<div class="sdot" style="animation-delay:.2s"></div>'
+       + '<div class="sdot" style="animation-delay:.4s"></div>'
+       + '</div>';
+  }
+
+  thinkEl.innerHTML = h;
+  scrollBot();
+}
+
+// Keep old name as alias for any remaining callers
+function _renderThinkingContent(updates, showDots){
+  // Convert old string array format to new object format
+  const converted = updates.map(u => typeof u === 'string' ? {type:'status', text:u} : u);
+  _renderAgentStatus(converted);
+}
+
+function appendStatusLine(text, liveUpdates){
+  if(!thinkEl) showThinking([text]);
+  else _renderAgentStatus(liveUpdates);
+}
+
+function removeThinking(){ if(thinkEl){thinkEl.remove();thinkEl=null;} }
+
+// Format AI response — strip chat-template token leakage
+function formatResponse(raw){
+  let text = raw || '';
+  text = text.replace(/<\|im_start\|>[\s\S]*?<\|im_end\|>\n?/g, '');
+  const ROLE_RE = /\b(system|user|assistant|human|model|im_start|im_end)\b/gi;
+  text = text.replace(/<\|im_start\|>/g, '')
+             .replace(/<\|im_end\|>/g, '')
+             .replace(/<\|[^|]*\|>/g, '');
+  text = text.split('\n')
+    .filter(line => {
+      const stripped = line.trim().replace(/[.?!,;:\u00f3]/g, '');
+      return !ROLE_RE.test(stripped) || stripped.length > 20;
+    })
+    .join('\n');
+  text = text.replace(/([.!?])\u00f3?st\b/gi, '$1')
+             .replace(/([.!?])\s*ouser\b/gi, '$1')
+             .replace(/([.!?])\s*assistant\b/gi, '$1');
+  text = text.replace(/\n{3,}/g, '\n\n').trim();
+  return text;
+}
+
+// ── Inline Prometheus graph renderer ─────────────────────────────────────────
+const GRAPH_COLORS = [
+  '#38bdf8','#f97316','#a78bfa','#34d399','#fb7185',
+  '#fbbf24','#60a5fa','#e879f9',
+];
+
+function renderGraphBlock(payload, container) {
+  const { title, unit, series } = payload;
+  if (!series || !series.length) {
+    container.innerHTML = '<div class="graph-no-data">No data to display.</div>';
+    return;
+  }
+
+  // ── Compute value domain ────────────────────────────────────────────────
+  let minV = Infinity, maxV = -Infinity;
+  series.forEach(s => s.values.forEach(([, v]) => {
+    if (v < minV) minV = v;
+    if (v > maxV) maxV = v;
+  }));
+  if (minV === maxV) { minV = 0; maxV = Math.max(maxV * 1.2, 1); }
+  const pad = (maxV - minV) * 0.08;
+  const yLo = Math.max(0, minV - pad);
+  const yHi = maxV + pad;
+
+  // ── Compute time domain ─────────────────────────────────────────────────
+  let tMin = Infinity, tMax = -Infinity;
+  series.forEach(s => s.values.forEach(([t]) => {
+    if (t < tMin) tMin = t;
+    if (t > tMax) tMax = t;
+  }));
+
+  // ── SVG geometry ────────────────────────────────────────────────────────
+  const W = 560, H = 160;
+  const ML = 46, MR = 12, MT = 8, MB = 22;
+  const PW = W - ML - MR, PH = H - MT - MB;
+
+  const xS = t => ML + ((t - tMin) / (tMax - tMin || 1)) * PW;
+  const yS = v => MT + PH - ((v - yLo) / (yHi - yLo || 1)) * PH;
+
+  // ── Y-axis ticks ────────────────────────────────────────────────────────
+  const TICK_COUNT = 4;
+  const yTicks = Array.from({ length: TICK_COUNT + 1 }, (_, i) =>
+    yLo + (yHi - yLo) * (i / TICK_COUNT)
+  );
+
+  // ── X-axis labels (3 evenly spaced) ─────────────────────────────────────
+  const xLabels = [0, 0.5, 1].map(f => {
+    const ts = tMin + (tMax - tMin) * f;
+    const d  = new Date(ts * 1000);
+    return {
+      x:    ML + f * PW,
+      text: d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+  });
+
+  // ── Format values — auto-scale decimal places based on magnitude ─────────
+  function fmt(v) {
+    if (unit === '%')     return v.toFixed(1) + '%';
+    if (unit === 'cores') return v.toFixed(3);
+    if (unit === 'm') {
+      // Auto-scale decimals: tiny values need more precision
+      if (v === 0)    return '0m';
+      if (v < 0.01)   return v.toFixed(4) + 'm';
+      if (v < 0.1)    return v.toFixed(3) + 'm';
+      if (v < 1)      return v.toFixed(2) + 'm';
+      return v.toFixed(1) + 'm';
+    }
+    if (unit === 'MiB')   return v.toFixed(0) + 'Mi';
+    if (unit === 'bytes') {
+      if (v >= 1e9) return (v / 1e9).toFixed(2) + 'G';
+      if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+      if (v >= 1e3) return (v / 1e3).toFixed(0) + 'k';
+      return v.toFixed(0);
+    }
+    if (unit === 'bytes/s') {
+      if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M/s';
+      if (v >= 1e3) return (v / 1e3).toFixed(0) + 'k/s';
+      return v.toFixed(0) + '/s';
+    }
+    return v.toFixed(1);
+  }
+
+  // ── Truncate long labels: keep start and end, elide middle ───────────────
+  function truncLabel(s, max) {
+    if (s.length <= max) return s;
+    const keep = Math.floor((max - 1) / 2);
+    return s.slice(0, keep) + '…' + s.slice(s.length - keep);
+  }
+
+  // ── Build SVG ────────────────────────────────────────────────────────────
+  // Read current CSS variables for theme-awareness
+  const cs   = getComputedStyle(document.documentElement);
+  const cBg  = cs.getPropertyValue('--msgBg').trim()    || '#070d1a';
+  const cBdr = cs.getPropertyValue('--border').trim()   || '#0f1f35';
+  const cDim = cs.getPropertyValue('--dimText').trim()  || '#475569';
+  const cTxt = cs.getPropertyValue('--bodyText').trim() || '#cbd5e1';
+
+  let paths = '';
+  series.forEach((s, i) => {
+    if (!s.values.length) return;
+    const col = GRAPH_COLORS[i % GRAPH_COLORS.length];
+    const pts = s.values.map(([t, v]) => `${xS(t).toFixed(1)},${yS(v).toFixed(1)}`).join(' ');
+    // Area fill
+    const first = s.values[0], last = s.values[s.values.length - 1];
+    const areaPts = `${xS(first[0]).toFixed(1)},${(MT + PH).toFixed(1)} `
+                  + pts
+                  + ` ${xS(last[0]).toFixed(1)},${(MT + PH).toFixed(1)}`;
+    paths += `<polygon points="${areaPts}" fill="${col}" opacity="0.08"/>`;
+    paths += `<polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>`;
+    // Latest value dot
+    const lv = s.values[s.values.length - 1];
+    paths += `<circle cx="${xS(lv[0]).toFixed(1)}" cy="${yS(lv[1]).toFixed(1)}" r="3" fill="${col}"/>`;
+  });
+
+  // Grid lines + y-axis labels
+  let grid = '';
+  yTicks.forEach(v => {
+    const y = yS(v).toFixed(1);
+    grid += `<line x1="${ML}" y1="${y}" x2="${ML + PW}" y2="${y}" stroke="${cBdr}" stroke-width="1"/>`;
+    grid += `<text x="${ML - 4}" y="${y}" text-anchor="end" dominant-baseline="middle" `
+          + `font-size="9" font-family="IBM Plex Mono,monospace" fill="${cDim}">${fmt(v)}</text>`;
+  });
+
+  // X-axis labels
+  let xAxis = '';
+  xLabels.forEach(({ x, text }) => {
+    xAxis += `<text x="${x.toFixed(1)}" y="${(MT + PH + 14).toFixed(1)}" text-anchor="middle" `
+           + `font-size="9" font-family="IBM Plex Mono,monospace" fill="${cDim}">${text}</text>`;
+  });
+
+  // Clip path so lines don't overflow
+  const svgId = 'g' + Math.random().toString(36).slice(2, 8);
+  const svg = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" `
+            + `style="width:100%;height:auto;display:block;max-height:180px">`
+            + `<defs><clipPath id="${svgId}"><rect x="${ML}" y="${MT}" width="${PW}" height="${PH}"/></clipPath></defs>`
+            + grid
+            + `<g clip-path="url(#${svgId})">${paths}</g>`
+            + xAxis
+            + `<line x1="${ML}" y1="${MT}" x2="${ML}" y2="${MT + PH}" stroke="${cDim}" stroke-width="1"/>`
+            + `<line x1="${ML}" y1="${MT + PH}" x2="${ML + PW}" y2="${MT + PH}" stroke="${cDim}" stroke-width="1"/>`
+            + `</svg>`;
+
+  // Legend — capped to same 8 series drawn in chart, labels truncated to fit
+  const legend = series.slice(0, 8).map((s, i) => {
+    const col      = GRAPH_COLORS[i % GRAPH_COLORS.length];
+    const lastVal  = s.values.length ? fmt(s.values[s.values.length - 1][1]) : '—';
+    const shortLbl = truncLabel(s.label, 36);
+    return `<span class="graph-legend-item" title="${esc(s.label)}">`
+         + `<span class="graph-legend-dot" style="background:${col}"></span>`
+         + `<span style="font-family:'IBM Plex Mono',monospace">${esc(shortLbl)}</span>`
+         + ` <span style="color:${col};font-weight:700">${lastVal}</span>`
+         + `</span>`;
+  }).join('');
+
+  container.innerHTML =
+      `<div class="graph-title">${esc(title)}</div>`
+    + `<div class="graph-svg-wrap">${svg}</div>`
+    + `<div class="graph-legend">${legend}</div>`;
+}
+
+function appendAi(text, tools, iters, elapsed, statusUpdates, isClarification){
+  // ── Extract §GRAPH§ payload before any cleaning ─────────────────────────
+  let graphPayload = null;
+  const GRAPH_RE = /§GRAPH§([\s\S]*?)§GRAPH§/;
+  const graphMatch = text.match(GRAPH_RE);
+  if (graphMatch) {
+    try { graphPayload = JSON.parse(graphMatch[1].trim()); } catch(e) {}
+    text = text.replace(GRAPH_RE, '').trim();
+  }
+  const clean  = formatResponse(text);
+  const unique = [...new Set(tools||[])];
+  const badges = unique.map(t=>
+    '<span class="tbadge">'+(t==='rag_search'?'📚':'\u2699\uFE0F')+' '+esc(t)+'</span>'
+  ).join('');
+  const toolRow = unique.length
+    ? '<div class="ai-tools"><span class="tmeta">called:</span>'+badges
+      +'<span class="tmeta">&middot; '+iters+' iter'+(iters!==1?'s':'')+'</span></div>'
+    : '';
+  const cmds = (statusUpdates||[]).filter(s=>s.startsWith('$ '));
+  const cmdLog = cmds.length
+    ? '<div class="kubectl-log">'
+      + cmds.map(c=>'<span class="kubectl-cmd">'+esc(c)+'</span>').join('')
+      +'</div>'
+    : '';
+  const bubbleCls = 'ai-bubble' + (isClarification ? ' clarification' : '');
+  const d = document.createElement('div');
+  d.className = 'msg-ai fade-up';
+  d.innerHTML =
+    '<div class="ai-icon">'
+    +'<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="var(--accent)">'
+    +'<path d="M18 3a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-4.724l-4.762 2.857a1 1 0 0 1 -1.508 -.743l-.006 -.114v-2h-1a4 4 0 0 1 -3.995 -3.8l-.005 -.2v-8a4 4 0 0 1 4 -4zm-2.8 9.286a1 1 0 0 0 -1.414 .014a2.5 2.5 0 0 1 -3.572 0a1 1 0 0 0 -1.428 1.4a4.5 4.5 0 0 0 6.428 0a1 1 0 0 0 -.014 -1.414m-5.69 -4.286h-.01a1 1 0 1 0 0 2h.01a1 1 0 0 0 0 -2m5 0h-.01a1 1 0 0 0 0 2h.01a1 1 0 0 0 0 -2"/>'
+    +'</svg></div>'
+    +'<div class="ai-body">'
+    +'<div class="'+bubbleCls+'">'+esc(clean)+'</div>'
+    +toolRow
+    +cmdLog
+    +'<div class="ai-meta-row">'
+    +(elapsed!=null && !isClarification ?'<div class="ai-elapsed">&#8987; '+elapsed+'s</div>':'<div></div>')
+    +'<div class="ai-copy-row"><button class="copy-btn" title="Copy response">⎘ Copy</button></div>'
+    +'</div>'
+    +'</div>';
+  msgsEl.appendChild(d);
+  // ── Render inline graph if present ───────────────────────────────────────
+  if (graphPayload) {
+    const graphWrap = document.createElement('div');
+    graphWrap.className = 'graph-block';
+    renderGraphBlock(graphPayload, graphWrap);
+    // Insert inside ai-body, after the bubble
+    const aiBody = d.querySelector('.ai-body');
+    if (aiBody) {
+      const metaRow = aiBody.querySelector('.ai-meta-row');
+      aiBody.insertBefore(graphWrap, metaRow);
+    } else {
+      d.appendChild(graphWrap);
+    }
+  }
+  // wire copy button
+  const copyBtn = d.querySelector('.copy-btn');
+  copyBtn.onclick = () => {
+    navigator.clipboard.writeText(clean).then(() => {
+      copyBtn.textContent = '✓ Copied';
+      copyBtn.classList.add('copied');
+      setTimeout(() => { copyBtn.textContent = '⎘ Copy'; copyBtn.classList.remove('copied'); }, 2000);
+    }).catch(() => {
+      copyBtn.textContent = '✗ Failed';
+      setTimeout(() => { copyBtn.textContent = '⎘ Copy'; }, 2000);
+    });
+  };
+  scrollBot();
+}
+
+async function sendMessage(override){
+  const q = override || inpEl.value.trim();
+  if(!q || loading) return;
+  inpEl.value = '';
+  setLoading(true);
+  appendUser(q);
+
+  const liveUpdates = [];
+  let   resultReceived = false;
+  showThinking(liveUpdates);
+
+  // Live elapsed-time counter shown in the status box header.
+  let _elapsedSec = 0;
+  let _elapsedTimer = null;
+  function _startElapsedCounter(){
+    _elapsedSec = 0;
+    _elapsedTimer = setInterval(() => {
+      _elapsedSec++;
+      if(!thinkEl) return;
+      const hdr = thinkEl.querySelector('.s-label');
+      if(hdr){
+        hdr.textContent = `AGENT STATUS — processing (${_elapsedSec}s)`;
+        hdr.style.color = _elapsedSec >= 60 ? '#f59e0b' : '';
+      }
+    }, 1000);
+  }
+  function _stopElapsedCounter(){
+    if(_elapsedTimer){ clearInterval(_elapsedTimer); _elapsedTimer = null; }
+  }
+  _startElapsedCounter();
+
+  // No conversation history — each request is fully independent.
+
+  try{
+    const res = await fetch('/chat/stream', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        message: q, decode_secrets: decodeSecrets, history: [],
+        max_new_tokens: parseInt(document.getElementById('chat-max-tokens-slider')?.value||'0')
+      }),
+    });
+    if(!res.ok){
+      const e = await res.json().catch(()=>({}));
+      throw new Error(e.detail || 'HTTP '+res.status);
+    }
+
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let   buffer  = '';
+
+    while(true){
+      const {done, value} = await reader.read();
+      if(done) break;
+      buffer += decoder.decode(value, {stream: true});
+
+      // SSE lines are separated by \n\n; parse complete events only
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop(); // keep incomplete tail
+
+      for(const part of parts){
+        const line = part.trim();
+        if(!line.startsWith('data:')) continue;
+        let payload;
+        try{ payload = JSON.parse(line.slice(5).trim()); }
+        catch{ continue; }
+
+        if(payload.type === 'status'){
+          liveUpdates.push({type:'status', text: payload.text});
+          _renderAgentStatus(liveUpdates);
+
+        } else if(payload.type === 'tool'){
+          liveUpdates.push({type:'tool', text: payload.text});
+          _renderAgentStatus(liveUpdates);
+
+        } else if(payload.type === 'iteration'){
+          // Loop stage marker — shown as a loop header in the status box
+          liveUpdates.push({type:'iteration', text: payload.text, iteration: payload.iteration, has_tool_calls: payload.has_tool_calls});
+          _renderAgentStatus(liveUpdates);
+
+        } else if(payload.type === 'heartbeat'){
+          const timeoutSec = payload.timeout || 300;
+          const remaining  = timeoutSec - (payload.elapsed || 0);
+          const hbText     = `⏳ Still processing… (${payload.elapsed}s elapsed, timeout in ${remaining}s)`;
+          const lastIdx = liveUpdates.length - 1;
+          if(lastIdx >= 0 && liveUpdates[lastIdx].text && liveUpdates[lastIdx].text.startsWith('⏳')){
+            liveUpdates[lastIdx] = {type:'status', text: hbText};
+          } else {
+            liveUpdates.push({type:'status', text: hbText});
+          }
+          _renderAgentStatus(liveUpdates);
+
+        } else if(payload.type === 'result'){
+          resultReceived = true;
+          _stopElapsedCounter();
+          removeThinking();
+          appendAi(
+            payload.response,
+            payload.tools_used,
+            payload.iterations,
+            payload.elapsed_seconds,
+            payload.status_updates,
+            payload.clarification_needed
+          );
+          // (history not stored — each request is stateless)
+
+        } else if(payload.type === 'error'){
+          _stopElapsedCounter();
+          removeThinking();
+          appendAi('⚠ Agent error: '+payload.text, [], 0, null, [], false);
+        }
+      }
+    }
+  } catch(err){
+    _stopElapsedCounter();
+    if(resultReceived) return;
+    removeThinking();
+    const msg = err.message || '';
+    const isTimeout = msg.toLowerCase().includes('load') || msg.toLowerCase().includes('network') || msg.toLowerCase().includes('failed to fetch');
+    const hint = isTimeout
+      ? '⏱ The request timed out — the cluster data may be very large.\n\nTry narrowing the query to a specific namespace (e.g. "list pods in cdp") or increase LLM_TIMEOUT in Settings → LLM Input/Output.'
+      : '⚠ Error: '+msg+'\n\nMake sure the backend is running:\n  python3 app.py';
+    appendAi(hint, [], 0, null, [], false);
+  } finally {
+    _stopElapsedCounter();
+    setLoading(false);
+  }
+}
+sndBtn.onclick = ()=> sendMessage();
+inpEl.addEventListener('keydown', e=>{
+  if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// METRICS POLLING
+// ═══════════════════════════════════════════════════════════════════════════
+const sparkPts  = [];
+const SW=264, SH=28;
+
+// CPU bar: deep steel-blue → indigo → deep crimson (visible on all 3 themes)
+function cpuCol(p){
+  if(p<40) return 'hsl('+(220-p*0.5)+',80%,52%)';   // steel-blue
+  if(p<70) return 'hsl('+(200-(p-40)*3)+',85%,48%)'; // indigo
+  return           'hsl('+(110-(p-70)*3)+',80%,40%)'; // deep amber→crimson
+}
+// GPU bar: deep teal → violet → deep red
+function gpuCol(p){
+  if(p<50) return 'hsl('+(190-p*0.6)+',85%,45%)';   // teal
+  if(p<80) return 'hsl('+(160-(p-50)*4)+',80%,42%)'; // violet
+  return           'hsl('+(40-(p-80)*2)+',85%,42%)';  // deep red
+}
+function tempCol(c){ return c<60?'#3b82f6':c<75?'#8b5cf6':'#dc2626'; }
+
+function renderDots(el, pct){
+  const N=32, filled=Math.round((pct/100)*N);
+  let h='';
+  for(let i=0;i<N;i++){
+    const a=i<filled, col=a?cpuCol((i/N)*100):'transparent';
+    h+='<div style="width:4px;height:8px;border-radius:1px;flex-shrink:0;background:'+col
+      +';border:1px solid '+(a?col:'var(--panelBorder)22')+'"></div>';
+  }
+  el.innerHTML=h;
+}
+
+function renderSpark(svg, pts, pct){
+  if(pts.length<2){svg.innerHTML='';return;}
+  const col=cpuCol(pct);
+  const pts2=pts.map((v,i)=>((i/59)*SW)+','+(SH-(v/100)*SH)).join(' ');
+  svg.innerHTML=
+    '<defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">'
+    +'<stop offset="0%" stop-color="'+col+'" stop-opacity="0.35"/>'
+    +'<stop offset="100%" stop-color="'+col+'" stop-opacity="0.03"/>'
+    +'</linearGradient></defs>'
+    +'<polyline points="'+pts2+'" fill="none" stroke="'+col+'" stroke-width="1.5"/>'
+    +'<polygon points="0,'+SH+' '+pts2+' '+SW+','+SH+'" fill="url(#sg)"/>';
+}
+
+function renderCores(el, cores){
+  const cols=cores.length>12?3:cores.length>6?2:1;
+  const perCol=Math.ceil(cores.length/cols);
+  let h='';
+  for(let ci=0;ci<cols;ci++){
+    h+='<div class="core-col">';
+    cores.slice(ci*perCol,(ci+1)*perCol).forEach((pct,i)=>{
+      const idx=ci*perCol+i, col=cpuCol(pct), hot=pct>80;
+      h+='<div class="core-row">'
+        +'<span class="core-lbl">C'+(idx+1)+'</span>'
+        +'<div class="core-track"><div class="core-bg"></div>'
+        +'<div class="core-fill" style="width:'+pct+'%;background:'+col+'"></div>'
+        +'<div class="core-dots"></div></div>'
+        +'<span class="core-pct"'+(hot?' style="color:'+col+';font-weight:700"':'')+'>'+pct+'%</span></div>';
+    });
+    h+='</div>';
+  }
+  el.innerHTML=h;
+}
+
+function renderGpus(el, gpus){
+  el.innerHTML='';
+  gpus.forEach(gpu=>{
+    const uc=gpuCol(gpu.util_pct), mc=gpuCol(gpu.mem_pct), tc=tempCol(gpu.temp_c);
+    const sn=gpu.name.replace(/NVIDIA\s*/i,'').replace(/GeForce\s*/i,'').trim();
+    const c=document.createElement('div');
+    c.className='gpu-card';
+    c.innerHTML=
+      '<div class="gpu-chdr">'
+      +'<span class="gpu-idx">GPU</span>'
+      +'<span class="gpu-name" title="'+esc(gpu.name)+'">'+esc(sn)+'</span>'
+      +'</div>'
+      // Utilisation bar
+      +'<div><div class="g-bar-row">'
+      +'<span class="g-bar-lbl">Utilisation</span>'
+      +'<span class="g-bar-val" style="color:'+uc+'">'+gpu.util_pct+'%</span>'
+      +'</div>'
+      +'<div class="g-track">'
+      +'<div class="g-fill" style="width:'+gpu.util_pct+'%;background:'+uc+';box-shadow:0 0 5px '+uc+'88"></div>'
+      +'<div class="g-stripe"></div></div></div>'
+      // VRAM bar
+      +'<div><div class="g-bar-row">'
+      +'<span class="g-bar-lbl">VRAM</span>'
+      +'<span class="g-bar-val" style="color:'+mc+';font-weight:400;font-size:11px">'+gpu.mem_used_gb+'/'+gpu.mem_total_gb+' GB</span>'
+      +'</div>'
+      +'<div class="vram-track"><div class="vram-fill" style="width:'+gpu.mem_pct+'%;background:'+mc+'"></div></div></div>'
+      // Temp + power
+      +'<div class="gpu-meta">'
+      +'<span style="color:'+tc+';font-weight:700">'+gpu.temp_c+'\u00b0C</span>'
+      +(gpu.power_w!=null?' <span style="color:var(--panelDim)">&#9889; '+gpu.power_w+' W</span>':'')
+      +'</div>';
+    el.appendChild(c);
+  });
+}
+
+// DOM refs
+const coresEl    = document.getElementById('cores-grid');
+const sparkEl    = document.getElementById('sparkline');
+const dotbarEl   = document.getElementById('cpu-dotbar');
+const cpuPctEl   = document.getElementById('cpu-total-pct');
+const cpuFreqEl  = document.getElementById('cpu-freq-lbl');
+const memFillEl  = document.getElementById('mem-fill');
+const memPctEl   = document.getElementById('mem-pct');
+const memGbEl    = document.getElementById('mem-gb');
+const loadEl     = document.getElementById('load-avg');
+const gpuPanel   = document.getElementById('gpu-panel');
+const gpuCntEl   = document.getElementById('gpu-count-lbl');
+const gpuCardsEl = document.getElementById('gpu-cards');
+const gpuNoEl    = document.getElementById('gpu-none-msg');
+
+async function pollMetrics(){
+  try{
+    const r = await fetch('/metrics');
+    if(!r.ok) return;
+    const d = await r.json();
+
+    // Sparkline
+    sparkPts.push(d.cpu_total); if(sparkPts.length>60) sparkPts.shift();
+    renderSpark(sparkEl, sparkPts, d.cpu_total);
+
+    // CPU dotbar + pct
+    renderDots(dotbarEl, d.cpu_total);
+    cpuPctEl.textContent = d.cpu_total+'%';
+    cpuPctEl.style.color = cpuCol(d.cpu_total);
+
+    // Freq label
+    cpuFreqEl.textContent = (d.freq_mhz ? (d.freq_mhz/1000).toFixed(1)+' GHz' : '\u2014 GHz')
+                           + ' \u00b7 ' + (d.cpu_count||'?') + 'C';
+
+    // Per-core grid
+    renderCores(coresEl, d.cpu_per_core||[]);
+
+    // Memory utilisation (renamed from RAM)
+    const mp = d.mem_pct||0;
+    memFillEl.style.width      = mp+'%';
+    memFillEl.style.background = cpuCol(mp);
+    memPctEl.textContent       = mp+'%';
+    memPctEl.style.color       = cpuCol(mp);
+    memGbEl.textContent        = (d.mem_used_gb||0)+' / '+(d.mem_total_gb||0)+' GB';
+
+    // Load avg
+    const [a,b,c] = d.load_avg||[0,0,0];
+    loadEl.textContent = a+'  '+b+'  '+c;
+
+    // GPUs
+    const gpus = d.gpus||[];
+    if(gpus.length > 0){
+      gpuPanel.style.display = 'flex';
+      gpuCntEl.textContent   = gpus.length+' device'+(gpus.length>1?'s':'');
+      renderGpus(gpuCardsEl, gpus);
+      gpuNoEl.style.display  = 'none';
+    } else if(d.num_gpu > 0){
+      gpuPanel.style.display = 'flex';
+      gpuCntEl.textContent   = d.num_gpu+' device'+(d.num_gpu>1?'s':'');
+      gpuNoEl.style.display  = 'none';
+    } else {
+      gpuPanel.style.display = 'flex';
+      gpuCardsEl.innerHTML   = '';
+      gpuCntEl.textContent   = 'none detected';
+      gpuNoEl.style.display  = 'block';
+    }
+
+  } catch(_){ /* retry silently */ }
+}
+
+pollMetrics();
+setInterval(pollMetrics, 1500);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PROMPT GUIDELINES — copy button
+// ═══════════════════════════════════════════════════════════════════════════
+window.glCopy = function(btn, text) {
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = 'copied';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('copied'); }, 1500);
+  });
+}
+
+// ═════════════════════════════════════════════════════════
+})();
+</script>
+</body>
+</html>
