@@ -251,6 +251,21 @@ def default_tools_for(user_msg: str, req_id: str = "") -> list:
         _log.info(f"{tag}[routing] FALLBACK → get_namespace_resource_summary(namespace={ns!r})")
         return [("get_namespace_resource_summary", {"namespace": ns})]
 
+    # "List/show/get all pods" — user wants a full pod table, not just unhealthy ones.
+    # Trigger: "output of pods", "list pods", "show pods", "get pods", "all pods in".
+    # Uses show_all=True + raw_output=True to return every pod as a kubectl-style table.
+    _is_list_pods = (
+        any(k in lm for k in [
+            "output of", "list pods", "list all pods", "show pods",
+            "show all pods", "get pods", "get all pods", "all pods",
+            "display pods", "display all pods",
+        ])
+        and any(k in lm for k in ["pod", "pods"])
+    )
+    if _is_list_pods:
+        _log.info(f"{tag}[routing] FALLBACK → get_pod_status(namespace={ns!r}, show_all=True, raw_output=True)")
+        return [("get_pod_status", {"namespace": ns, "show_all": True, "raw_output": True})]
+
     _is_pod_health = any(k in lm for k in [
         "pod", "pods", "container", "crashloop", "oomkill", "crashing",
         "not running", "not ready", "failing", "unhealthy", "restart",

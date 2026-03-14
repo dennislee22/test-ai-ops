@@ -1123,6 +1123,13 @@ def build_agent():
                 "Reproduce the command output VERBATIM. "
                 "Do NOT reformat, summarise, or omit any rows."
             ),
+            # Pod status table — reproduce verbatim when raw output was requested
+            "get_pod_status": (
+                "Reproduce the pod table VERBATIM — every row, every column. "
+                "Do NOT summarise, count, or describe in prose. "
+                "If the result is a single summary sentence (e.g. 'All pods healthy'), "
+                "reproduce it exactly."
+            ),
             # Namespace resource summary — always show TOTAL first, then per-pod
             "get_namespace_resource_summary": (
                 "ALWAYS lead with the total figures at the top of the answer: "
@@ -1491,7 +1498,7 @@ def build_agent():
 
             out = _call_tool(name, args, all_tools)
             _log_ag.debug(f"[REQ:{state.get('req_id','')}] [tool_node] {name} result preview: {str(out)[:200]!r}")
-            results.append(ToolMessage(content=out, tool_call_id=tc["id"]))
+            results.append(ToolMessage(content=out, tool_call_id=tc["id"], name=name))
 
             _req_id = state.get("req_id", "")
             # KB_EMPTY sentinel: rag_search found nothing ingested → ingest reminder
