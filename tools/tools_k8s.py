@@ -652,10 +652,14 @@ def get_node_health() -> str:
 
             gpu_used = gpu_used_by_node.get(node.metadata.name, 0)
             if gpu_allocatable:
-                gpu_str = (f" GPU:{gpu_used}/{gpu_allocatable} in-use/allocatable"
-                           + (" (all in use)" if gpu_used >= gpu_allocatable else
-                              " (available)" if gpu_used == 0 else
-                              f" ({gpu_allocatable - gpu_used} free)"))
+                _gpu_free = gpu_allocatable - gpu_used
+                if gpu_used == 0:
+                    _gpu_status = "none in use — all free"
+                elif gpu_used >= gpu_allocatable:
+                    _gpu_status = "all in use — none free"
+                else:
+                    _gpu_status = f"{gpu_used} in use, {_gpu_free} free"
+                gpu_str = f" GPU:{gpu_used}/{gpu_allocatable} ({_gpu_status})"
             else:
                 gpu_str = ""
 
@@ -3052,29 +3056,6 @@ def get_namespace_resource_summary(namespace: str) -> str:
 
     return "\n".join(lines_out)
 
-    def _fmt_cpu(m: int) -> str:
-        if m == 0:
-            return "0m (none set)"
-        return f"{m}m ({m/1000:.3f} cores)"
-
-    def _fmt_mem(mib: float) -> str:
-        if mib == 0:
-            return "0Mi (none set)"
-        return f"{mib:.0f}Mi ({mib/1024:.2f}Gi)"
-
-    lines = [
-        f"Resource summary for namespace '{namespace}' ({len(pods.items)} pods):",
-        f"",
-        f"  TOTAL CPU  requested : {_fmt_cpu(total_cpu_req_m)}",
-        f"  TOTAL CPU  limit     : {_fmt_cpu(total_cpu_lim_m)}",
-        f"  TOTAL MEM  requested : {_fmt_mem(total_mem_req_mib)}",
-        f"  TOTAL MEM  limit     : {_fmt_mem(total_mem_lim_mib)}",
-        f"",
-        f"Per-pod CPU/memory requests:",
-    ] + pod_lines
-
-    return "\n".join(lines)
-
 _ALLOW_DB_EXEC = os.getenv("ALLOW_DB_EXEC", "true").lower() in ("1", "true", "yes")
 
 _SQL_WRITE_RE = re.compile(
@@ -3835,10 +3816,12 @@ K8S_TOOLS: dict = {
         "fn":          get_namespace_resource_summary,
         "description": (
             "Aggregate CPU and memory REQUESTS and LIMITS for all pods in a specific namespace. "
-            "Returns total requested/limited CPU (millicores) and memory (MiB/GiB) for the namespace, "
-            "plus a per-pod breakdown. This is scheduling allocation data, NOT real-time consumption. "
-            "Use for: 'total cpu/memory requests in namespace X', 'how much memory is requested in X', "
+            "Returns the TOTAL across all pods first, then a per-pod breakdown. "
+            "This is scheduling allocation data, NOT real-time consumption. "
+            "Use for: 'calculate CPU requests in namespace X', 'calculate memory requests', "
+            "'total cpu/memory requests in namespace X', 'how much CPU is requested in X', "
             "'sum of resource requests in X', 'resource limits for namespace X'. "
+            "ALWAYS lead the answer with the TOTAL figures, then list per-pod breakdown. "
             "Do NOT use for actual usage/consumption — use query_prometheus_metrics instead. "
             "Do NOT use for per-node allocation — use get_node_resource_requests instead."
         ),
@@ -3921,6 +3904,8 @@ K8S_TOOLS["get_coredns_health"] = {
         "real cluster ingress hostnames — exactly as a pod in the cluster would resolve names. "
         "Use ONLY when the question explicitly mentions: CoreDNS, DNS, DNS resolution, "
         "nslookup, DNS health, service discovery via DNS, or pod name resolution. "
+        "This tool is SELF-CONTAINED — do NOT also call get_unhealthy_pods_detail "
+        "or kubectl_exec when using this tool. One tool call is sufficient. "
         "Do NOT use for general pod health, vault, longhorn, prometheus, grafana, "
         "cert-manager, or any non-DNS question — use get_unhealthy_pods_detail for those."
     ),

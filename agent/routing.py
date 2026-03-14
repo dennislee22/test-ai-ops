@@ -194,14 +194,22 @@ def default_tools_for(user_msg: str, req_id: str = "") -> list:
         and (any(k in lm for k in ["pod", "container"]) or _has_pod_name)
     )
     if _is_pod_log:
-        # Extract pod name: longest hyphenated token that looks like a pod name
+        # Route to kubectl_exec so output is raw and bypasses LLM synthesis.
+        # Only call get_pod_logs (which goes through synthesis) if user asks
+        # to analyse/explain the logs — that is handled by the LLM itself
+        # when it selects get_pod_logs on its own from the tool descriptions.
         import re as _re
-        pod_match = _re.search(
-            r'[a-z][a-z0-9-]*-[a-z0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*', lm)
+        # Match full pod names (2+ segments) OR simple names like vault-0, db-0
+        pod_match = (
+            _re.search(r'[a-z][a-z0-9-]*-[a-z0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*', lm)
+            or _re.search(r'[a-z][a-z0-9]+-\d+', lm)
+        )
         pod_name = pod_match.group(0) if pod_match else ""
-        _log.info(f"{tag}[routing] FALLBACK → get_pod_logs(pod={pod_name!r}, ns={ns!r})")
         if pod_name:
-            return [("get_pod_logs", {"pod_name": pod_name, "namespace": ns})]
+            cmd = f"kubectl logs -n {ns} {pod_name} --tail=100"
+            _log.info(f"{tag}[routing] FALLBACK → kubectl_exec logs (pod={pod_name!r}, ns={ns!r})")
+            return [("kubectl_exec", {"command": cmd})]
+        # No pod name found — let LLM sort it out
         return [("get_pod_logs", {"pod_name": "", "namespace": ns})]
 
     # Pod describe query: "describe pod X", "show pod description of X"
@@ -211,14 +219,37 @@ def default_tools_for(user_msg: str, req_id: str = "") -> list:
                                "detail of pod", "details of pod", "details for pod"])
     )
     if _is_pod_describe:
+        # Route to kubectl_exec so output is the raw kubectl describe output.
+        # First lookup the namespace if not explicit — search all namespaces.
         import re as _re
-        pod_match = _re.search(
-            r'[a-z][a-z0-9-]*-[a-z0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*', lm)
+        pod_match = (
+            _re.search(r'[a-z][a-z0-9-]*-[a-z0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*', lm)
+            or _re.search(r'[a-z][a-z0-9]+-\d+', lm)
+        )
         pod_name = pod_match.group(0) if pod_match else ""
-        _log.info(f"{tag}[routing] FALLBACK → describe_pod(pod={pod_name!r}, ns={ns!r})")
         if pod_name:
-            return [("describe_pod", {"pod_name": pod_name, "namespace": ns})]
+            if ns and ns != "all":
+                # Namespace known — describe directly
+                cmd = f"kubectl -n {ns} describe pod {pod_name}"
+            else:
+                # Namespace not specified — search all namespaces first
+                # The LLM will see the pod location and can describe it next
+                cmd = f"kubectl get pod -A -o wide"
+            _log.info(f"{tag}[routing] FALLBACK → kubectl_exec describe (pod={pod_name!r}, ns={ns!r})")
+            return [("kubectl_exec", {"command": cmd})]
         return [("describe_pod", {"pod_name": "", "namespace": ns})]
+
+    # Resource calculation query: "calculate CPU/memory requests", "total CPU in namespace X"
+    _is_resource_calc = (
+        any(k in lm for k in ["calculate", "total cpu", "total mem", "sum of",
+                               "cpu request", "memory request", "resource request",
+                               "cpu limit", "memory limit", "resource limit",
+                               "how much cpu", "how much memory", "how much mem"])
+        and any(k in lm for k in ["namespace", "pods", "all pods", ns])
+    )
+    if _is_resource_calc and ns != "all":
+        _log.info(f"{tag}[routing] FALLBACK → get_namespace_resource_summary(namespace={ns!r})")
+        return [("get_namespace_resource_summary", {"namespace": ns})]
 
     _is_pod_health = any(k in lm for k in [
         "pod", "pods", "container", "crashloop", "oomkill", "crashing",

@@ -1123,6 +1123,33 @@ def build_agent():
                 "Reproduce the command output VERBATIM. "
                 "Do NOT reformat, summarise, or omit any rows."
             ),
+            # Namespace resource summary — always show TOTAL first, then per-pod
+            "get_namespace_resource_summary": (
+                "ALWAYS lead with the total figures at the top of the answer: "
+                "total CPU requested, total CPU limit, total memory requested, total memory limit. "
+                "Then list the per-pod breakdown. "
+                "Do NOT start by listing individual pods — the total is the answer to a calculate question."
+            ),
+            # Node resource requests — reproduce the per-node table
+            "get_node_resource_requests": (
+                "Reproduce the node resource table exactly. "
+                "Include every node with its CPU and memory figures."
+            ),
+            # Node health — preserve exact GPU and resource figures
+            "get_node_health": (
+                "Report the node health from the tool results. "
+                "For each node state: name, Ready status, any pressure conditions. "
+                "For GPU nodes include the EXACT GPU count and status string as returned — "
+                "e.g. 'GPU:2/2 (all in use — none free)' or 'GPU:0/2 (none in use — all free)'. "
+                "Do NOT paraphrase GPU status — copy the exact numbers and state label."
+            ),
+            # GPU info — exact model, count, and in-use/free status
+            "get_gpu_info": (
+                "Report GPU details from the tool results. "
+                "State the exact GPU model, total allocatable count, and how many are in use vs free. "
+                "Use the exact numbers from the tool output — do NOT say 'available and in use' "
+                "as that is contradictory. State in-use count and free count separately."
+            ),
         }
 
         # ── Multi-tool health sweep (3+ tools from broad health check) ────────
