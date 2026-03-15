@@ -3878,12 +3878,7 @@ K8S_TOOLS: dict = {
             "Do NOT use for actual usage/consumption — use query_prometheus_metrics instead. "
             "Do NOT use for per-node allocation — use get_node_resource_requests instead."
         ),
-        "parameters": {
-            "namespace": {
-                "type": "string",
-                "description": "Kubernetes namespace to summarise resources for.",
-            },
-        },
+        "parameters":  {"namespace": {"type": "string", "default": "default", "description": "Namespace to query. Defaults to 'default' — only override when the user explicitly names a namespace."}},
     },
 }
 
