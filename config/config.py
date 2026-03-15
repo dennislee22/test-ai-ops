@@ -1,11 +1,9 @@
 import os, sys, argparse, logging, logging.handlers
-import re
+import re, subprocess
 from pathlib import Path
 
-# Go up one extra level since this file is now inside the config/ folder
 _HERE = Path(__file__).resolve().parent.parent
 
-# --- ARGPARSE & ENV ---
 _pre = argparse.ArgumentParser(add_help=False)
 _pre.add_argument("--model-dir", default=None)
 _pre.add_argument("--embed-dir", default=None)
@@ -36,9 +34,22 @@ LANCEDB_DIR     = os.getenv("LANCEDB_DIR", str(_HERE / "lancedb"))
 
 ENABLE_FALLBACK_ROUTING: bool = True
 
-# --- MUTABLE GLOBALS (Modified by API) ---
+# --- GPU AUTO-DETECTION ---
+def _detect_gpu_count() -> int:
+    explicit = os.getenv("NUM_GPU")
+    if explicit is not None:
+        return int(explicit)
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            timeout=5, stderr=subprocess.DEVNULL)
+        return len([l for l in out.decode().strip().splitlines() if l.strip()])
+    except Exception:
+        pass
+    return 0
+
+NUM_GPU        = _detect_gpu_count()
 MAX_NEW_TOKENS = int(os.getenv("MAX_NEW_TOKENS", "4096"))
-NUM_GPU        = int(os.getenv("NUM_GPU", "0"))
 LLM_TIMEOUT    = int(os.getenv("LLM_TIMEOUT", "0")) or (900 if NUM_GPU == 0 else 300)
 
 def _read_cluster_server() -> str:
