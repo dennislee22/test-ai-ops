@@ -83,6 +83,9 @@ def _call_tool(name: str, args: dict, all_tools: dict) -> str:
 
     for k, v in params.items():
         if k not in args and "default" in v: args[k] = v["default"]
+        
+    args = {k: v for k, v in args.items() if k in params}
+    
     try:
         return str(fn(**args))
     except Exception as e:
