@@ -3630,7 +3630,7 @@ K8S_TOOLS: dict = {
     },
     "get_job_status": {
         "fn":          get_job_status,
-        "description": "Check batch Job and CronJob run status — highlights failed jobs.",
+        "description": "Check batch Job and CronJob run status.",
         "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
     },
     "get_hpa_status": {
