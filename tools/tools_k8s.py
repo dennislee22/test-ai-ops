@@ -893,98 +893,128 @@ def get_hpa_status(namespace: str = "all") -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_pvc_status(namespace: str = "all", status: str = "all") -> str:
-    _AM = {"ReadWriteOnce": "RWO", "ReadWriteMany": "RWX", "ReadOnlyMany": "ROX"}
+def get_pvc_status(namespace: str = "all", detail: bool = False) -> str:
+    _AM = {"ReadWriteOnce": "RWO", "ReadWriteMany": "RWX", "ReadOnlyMany": "ROX",
+           "ReadWriteOncePod": "RWOP"}
+
+    def _access(pvc):
+        modes = pvc.spec.access_modes or []
+        return ",".join(_AM.get(m, m) for m in modes) or "?"
+
     try:
         pvcs = (_core.list_persistent_volume_claim_for_all_namespaces()
                 if namespace == "all"
-                else _core.list_namespaced_persistent_volume_claim(namespace=namespace))
-        pods = (_core.list_pod_for_all_namespaces()
-                if namespace == "all"
-                else _core.list_namespaced_pod(namespace=namespace))
+                else _core.list_namespaced_persistent_volume_claim(
+                    namespace=namespace))
+        if not pvcs.items:
+            return f"No PVCs found in namespace '{namespace}'."
 
-        pvc_to_pods = {}
-        for pod in pods.items:
-            for vol in pod.spec.volumes or []:
-                if vol.persistent_volume_claim:
-                    claim = vol.persistent_volume_claim.claim_name
-                    ns = pod.metadata.namespace
-                    key = f"{ns}/{claim}"
-                    pvc_to_pods.setdefault(key, []).append(pod.metadata.name)
+        total = len(pvcs.items)
 
-        rows = []
+        if namespace != "all":
+            bound_by_am: dict = {}
+            non_bound = []
+            for pvc in pvcs.items:
+                phase = pvc.status.phase or "Unknown"
+                sc    = pvc.spec.storage_class_name or "default"
+                cap   = (pvc.status.capacity or {}).get("storage", "?")
+                vol   = pvc.spec.volume_name or "<unbound>"
+                am    = _access(pvc)
+                if phase == "Bound":
+                    if detail:
+                        key = f"{am} ({sc})"
+                        bound_by_am.setdefault(key, []).append(
+                            f"    {pvc.metadata.name}: {cap} | volume:{vol}")
+                    else:
+                        key = f"{am} ({sc})"
+                        bound_by_am[key] = bound_by_am.get(key, 0) + 1
+                else:
+                    non_bound.append(
+                        f"  {pvc.metadata.name}: {phase} ⚠ | "
+                        f"capacity:{cap} | access:{am} | class:{sc} | volume:{vol}")
+
+            bound_count = (sum(bound_by_am.values()) if not detail
+                           else sum(len(v) for v in bound_by_am.values()))
+            lines = [f"PVCs in '{namespace}': {total} total "
+                     f"({bound_count} Bound, {len(non_bound)} non-Bound)."]
+            if bound_by_am:
+                lines.append("Bound PVCs by access mode + storage class:")
+                for k, val in sorted(bound_by_am.items()):
+                    if detail:
+                        lines.append(f"  {k}: {len(val)} PVC(s)")
+                        lines.extend(val)
+                    else:
+                        lines.append(f"  {k}: {val} PVC(s)")
+            if non_bound:
+                lines.append("Non-Bound PVCs (full detail):")
+                lines.extend(non_bound)
+            return "\n".join(lines)
+
+        bound_by_am: dict = {}
+        non_bound = []
+        by_ns_am: dict = {}
         for pvc in pvcs.items:
-            ns = pvc.metadata.namespace
-            name = pvc.metadata.name
-            vol = pvc.spec.volume_name or "<unbound>"
-            cap = (pvc.status.capacity or {}).get("storage", "?")
-            sc = pvc.spec.storage_class_name or "default"
             phase = pvc.status.phase or "Unknown"
-            modes = pvc.spec.access_modes or []
-            access = ",".join(_AM.get(m, m) for m in modes) or "?"
+            sc    = pvc.spec.storage_class_name or "default"
+            cap   = (pvc.status.capacity or {}).get("storage", "?")
+            am    = _access(pvc)
+            ns_name = pvc.metadata.namespace
+            if phase == "Bound":
+                key = f"{am} ({sc})"
+                bound_by_am[key] = bound_by_am.get(key, 0) + 1
 
-            if status == "bound" and phase != "Bound":
-                continue
-            if status == "not_bound" and phase == "Bound":
-                continue
+                ns_entry = by_ns_am.setdefault(ns_name, {})
+                for mode in (pvc.spec.access_modes or []):
+                    short = _AM.get(mode, mode)
+                    ns_entry[short] = ns_entry.get(short, 0) + 1
+            else:
+                non_bound.append(
+                    f"  {pvc.metadata.namespace}/{pvc.metadata.name}: "
+                    f"{phase} ⚠ | access:{am} | class:{sc} capacity:{cap}")
 
-            key = f"{ns}/{name}"
-            pods_using = pvc_to_pods.get(key)
-            pod_str = ",".join(pods_using) if pods_using else "unbound"
+        bound = sum(bound_by_am.values())
+        lines = [f"PVCs across all namespaces: {total} total ({bound} Bound, {len(non_bound)} non-Bound)."]
+        if bound_by_am:
+            lines.append("Bound PVCs by access mode + storage class (cluster totals):")
+            for k, count in sorted(bound_by_am.items()):
+                lines.append(f"  {k}: {count} PVC(s)")
 
-            rows.append([ns, name, vol, cap, sc, access, phase, pod_str])
+        if by_ns_am:
+            lines.append("\nBound PVCs per namespace by access mode:")
 
-        if not rows:
-            return f"No PVCs with status '{status}' found in namespace '{namespace}'."
+            for ns_name in sorted(by_ns_am, key=lambda n: -sum(by_ns_am[n].values())):
+                counts = by_ns_am[ns_name]
+                summary = "  ".join(f"{am}:{n}" for am, n in sorted(counts.items()))
+                lines.append(f"  {ns_name}: {summary}  (total {sum(counts.values())})")
 
-        headers = ["NAMESPACE", "PVC", "VOLUME", "CAPACITY", "STORAGE CLASS", "ACCESS", "STATUS", "POD"]
-        col_widths = [max(len(str(row[i])) for row in rows + [headers]) for i in range(len(headers))]
-
-        lines = []
-        lines.append("  ".join(headers[i].ljust(col_widths[i]) for i in range(len(headers))))
-        lines.append("  ".join("-" * col_widths[i] for i in range(len(headers))))
-        for row in sorted(rows):
-            lines.append("  ".join(str(row[i]).ljust(col_widths[i]) for i in range(len(row))))
-
+        if non_bound:
+            lines.append("Non-Bound PVCs:")
+            lines.extend(non_bound)
         return "\n".join(lines)
-
     except ApiException as e:
         return f"K8s API error (PVC listing): {e.reason}"
 
 def get_persistent_volumes() -> str:
-    _AM = {"ReadWriteOnce": "RWO", "ReadWriteMany": "RWX", "ReadOnlyMany": "ROX"}
-
+    _AM = {"ReadWriteOnce": "RWO", "ReadWriteMany": "RWX", "ReadOnlyMany": "ROX",
+           "ReadWriteOncePod": "RWOP"}
     try:
         pvs = _core.list_persistent_volume()
         if not pvs.items:
             return "No PersistentVolumes found."
-
-        header = f"{'PV NAME':<35} {'STATUS':<10} {'CAPACITY':<8} {'ACCESS':<7} {'STORAGE CLASS':<15} {'RECLAIM POLICY':<15} {'CLAIM'}"
-        lines = [header, "-" * len(header)]
-
-        bound_count = 0
-        unbound_count = 0
-
-        for pv in sorted(pvs.items, key=lambda x: x.metadata.name):
-            name    = pv.metadata.name
-            status  = pv.status.phase or "Unknown"
-            capacity= (pv.spec.capacity or {}).get("storage", "?")
-            sc      = pv.spec.storage_class_name or "none"
-            policy  = pv.spec.persistent_volume_reclaim_policy or "?"
-            modes   = pv.spec.access_modes or []
-            access  = ",".join(_AM.get(m, m) for m in modes) or "?"
-            claim   = f"{pv.spec.claim_ref.namespace}/{pv.spec.claim_ref.name}" if pv.spec.claim_ref else "unbound"
-
-            if status == "Bound":
-                bound_count += 1
-            else:
-                unbound_count += 1
-
-            lines.append(f"{name:<35} {status:<10} {capacity:<8} {access:<7} {sc:<15} {policy:<15} {claim}")
-
-        lines.append(f"\nTotal PVs: {len(pvs.items)}, Bound: {bound_count}, Unbound: {unbound_count}")
+        lines = ["PersistentVolumes:"]
+        for pv in pvs.items:
+            phase    = pv.status.phase or "Unknown"
+            cap      = (pv.spec.capacity or {}).get("storage", "?")
+            policy   = pv.spec.persistent_volume_reclaim_policy or "?"
+            sc       = pv.spec.storage_class_name or "none"
+            modes    = pv.spec.access_modes or []
+            am       = ",".join(_AM.get(m, m) for m in modes) or "?"
+            claim    = (f"{pv.spec.claim_ref.namespace}/{pv.spec.claim_ref.name}"
+                        if pv.spec.claim_ref else "unbound")
+            lines.append(
+                f"  {pv.metadata.name}: {phase} | {cap} | access:{am} | "
+                f"class:{sc} policy:{policy} claim:{claim}")
         return "\n".join(lines)
-
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
@@ -1004,47 +1034,6 @@ def get_pv_usage(threshold: int = 80) -> str:
         except ValueError:
             pass
         return 0.0
-
-    try:
-        pvs = _core.list_persistent_volume()
-        if not pvs.items:
-            return "No PersistentVolumes found."
-
-        header = f"{'PV NAME':<35} {'CAPACITY':<8} {'CLAIM':<25} {'USAGE %':<8} {'STATUS':<10}"
-        lines = [header, "-" * len(header)]
-
-        high_usage_count = 0
-
-        for pv in sorted(pvs.items, key=lambda x: x.metadata.name):
-            name     = pv.metadata.name
-            capacity = (pv.spec.capacity or {}).get("storage", "0Gi")
-            cap_gib  = _parse_storage_to_gib(capacity)
-            claim    = f"{pv.spec.claim_ref.namespace}/{pv.spec.claim_ref.name}" if pv.spec.claim_ref else "unbound"
-            status   = pv.status.phase or "Unknown"
-
-            # Attempt to get actual usage via CSI metrics if possible
-            usage_pct = "N/A"
-            try:
-                if pv.spec.csi:
-                    node_name = pv.spec.csi.volume_handle.split("-")[0]
-                    # Placeholder for actual storage usage query
-                    # usage_gib = <query from node or CSI>
-                    # usage_pct = int(usage_gib / cap_gib * 100)
-            except Exception:
-                pass
-
-            usage_str = f"{usage_pct}%"
-            if usage_pct != "N/A" and usage_pct >= threshold:
-                high_usage_count += 1
-                usage_str += " ⚠"
-
-            lines.append(f"{name:<35} {capacity:<8} {claim:<25} {usage_str:<8} {status:<10}")
-
-        lines.append(f"\nTotal PVs: {len(pvs.items)}, Above {threshold}% usage: {high_usage_count}")
-        return "\n".join(lines)
-
-    except ApiException as e:
-        return f"K8s API error: {e.reason}"
 
     def _exec_df(pod_name: str, namespace: str, mount_path: str, container: str = None) -> str:
         try:
@@ -1223,6 +1212,8 @@ def get_pv_usage(threshold: int = 80) -> str:
         lines.extend(errors)
 
     return "\n".join(lines)
+
+# ── Prometheus metrics tool ──────────────────────────────────────────────────
 
 def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h", step: str = "60s", namespace: str = "") -> str:
     """
@@ -1609,6 +1600,8 @@ def get_coredns_health() -> str:
     DNS_NS = "kube-system"
     DNS_PATTERNS = ["coredns", "core-dns", "kube-dns"]
 
+    lines = ["CoreDNS Health Check:"]
+
     try:
         all_pods = _core.list_namespaced_pod(namespace=DNS_NS)
     except ApiException as e:
@@ -1629,50 +1622,153 @@ def get_coredns_health() -> str:
         and (p.status.phase or "").lower() != "succeeded"
     ]
 
-    lines = ["COREDNS POD STATUS:"]
-    if dns_pods:
-        lines.append(f"{'NAMESPACE':<12} {'POD NAME':<30} {'PHASE':<10} {'READY':<7} {'RESTARTS':<9} {'NODE':<12} {'STATUS'}")
-        lines.append("-" * 90)
-        for pod in dns_pods:
-            phase    = pod.status.phase or "Unknown"
-            ready_cs = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
-            total_cs = len(pod.status.container_statuses or [])
-            restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
-            node     = pod.spec.node_name or "?"
-            flag     = "✅" if phase == "Running" and ready_cs == total_cs else "❌"
-            lines.append(f"{pod.metadata.namespace:<12} {pod.metadata.name:<30} {phase:<10} {ready_cs}/{total_cs:<7} {restarts:<9} {node:<12} {flag}")
-    else:
-        lines.append(f"No CoreDNS pods found in '{DNS_NS}'.")
+    if not dns_pods:
+        lines.append(f"\n  No CoreDNS pods found in '{DNS_NS}'. Check if CoreDNS is deployed.")
+        return "\n".join(lines)
+
+    lines.append(f"\n  CoreDNS pods in '{DNS_NS}':")
+    running_pods = []
+    for pod in dns_pods:
+        phase     = pod.status.phase or "Unknown"
+        ready_cs  = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
+        total_cs  = len(pod.status.container_statuses or [])
+        restarts  = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
+        node      = pod.spec.node_name or "?"
+        flag      = "✅" if phase == "Running" and ready_cs == total_cs else "❌"
+        lines.append(
+            f"    {flag} {pod.metadata.name}  phase:{phase}  "
+            f"ready:{ready_cs}/{total_cs}  restarts:{restarts}  node:{node}"
+        )
+        if phase == "Running" and ready_cs == total_cs:
+            running_pods.append(pod)
 
     if autoscaler_pods:
-        lines.append("\nAUTOSCALER POD STATUS:")
-        lines.append(f"{'NAMESPACE':<12} {'POD NAME':<30} {'PHASE':<10} {'READY':<7} {'RESTARTS':<9} {'NODE':<12} {'STATUS'}")
-        lines.append("-" * 90)
+        lines.append(f"\n  CoreDNS autoscaler:")
         for pod in autoscaler_pods:
             phase    = pod.status.phase or "Unknown"
             ready_cs = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
             total_cs = len(pod.status.container_statuses or [])
             restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
-            node     = pod.spec.node_name or "?"
             flag     = "✅" if phase == "Running" and ready_cs == total_cs else "❌"
-            lines.append(f"{pod.metadata.namespace:<12} {pod.metadata.name:<30} {phase:<10} {ready_cs}/{total_cs:<7} {restarts:<9} {node:<12} {flag}")
+            lines.append(
+                f"    {flag} {pod.metadata.name}  phase:{phase}  "
+                f"ready:{ready_cs}/{total_cs}  restarts:{restarts}"
+            )
 
-    # SERVICES
     try:
         svcs = _core.list_namespaced_service(namespace=DNS_NS)
-        dns_svcs = [s for s in svcs.items if any(pat in s.metadata.name.lower() for pat in DNS_PATTERNS)]
+        dns_svcs = [
+            s for s in svcs.items
+            if any(pat in s.metadata.name.lower() for pat in DNS_PATTERNS)
+        ]
         if dns_svcs:
-            lines.append("\nCOREDNS SERVICES:")
-            lines.append(f"{'SERVICE':<20} {'CLUSTER IP':<15} {'PORTS'}")
-            lines.append("-" * 60)
+            lines.append("\n  CoreDNS service(s):")
             for svc in dns_svcs:
                 cluster_ip = svc.spec.cluster_ip or "?"
-                ports = ", ".join(f"{p.port}/{p.protocol}" for p in (svc.spec.ports or []))
-                lines.append(f"{svc.metadata.name:<20} {cluster_ip:<15} {ports}")
+                ports = ", ".join(
+                    f"{p.port}/{p.protocol}" for p in (svc.spec.ports or [])
+                )
+                lines.append(f"    {svc.metadata.name}  clusterIP:{cluster_ip}  ports:[{ports}]")
         else:
-            lines.append("\n⚠ No CoreDNS service found in kube-system.")
+            lines.append("\n  ⚠ No CoreDNS service found in kube-system.")
     except ApiException:
-        lines.append("\n⚠ Could not retrieve CoreDNS service.")
+        lines.append("\n  ⚠ Could not retrieve CoreDNS service.")
+
+    def _exec_in_pod(pod_name: str, ns: str, cmd: str) -> str:
+        try:
+            resp = _k8s_stream(
+                _core.connect_get_namespaced_pod_exec,
+                pod_name, ns,
+                command=["/bin/sh", "-c", cmd],
+                stderr=True, stdin=False, stdout=True, tty=False,
+                _preload_content=True,
+            )
+            return resp.strip() if isinstance(resp, str) else ""
+        except Exception as exc:
+            return f"[exec failed: {exc}]"
+
+    # Only use pods whose name matches the actual CoreDNS deployment pattern
+    coredns_test_pods = [p for p in running_pods
+                         if "coredns" in p.metadata.name.lower()
+                         and "autoscaler" not in p.metadata.name.lower()
+                         and not p.metadata.name.lower().startswith("helm-install-")]
+
+    if coredns_test_pods:
+        lines.append("\n  DNS resolution test:")
+
+        test_pod_name = coredns_test_pods[0].metadata.name
+        lines.append(f"  (running nslookup from pod: {test_pod_name})")
+
+        resolv = _exec_in_pod(test_pod_name, DNS_NS, "cat /etc/resolv.conf 2>/dev/null")
+        lines.append(f"  /etc/resolv.conf (from {test_pod_name}):")
+        for rline in resolv.splitlines():
+            lines.append(f"    {rline}")
+
+        nameserver = ""
+        search_domain = ""
+        for rline in resolv.splitlines():
+            rline = rline.strip()
+            if rline.startswith("nameserver"):
+                parts = rline.split()
+                if len(parts) >= 2:
+                    nameserver = parts[1]
+            if rline.startswith("search"):
+                parts = rline.split()
+                if len(parts) >= 2:
+                    search_domain = parts[1]
+
+        test_targets = []
+        if search_domain:
+            test_targets.append(f"console-cdp.apps.{search_domain}")
+        try:
+            ingresses = _net.list_ingress_for_all_namespaces()
+            for ing in (ingresses.items or []):
+                for rule in (ing.spec.rules or []):
+                    if rule.host:
+                        test_targets.append(rule.host)
+                        break
+                if len(test_targets) >= 3:
+                    break
+        except Exception:
+            pass
+
+        if not test_targets:
+            test_targets = ["kubernetes.default.svc.cluster.local"]
+
+        import logging as _logging
+        _dns_log = _logging.getLogger("tools.coredns")
+
+        _dns_log.info(f"[coredns] test_pod={test_pod_name} nameserver={nameserver!r} search={search_domain!r}")
+        _dns_log.info(f"[coredns] test_targets={test_targets[:3]}")
+
+        lines.append(f"\n  nslookup tests (nameserver: {nameserver or 'default'}, search: {search_domain or 'none'}):")
+        for target in test_targets[:3]:
+            cmd = f"nslookup {target} 2>&1"
+            _dns_log.info(f"[coredns] exec cmd: {cmd!r} in pod {test_pod_name}")
+            output = _exec_in_pod(test_pod_name, DNS_NS, cmd)
+            _dns_log.info(f"[coredns] raw output: {output!r}")
+            _out_lower = output.lower()
+            _is_failure = (
+                not output
+                or "[exec failed" in output
+                or "bad address" in _out_lower
+                or "can't resolve" in _out_lower
+                or "nxdomain" in _out_lower
+                or "server can't find" in _out_lower
+                or "no answer" in _out_lower
+                or "timed out" in _out_lower
+                or "connection refused" in _out_lower
+                or re.search(r'\bfailed\b', _out_lower) is not None
+            )
+            _has_address = bool(re.search(r'address[\s\d:]+\d+\.\d+\.\d+\.\d+', _out_lower))
+            ok = _has_address and not _is_failure
+            _dns_log.info(f"[coredns] has_address={_has_address} is_failure={_is_failure} ok={ok}")
+            flag = "✅" if ok else "❌"
+            lines.append(f"    {flag} nslookup {target}")
+            for oline in output.splitlines():
+                lines.append(f"       {oline}")
+    else:
+        lines.append("\n  ⚠ DNS resolution test skipped — no running CoreDNS pod available.")
 
     return "\n".join(lines)
 
@@ -1697,15 +1793,19 @@ def get_service_status(namespace: str = "all") -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_ingress_status(namespace: str = "all", name: str = "", port: int = 0) -> str:
-    def _get_ports(ing) -> list[int]:
+def get_ingress_status(namespace: str = "all", name: str = "",
+                       port: int = 0) -> str:
+    def _get_ports(ing) -> list:
         ports = set()
+
         if ing.spec.tls:
             ports.add(443)
+
         ann = ing.metadata.annotations or {}
         for v in ann.values():
             if "443" in str(v):
                 ports.add(443)
+
         for rule in (ing.spec.rules or []):
             if rule.http:
                 for path in (rule.http.paths or []):
@@ -1713,33 +1813,67 @@ def get_ingress_status(namespace: str = "all", name: str = "", port: int = 0) ->
                     p = svc.port.number if svc.port.number else None
                     if p:
                         ports.add(p)
-        return sorted(ports) or [80]
+
+        if not ports:
+            ports.add(80)
+        return sorted(ports)
+
+    def _fmt(ing) -> str:
+        cls   = ing.spec.ingress_class_name or "default"
+        hosts = [rule.host or "*" for rule in (ing.spec.rules or [])]
+        ports = _get_ports(ing)
+        lb    = [
+            addr.ip or addr.hostname
+            for status in (ing.status.load_balancer.ingress or [])
+            for addr in [status] if status
+        ] if ing.status.load_balancer else []
+        ann   = ing.metadata.annotations or {}
+        out = [
+            f"Ingress: {ing.metadata.namespace}/{ing.metadata.name}",
+            f"  Class:     {cls}",
+            f"  Hosts:     {', '.join(hosts) or 'none'}",
+            f"  Ports:     {', '.join(str(p) for p in ports)}",
+            f"  LB IP:     {', '.join(lb) or 'pending'}",
+        ]
+        if ann:
+            out.append("  Annotations:")
+            for k, v in ann.items():
+                out.append(f"    {k}: {v}")
+        for rule in (ing.spec.rules or []):
+            if rule.http:
+                out.append(f"  Rules ({rule.host or '*'}):")
+                for path in (rule.http.paths or []):
+                    svc = path.backend.service
+                    out.append(
+                        f"    {path.path or '/'} -> "
+                        f"{svc.name}:{svc.port.number or svc.port.name}"
+                        f"  [{path.path_type}]")
+        tls = ing.spec.tls or []
+        if tls:
+            out.append("  TLS:")
+            for t in tls:
+                out.append(f"    secret:{t.secret_name} hosts:{t.hosts}")
+        return "\n".join(out)
 
     try:
         all_ings = _net.list_ingress_for_all_namespaces()
         pool = all_ings.items
 
-        # Filter by port
         if port:
             pool = [ing for ing in pool if port in _get_ports(ing)]
             if not pool:
                 return f"No ingresses found exposing port {port} in any namespace."
-            lines = [f"Ingresses exposing port {port}:"]
-            lines.append(f"{'NAMESPACE':<12} {'INGRESS NAME':<30} {'HOSTS':<30} {'PORTS':<10} {'LB':<15}")
-            lines.append("-" * 100)
+            out = [f"Ingresses exposing port {port}:"]
             for ing in pool:
-                hosts = ", ".join(rule.host or "*" for rule in (ing.spec.rules or []))
-                ports = ", ".join(str(p) for p in _get_ports(ing))
-                lb = ", ".join(
-                    addr.ip or addr.hostname
-                    for status in (ing.status.load_balancer.ingress or [])
-                    for addr in [status] if status
-                ) if ing.status.load_balancer else "pending"
-                lines.append(f"{ing.metadata.namespace:<12} {ing.metadata.name:<30} {hosts:<30} {ports:<10} {lb:<15}")
-            return "\n".join(lines)
+                hosts = [rule.host or "*" for rule in (ing.spec.rules or [])]
+                ports = _get_ports(ing)
+                out.append(
+                    f"  {ing.metadata.namespace}/{ing.metadata.name}: "
+                    f"hosts:{hosts} ports:{ports}")
+            return "\n".join(out)
 
-        # Filter by name
         if name:
+
             if "." in name:
                 host_lower = name.lower()
                 matches = []
@@ -1749,69 +1883,43 @@ def get_ingress_status(namespace: str = "all", name: str = "", port: int = 0) ->
                             matches.append(ing)
                             break
                 if not matches:
-                    return f"No ingress found with hostname '{name}' in any namespace."
-                lines = []
-                for ing in matches:
-                    hosts = ", ".join(rule.host or "*" for rule in (ing.spec.rules or []))
-                    ports = ", ".join(str(p) for p in _get_ports(ing))
-                    lb = ", ".join(
-                        addr.ip or addr.hostname
-                        for status in (ing.status.load_balancer.ingress or [])
-                        for addr in [status] if status
-                    ) if ing.status.load_balancer else "pending"
-                    lines.append(f"{ing.metadata.namespace}/{ing.metadata.name} hosts:{hosts} ports:{ports} lb:{lb}")
-                return "\n".join(lines)
-            else:
-                if namespace != "all":
-                    try:
-                        ing = _net.read_namespaced_ingress(name=name, namespace=namespace)
-                        hosts = ", ".join(rule.host or "*" for rule in (ing.spec.rules or []))
-                        ports = ", ".join(str(p) for p in _get_ports(ing))
-                        lb = ", ".join(
-                            addr.ip or addr.hostname
-                            for status in (ing.status.load_balancer.ingress or [])
-                            for addr in [status] if status
-                        ) if ing.status.load_balancer else "pending"
-                        return f"{ing.metadata.namespace}/{ing.metadata.name} hosts:{hosts} ports:{ports} lb:{lb}"
-                    except ApiException as e:
-                        if e.status == 404:
-                            return f"Ingress '{name}' not found in namespace '{namespace}'."
-                        raise
-                else:
-                    matches = [i for i in pool if i.metadata.name == name]
-                    if not matches:
-                        return f"Ingress '{name}' not found in any namespace."
-                    lines = []
-                    for ing in matches:
-                        hosts = ", ".join(rule.host or "*" for rule in (ing.spec.rules or []))
-                        ports = ", ".join(str(p) for p in _get_ports(ing))
-                        lb = ", ".join(
-                            addr.ip or addr.hostname
-                            for status in (ing.status.load_balancer.ingress or [])
-                            for addr in [status] if status
-                        ) if ing.status.load_balancer else "pending"
-                        lines.append(f"{ing.metadata.namespace}/{ing.metadata.name} hosts:{hosts} ports:{ports} lb:{lb}")
-                    return "\n".join(lines)
+                    return (
+                        f"No ingress found with hostname '{name}' in any namespace. "
+                        f"Use get_ingress_status(namespace='all') to list all ingresses."
+                    )
+                return "\n\n".join(_fmt(ing) for ing in matches)
 
-        # Default: list all in namespace
+            if namespace != "all":
+                try:
+                    ing = _net.read_namespaced_ingress(name=name, namespace=namespace)
+                    return _fmt(ing)
+                except ApiException as e:
+                    if e.status == 404:
+                        return f"Ingress '{name}' not found in namespace '{namespace}'."
+                    raise
+            else:
+                matches = [i for i in pool if i.metadata.name == name]
+                if not matches:
+                    return f"Ingress '{name}' not found in any namespace."
+                return "\n\n".join(_fmt(ing) for ing in matches)
+
         if namespace != "all":
             pool = [i for i in pool if i.metadata.namespace == namespace]
         if not pool:
             return f"No Ingresses in '{namespace}'."
-        lines = [f"Ingresses in '{namespace}':"]
-        lines.append(f"{'NAMESPACE':<12} {'INGRESS NAME':<30} {'HOSTS':<30} {'PORTS':<10} {'LB':<15}")
-        lines.append("-" * 100)
+        out = [f"Ingresses in '{namespace}':"]
         for ing in pool:
-            hosts = ", ".join(rule.host or "*" for rule in (ing.spec.rules or []))
-            ports = ", ".join(str(p) for p in _get_ports(ing))
-            lb = ", ".join(
+            hosts = [rule.host or "*" for rule in (ing.spec.rules or [])]
+            ports = _get_ports(ing)
+            lb    = [
                 addr.ip or addr.hostname
                 for status in (ing.status.load_balancer.ingress or [])
                 for addr in [status] if status
-            ) if ing.status.load_balancer else "pending"
-            lines.append(f"{ing.metadata.namespace:<12} {ing.metadata.name:<30} {hosts:<30} {ports:<10} {lb:<15}")
-        return "\n".join(lines)
-
+            ] if ing.status.load_balancer else []
+            out.append(
+                f"  {ing.metadata.namespace}/{ing.metadata.name}: "
+                f"hosts:{hosts} ports:{ports} lb:{lb or 'pending'}")
+        return "\n".join(out)
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
@@ -3315,6 +3423,17 @@ def exec_db_query(namespace: str, sql: str,
                 f"WHERE table_name = '{tbl}' ORDER BY ordinal_position"
             )
 
+        # Translate MySQL user queries to PostgreSQL equivalents.
+        #
+        # IMPORTANT: mysql.user has columns (user, host, password).
+        # PostgreSQL equivalents:
+        #   user     → pg_shadow.usename
+        #   host     → pg_shadow has no per-user host restriction; use 'localhost' literal
+        #   password → pg_shadow.passwd  (hashed, but present — do NOT omit)
+        #
+        # Always rewrite to pg_shadow (not pg_user) so the password hash column is
+        # available.  Alias column names back to match the MySQL column names so the
+        # LLM can read them correctly without confusion.
         if re.search(r"mysql\.user", pg_sql, re.IGNORECASE):
             # Pattern: SELECT user, host FROM mysql.user  (the exact query that broke)
             pg_sql = re.sub(
@@ -3404,6 +3523,12 @@ def exec_db_query(namespace: str, sql: str,
     if len(output) > _KUBECTL_MAX_OUT:
         output = output[:_KUBECTL_MAX_OUT] + f"\n...[output truncated at {_KUBECTL_MAX_OUT} chars]"
 
+    # ── Column-header injection ──────────────────────────────────────────────
+    # psql -t -A produces bare pipe-delimited rows with NO header row.
+    # Without headers the LLM cannot reliably tell which value is username,
+    # which is password, which is host, etc.  We extract column names from the
+    # SELECT clause and prepend them as a header row so the model always has
+    # labelled context.
     def _extract_columns(sql_text: str) -> list[str]:
         """Best-effort extraction of SELECT column aliases or names."""
         m = re.match(r"^\s*SELECT\s+(.+?)\s+FROM\b", sql_text, re.IGNORECASE | re.DOTALL)
@@ -3499,9 +3624,10 @@ K8S_TOOLS: dict = {
             "namespace": {"type": "string", "default": "default", "description": "Namespace to query. Defaults to 'default' — only override when the user explicitly names a namespace."},
         },
     },
+
     "get_node_health": {
         "fn":          get_node_health,
-        "description": "Check node health, CPU/memory/disk pressure, allocatable resources, GPU usage, and node roles.",
+        "description": "Check node health, CPU/memory/disk pressure, and allocatable resources.",
         "parameters":  {},
     },
     "get_gpu_info": {
@@ -3556,31 +3682,27 @@ K8S_TOOLS: dict = {
     },
 
     "get_pvc_status": {
-        "fn": get_pvc_status,
+        "fn":          get_pvc_status,
         "description": (
-         "List PersistentVolumeClaims with key storage details in a table format. "
-         "Shows namespace, PVC name, bound volume ID, capacity, access mode (RWO/RWX/ROX), "
-         "PVC status phase (Bound/Pending/Lost), and which pod(s) are currently using the claim "
-         "or 'unbound' if no pod is mounting it. "
-         "Useful for quickly identifying unbound PVCs, orphaned storage, or workload storage usage. "
-
-         "NAMESPACE RULE — CRITICAL: if the user does not name a specific namespace, "
-         "ALWAYS use namespace='all'. Never infer or guess a namespace. "
-         "Only scope to a namespace when the user explicitly names one "
-         "(e.g. 'PVCs in vault', 'PVCs in longhorn-system')."
+            "Check PersistentVolumeClaims — access mode (RWO/RWX/ROX), capacity, storage class, bound volume. "
+            "Returns a grouped summary by access mode + storage class (concise, fast). "
+            "Set detail=true only when asked about a specific workload's individual PVC names. "
+            "NAMESPACE RULE — CRITICAL: if the user does not name a specific namespace, "
+            "ALWAYS use namespace='all'. Never infer or guess a namespace (e.g. 'longhorn-system', "
+            "'vault-system') when none was stated. Only scope to a specific namespace when the user "
+            "explicitly names one (e.g. 'PVCs in longhorn-system', 'PVCs for vault')."
         ),
-        "parameters": {
-         "namespace": {
-             "type": "string",
-             "default": "all",
-             "description": (
-                 "Namespace to query. Default is 'all'. "
-                 "Use 'all' whenever the user does not explicitly specify a namespace."
-             )
-         }
+        "parameters":  {
+            "namespace": {"type": "string",  "default": "all",
+                          "description": (
+                              "Namespace to query. DEFAULT is 'all' — use this whenever the user does "
+                              "not explicitly name a namespace. Only override when the user's question "
+                              "names a namespace directly."
+                          )},
+            "detail":    {"type": "boolean", "default": False,
+                          "description": "Set true only to list individual PVC names (slower on large namespaces)."},
         },
     },
-
     "get_persistent_volumes": {
         "fn":          get_persistent_volumes,
         "description": (
