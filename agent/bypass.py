@@ -117,10 +117,13 @@ def should_bypass_llm(tool_name: str, args: dict,
         _log.info(f"{tag}[bypass] PASS — {tool_name!r} is structured report (unconditional)")
         return True
 
-    if tool_name in ("query_prometheus_metrics", "get_node_resource_requests"):
+#    if tool_name in ("query_prometheus_metrics", "get_node_resource_requests"):
+#        _log.info(f"{tag}[bypass] PASS — {tool_name!r} is structured report (unconditional)")
+#        return True
+    if tool_name in ("query_prometheus_metrics"):
         _log.info(f"{tag}[bypass] PASS — {tool_name!r} is structured report (unconditional)")
         return True
-
+    
     matched_synth = next((p for p in ALWAYS_SYNTHESISE if re.search(p, lq)), None)
     if matched_synth:
         _log.info(f"{tag}[bypass] SKIP — {tool_name!r} question matched ALWAYS_SYNTHESISE pattern {matched_synth!r}")
