@@ -17,7 +17,7 @@ from langgraph.graph.message import add_messages
 
 import config.config as config
 from rag import init_db, get_doc_stats, RAG_TOOLS, rag_retrieve, ingest_directory, ingest_file, ingest_excel
-from rag.retrieve import _MSG_NO_INGEST, _is_kb_topic
+from rag.retrieve import _MSG_NO_INGEST
 from tools.tools_k8s import K8S_TOOLS, reload_kubeconfig, _core as _k8s_core
 from agent.bypass import should_bypass_llm, build_direct_answer
 
@@ -81,14 +81,10 @@ def _call_tool(name: str, args: dict, all_tools: dict) -> str:
     if not cfg: return f"Tool '{name}' not found."
     fn, params = cfg["fn"], cfg.get("parameters", {})
 
-    valid_args = {k: v for k, v in args.items() if k in params}
-
     for k, v in params.items():
-        if k not in valid_args and "default" in v: 
-            valid_args[k] = v["default"]
-            
+        if k not in args and "default" in v: args[k] = v["default"]
     try:
-        return str(fn(**valid_args))
+        return str(fn(**args))
     except Exception as e:
         _log_ag.error(f"[_call_tool] {name} raised: {e}", exc_info=True)
         return f"Tool '{name}' failed: {e}"
@@ -236,7 +232,7 @@ def build_agent():
 
         _EXEMPT_TOOLS = {
             "get_coredns_health", "get_node_health", "get_gpu_info", 
-            "get_pv_usage", "get_persistent_volumes", "get_pvc_status", "query_prometheus_metrics",
+            "get_pv_usage", "get_persistent_volumes", "query_prometheus_metrics",
             "get_node_resource_requests", "rag_search", "kubectl_exec", "exec_db_query"
         }
         
@@ -270,11 +266,8 @@ def build_agent():
                 "Format: `namespace/pod-name`: <phase> | Restarts: <N> | Cause: <reason>. Do NOT skip any pod."
             ),
             "get_pv_usage": (
-                "Reproduce the storage usage report in full — do NOT summarise."
+                "Reproduce the storage usage report in full — do NOT summarise. "
                 "Include every PVC entry: those nearing capacity, within capacity, AND skipped."
-            ),
-            "get_coredns_health": (
-                "Reproduce the tool report in full — do NOT summarise."
             ),
             "describe_pod": (
                 "Report the pod details from the tool results. "
@@ -291,7 +284,7 @@ def build_agent():
             ),
             "get_node_resource_requests": (
                 "Reproduce the node resource table exactly. "
-                "Include every node with its CPU, GPU and memory figures."
+                "Include every node with its CPU and memory figures."
             ),
             "kubectl_exec": (
                 "Reproduce the command output VERBATIM. "
@@ -659,9 +652,12 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
 def _llm_synthesise(context: str, question: str, top_k: int = 50, max_tokens: int = 0) -> str:
     _kb_is_empty = not context or not context.strip() or (isinstance(context, str) and context.startswith("KB_EMPTY:"))
     _no_match    = (isinstance(context, str) and context.strip() == "No relevant documentation found.")
-    _no_context  = _kb_is_empty or _no_match
     
-    if _no_context and _is_kb_topic(question): return _MSG_NO_INGEST
+    # --- STRICT RAG GUARDRAIL ---
+    if _kb_is_empty: 
+        return _MSG_NO_INGEST
+    if _no_match:
+        return "I'm sorry, I could not find any relevant documentation in the knowledge base to answer your question."
     
     try: tok, mdl, is_q3 = globals()["_kb_tokenizer"], globals()["_kb_model"], globals()["_kb_is_qwen3"]
     except KeyError: return context or ""
@@ -988,6 +984,16 @@ async def api_namespaces():
 async def api_rag_stats():
     return get_doc_stats()
 
+@app.get("/api/rag/files")
+async def api_rag_files():
+    docs_dir = config._HERE / "docs"
+    if not docs_dir.exists():
+        return {"count": 0, "files": []}
+    
+    # List all supported files currently in the docs directory
+    files = [f.name for f in docs_dir.iterdir() if f.is_file() and f.suffix.lower() in (".md", ".pdf", ".txt", ".xlsx", ".xls")]
+    return {"count": len(files), "files": sorted(files)}
+
 @app.get("/api/rag/query")
 async def api_rag_query(query: str, top_k: int = 50, sheet: Optional[str] = None):
     if not query.strip(): return {"answer": "", "context": ""}
@@ -1013,8 +1019,12 @@ async def api_kb_ask(req: KbAskRequest):
     context = await asyncio.get_event_loop().run_in_executor(None, lambda: rag_retrieve(query=req.q, top_k=top_k, sheet=sheet))
     no_rag = not context.strip() or context == "No relevant documentation found." or (isinstance(context, str) and context.startswith("KB_EMPTY:"))
     
-    if no_rag and _is_kb_topic(req.q): return {"answer": _MSG_NO_INGEST, "query": req.q, "top_k": top_k}
-    answer = await asyncio.get_event_loop().run_in_executor(None, lambda: _llm_synthesise(None if no_rag else context, req.q, top_k, req.max_tokens))
+    # --- STRICT RAG GUARDRAIL ---
+    if no_rag: 
+        ans = _MSG_NO_INGEST if "KB_EMPTY" in str(context) else "No relevant documentation found in the Knowledge Base."
+        return {"answer": ans, "query": req.q, "top_k": top_k}
+        
+    answer = await asyncio.get_event_loop().run_in_executor(None, lambda: _llm_synthesise(context, req.q, top_k, req.max_tokens))
     return {"answer": answer or "I'm sorry, I was unable to generate a response.", "query": req.q, "top_k": top_k}
 
 @app.post("/api/kb/stream")
@@ -1038,11 +1048,15 @@ async def api_kb_stream(req: KbAskRequest):
         try:
             context = await _asyncio.get_event_loop().run_in_executor(None, lambda: rag_retrieve(query=q, top_k=top_k, sheet=sheet))
             no_rag = not context.strip() or context == "No relevant documentation found." or (isinstance(context, str) and context.startswith("KB_EMPTY:"))
-            if no_rag and _is_kb_topic(q):
-                yield _sse({"type": "result", "answer": _MSG_NO_INGEST, "query": q, "elapsed": round(_time.time() - start, 1), "top_k": top_k})
+            
+            # --- STRICT RAG GUARDRAIL ---
+            if no_rag:
+                ans = _MSG_NO_INGEST if "KB_EMPTY" in str(context) else "No relevant documentation found in the Knowledge Base."
+                yield _sse({"type": "result", "answer": ans, "query": q, "elapsed": round(_time.time() - start, 1), "top_k": top_k})
                 return
-            yield _sse({"type": "status", "text": f"Found match(es) — synthesising answer…" if not no_rag else "No matches found — generating response…"})
-            answer = await _asyncio.get_event_loop().run_in_executor(None, lambda: _llm_synthesise(None if no_rag else context, q, top_k, req.max_tokens))
+                
+            yield _sse({"type": "status", "text": f"Found match(es) — synthesising answer…"})
+            answer = await _asyncio.get_event_loop().run_in_executor(None, lambda: _llm_synthesise(context, q, top_k, req.max_tokens))
             yield _sse({"type": "result", "answer": answer or "I'm sorry, I was unable to generate a response.", "query": q, "elapsed": round(_time.time() - start, 1), "top_k": top_k})
         except Exception as exc: yield _sse({"type": "error", "text": str(exc)})
     return StreamingResponse(_generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
