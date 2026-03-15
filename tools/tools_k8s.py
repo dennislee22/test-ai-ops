@@ -798,16 +798,21 @@ def get_node_health() -> str:
         except Exception:
             pass
 
-        lines      = ["Node health:"]
-        gpu_nodes  = 0
+        lines        = ["Node health:"]
+        gpu_nodes    = 0
+        tainted_nodes = 0
+
         for node in nodes.items:
-            roles    = [k.replace("node-role.kubernetes.io/", "")
-                        for k in (node.metadata.labels or {})
-                        if k.startswith("node-role.kubernetes.io/")] or ["worker"]
-            conds    = {c.type: c.status for c in (node.status.conditions or [])}
+            roles = [k.replace("node-role.kubernetes.io/", "")
+                     for k in (node.metadata.labels or {})
+                     if k.startswith("node-role.kubernetes.io/")] or ["worker"]
+
+            conds = {c.type: c.status for c in (node.status.conditions or [])}
+
             pressure = [t for t in ["MemoryPressure", "DiskPressure", "PIDPressure"]
                         if conds.get(t) == "True"]
-            alloc    = node.status.allocatable or {}
+
+            alloc = node.status.allocatable or {}
 
             gpu_allocatable = 0
             for key in alloc:
@@ -816,10 +821,12 @@ def get_node_health() -> str:
                         gpu_allocatable += int(alloc[key])
                     except (ValueError, TypeError):
                         pass
+
             if gpu_allocatable:
                 gpu_nodes += 1
 
             gpu_used = gpu_used_by_node.get(node.metadata.name, 0)
+
             if gpu_allocatable:
                 _gpu_free = gpu_allocatable - gpu_used
                 if gpu_used == 0:
@@ -832,18 +839,56 @@ def get_node_health() -> str:
             else:
                 gpu_str = ""
 
+            # --- Taints ---
+            taints = node.spec.taints or []
+            if taints:
+                tainted_nodes += 1
+                taint_str = ", ".join(
+                    f"{t.key}={t.value}:{t.effect}" if t.value else f"{t.key}:{t.effect}"
+                    for t in taints
+                )
+                taint_str = f" | Taints: {taint_str}"
+            else:
+                taint_str = ""
+
+            # --- Important labels ---
+            labels = node.metadata.labels or {}
+
+            sched_labels = []
+            for k in (
+                "topology.kubernetes.io/zone",
+                "topology.kubernetes.io/region",
+                "node.kubernetes.io/instance-type",
+                "beta.kubernetes.io/instance-type",
+                "kubernetes.io/os",
+                "kubernetes.io/arch",
+            ):
+                if k in labels:
+                    sched_labels.append(f"{k.split('/')[-1]}={labels[k]}")
+
+            label_str = f" | Labels: {', '.join(sched_labels)}" if sched_labels else ""
+
             lines.append(
                 f"  {node.metadata.name} [{','.join(roles)}]: "
                 f"Ready={conds.get('Ready','?')}"
                 + (f" ⚠ {','.join(pressure)}" if pressure else "")
                 + f" | CPU:{alloc.get('cpu','n/a')} Mem:{alloc.get('memory','n/a')}"
-                + gpu_str)
+                + gpu_str
+                + taint_str
+                + label_str
+            )
 
-        lines.append(f"Summary: {len(nodes.items)} node(s) total, {gpu_nodes} with GPU(s).")
+        lines.append(
+            f"Summary: {len(nodes.items)} node(s) total, "
+            f"{gpu_nodes} with GPU(s), "
+            f"{tainted_nodes} tainted."
+        )
+
         return "\n".join(lines)
+
     except ApiException as e:
         return f"K8s API error: {e.reason}"
-
+        
 def get_gpu_info() -> str:
     try:
         nodes = _core.list_node()
@@ -3835,16 +3880,27 @@ K8S_TOOLS: dict = {
 
     "get_node_health": {
         "fn":          get_node_health,
-        "description": "Check node health, CPU/memory/disk pressure, and allocatable resources.",
+        "description": (
+            "Check Kubernetes node health and scheduling status. "
+            "Shows node readiness, memory/disk/PID pressure conditions, allocatable CPU and memory, "
+            "GPU usage (used vs allocatable), node roles, taints, and key scheduling labels. "
+            "Use for cluster health, node availability, scheduling constraints, or troubleshooting "
+            "why pods cannot schedule on certain nodes. "
+            "Do NOT use for GPU hardware details (model, driver, memory) — use get_gpu_info instead."
+        ),
         "parameters":  {},
     },
+
     "get_gpu_info": {
         "fn":          get_gpu_info,
         "description": (
-            "Get GPU model, memory, count, and driver details from Kubernetes node labels and capacity. "
-            "Use for any question about GPUs in the cluster: 'what GPU does the cluster have', "
-            "'how much GPU memory', 'which node has a GPU', 'GPU model'. "
-            "Returns nvidia.com/gpu.product, gpu.memory, gpu.count, and capacity per node."
+            "Show GPU hardware details detected on Kubernetes nodes. "
+            "Returns GPU model, memory size, GPU count, driver version, and node capacity "
+            "based on node labels such as nvidia.com/gpu.product and GPU capacity fields. "
+            "Use for questions like: 'what GPU model is in the cluster', "
+            "'which nodes have GPUs', 'how many GPUs are available', "
+            "'GPU memory per node', or 'GPU hardware details'. "
+            "Do NOT use for node health or GPU usage — use get_node_health instead."
         ),
         "parameters":  {},
     },
