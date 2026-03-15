@@ -81,10 +81,14 @@ def _call_tool(name: str, args: dict, all_tools: dict) -> str:
     if not cfg: return f"Tool '{name}' not found."
     fn, params = cfg["fn"], cfg.get("parameters", {})
 
+    valid_args = {k: v for k, v in args.items() if k in params}
+
     for k, v in params.items():
-        if k not in args and "default" in v: args[k] = v["default"]
+        if k not in valid_args and "default" in v: 
+            valid_args[k] = v["default"]
+            
     try:
-        return str(fn(**args))
+        return str(fn(**valid_args))
     except Exception as e:
         _log_ag.error(f"[_call_tool] {name} raised: {e}", exc_info=True)
         return f"Tool '{name}' failed: {e}"
@@ -232,7 +236,7 @@ def build_agent():
 
         _EXEMPT_TOOLS = {
             "get_coredns_health", "get_node_health", "get_gpu_info", 
-            "get_pv_usage", "get_persistent_volumes", "query_prometheus_metrics",
+            "get_pv_usage", "get_persistent_volumes", "get_pvc_status", "query_prometheus_metrics",
             "get_node_resource_requests", "rag_search", "kubectl_exec", "exec_db_query"
         }
         
@@ -265,18 +269,12 @@ def build_agent():
                 "List EVERY pod from the tool results. One bullet per pod. "
                 "Format: `namespace/pod-name`: <phase> | Restarts: <N> | Cause: <reason>. Do NOT skip any pod."
             ),
-            "get_pvc_status": (
-                "List the PVCs from the results. Format per PVC: namespace/name, phase, storage class, capacity. "
-                "If the user asks for 'storage type', explicitly report the 'storage class'. "
-                "Do NOT include Bound PVCs unless the user asked for all PVCs."
-            ),
             "get_pv_usage": (
-                "Reproduce the storage usage report in full — do NOT summarise. "
+                "Reproduce the storage usage report in full — do NOT summarise."
                 "Include every PVC entry: those nearing capacity, within capacity, AND skipped."
             ),
             "get_coredns_health": (
-                "Report CoreDNS health from the tool results. "
-                "State each pod's phase and readiness. Include DNS resolution test results exactly as shown."
+                "Reproduce the tool report in full — do NOT summarise."
             ),
             "describe_pod": (
                 "Report the pod details from the tool results. "
@@ -293,7 +291,7 @@ def build_agent():
             ),
             "get_node_resource_requests": (
                 "Reproduce the node resource table exactly. "
-                "Include every node with its CPU and memory figures."
+                "Include every node with its CPU, GPU and memory figures."
             ),
             "kubectl_exec": (
                 "Reproduce the command output VERBATIM. "
