@@ -3883,10 +3883,11 @@ K8S_TOOLS: dict = {
         "description": (
             "Check Kubernetes node health and scheduling status. "
             "Shows node readiness, memory/disk/PID pressure conditions, allocatable CPU and memory, "
-            "GPU usage (used vs allocatable), node roles, taints, and key scheduling labels. "
-            "Use for cluster health, node availability, scheduling constraints, or troubleshooting "
-            "why pods cannot schedule on certain nodes. "
-            "Do NOT use for GPU hardware details (model, driver, memory) — use get_gpu_info instead."
+            "GPU usage, node roles, taints, and key labels. "
+            "Use for questions like: 'which node has taints', 'are nodes healthy', "
+            "'node readiness', or 'why pods cannot schedule'. "
+            "Taints are defined on nodes and restrict scheduling. Labels provide metadata and scheduling hints. "
+            "Do NOT use this tool for pod-level tolerations — use pod tools instead."
         ),
         "parameters":  {},
     },
