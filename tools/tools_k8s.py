@@ -848,25 +848,86 @@ def get_statefulset_status(namespace: str = "all") -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_job_status(namespace: str = "all") -> str:
+def get_job_status(namespace: str = "all", show_all: bool = False, raw_output: bool = False, failed_only: bool = False) -> str:
+    """
+    List Kubernetes Jobs in a namespace or across all namespaces.
+    By default only FAILED jobs are returned (failed or unknown status).
+    Set show_all=True to include all jobs including healthy/complete ones.
+    Raw output produces table-like kubectl style.
+    """
     try:
         jobs = (_batch.list_job_for_all_namespaces()
                 if namespace == "all"
                 else _batch.list_namespaced_job(namespace=namespace))
+
         if not jobs.items:
             return f"No Jobs in '{namespace}'."
-        lines = [f"Jobs in '{namespace}':"]
-        for j in jobs.items:
+
+        failed_jobs = []
+        healthy_jobs = []
+
+        for j in sorted(jobs.items, key=lambda j: (j.metadata.namespace, j.metadata.name)):
             active    = j.status.active    or 0
             succeeded = j.status.succeeded or 0
             failed    = j.status.failed    or 0
-            status    = ("✓ Complete" if succeeded > 0 and active == 0
-                         else "⚠ Failed" if failed > 0
-                         else "⏳ Running")
-            lines.append(
-                f"  {j.metadata.namespace}/{j.metadata.name}: {status} "
-                f"| Active:{active} Succeeded:{succeeded} Failed:{failed}")
+
+            # Determine job status
+            if succeeded > 0 and active == 0:
+                status = "✓ Complete"
+            elif failed > 0:
+                status = "⚠ Failed"
+            else:
+                status = "⏳ Running"
+
+            entry = f"{j.metadata.namespace}/{j.metadata.name}: {status} | Active:{active} Succeeded:{succeeded} Failed:{failed}"
+
+            if failed_only:
+                if failed > 0:
+                    failed_jobs.append(entry)
+            else:
+                if status == "⚠ Failed":
+                    failed_jobs.append(entry)
+                else:
+                    healthy_jobs.append(entry)
+
+        # Prepare output
+        if raw_output:
+            hdr = f"{'NAMESPACE':<22} {'NAME':<55} {'STATUS':<12} {'ACTIVE':<7} {'SUCCEEDED':<9} {'FAILED':<7}"
+            rows = [hdr, "-"*len(hdr)]
+            for j in sorted(jobs.items, key=lambda j: (j.metadata.namespace, j.metadata.name)):
+                active    = j.status.active    or 0
+                succeeded = j.status.succeeded or 0
+                failed    = j.status.failed    or 0
+                if succeeded > 0 and active == 0:
+                    status = "Complete"
+                elif failed > 0:
+                    status = "Failed"
+                else:
+                    status = "Running"
+                rows.append(
+                    f"{j.metadata.namespace:<22} {j.metadata.name:<55} {status:<12} "
+                    f"{active:<7} {succeeded:<9} {failed:<7}"
+                )
+            return "\n".join(rows)
+
+        # Human-readable output
+        lines = []
+        total = len(jobs.items)
+        lines.append(f"Jobs in '{namespace}': {total} total.")
+
+        if failed_jobs:
+            lines.append(f"\nFailed/Unhealthy jobs ({len(failed_jobs)}):")
+            lines.extend(failed_jobs)
+        else:
+            lines.append("\nFailed/Unhealthy jobs (0):")
+            lines.append("  None")
+
+        if show_all and healthy_jobs:
+            lines.append(f"\nHealthy/Complete jobs ({len(healthy_jobs)}):")
+            lines.extend(healthy_jobs)
+
         return "\n".join(lines)
+
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
@@ -3526,7 +3587,7 @@ K8S_TOOLS: dict = {
     "get_pod_status": {
         "fn":          get_pod_status,
         "description": (
-            "List pods in a namespace. "
+            "Check pods in a namespace. "
             "By default only UNHEALTHY pods are returned (non-Running, not ready, or high restarts). "
             "Set show_all=true to list ALL pods including healthy ones — ALWAYS use show_all=true "
             "when the user asks 'how many pods', 'list pods', 'what pods are running', or "
@@ -3630,8 +3691,34 @@ K8S_TOOLS: dict = {
     },
     "get_job_status": {
         "fn":          get_job_status,
-        "description": "Check batch Job and CronJob run status.",
-        "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
+        "description": (
+            "List Kubernetes Jobs in a namespace or across all namespaces. "
+            "By default only FAILED jobs are returned (active jobs with failures). "
+            "Set show_all=true to include all jobs including healthy/complete ones. "
+            "Use failed_only=true to return only failed jobs, similar to phase_only in pods. "
+            "Raw output produces kubectl-style table format. "
+            "If no namespace is specified, ALWAYS use namespace='all'. "
+            "Only query a specific namespace when the user explicitly names one."
+        ),
+        "parameters":  {
+            "namespace":   {"type": "string",  "default": "all",
+                            "description": (
+                                "Namespace to query. Defaults to 'all' — only override if the user explicitly names a namespace."
+                            )},
+            "show_all":    {"type": "boolean", "default": False,
+                            "description": (
+                                "Set true to include healthy/complete jobs in the output."
+                            )},
+            "raw_output":  {"type": "boolean", "default": False,
+                            "description": (
+                                "Set true to return kubectl-style tabular output (use when user asks to 'show', 'display', or wants 'the output' of jobs)."
+                            )},
+            "failed_only": {"type": "boolean", "default": False,
+                            "description": (
+                                "Set true to return only failed jobs. "
+                                "Similar to phase_only in pods — ignores running or complete jobs."
+                            )},
+        },
     },
     "get_hpa_status": {
         "fn":          get_hpa_status,
