@@ -23,8 +23,14 @@ from agent.bypass import should_bypass_llm, build_direct_answer
 from agent.routing import default_tools_for, resolve_namespace
 
 _HERE = Path(__file__).resolve().parent
-
 _decode_secrets_ctx: ContextVar[bool] = ContextVar("decode_secrets", default=False)
+
+# Alias loggers for direct use in the agent logic
+_log_ag = config._log_ag
+_log_rag = config._log_rag
+logger = config.logger
+
+# ── 1. SCHEMAS ───────────────────────────────────────────────────────────────
 
 class HistoryMessage(BaseModel): role: str; content: str
 class ChatRequest(BaseModel): message: str; decode_secrets: bool = False; history: list[HistoryMessage] = []; max_new_tokens: int = 0
@@ -36,14 +42,16 @@ class PromptUpdateRequest(BaseModel): content: str
 class ToolCallRequest(BaseModel): name: str; args: dict = {}
 class IngestRequest(BaseModel): docs_dir: str; force: bool = False
 
+# ── 2. FULL AGENT & LLM LOGIC ────────────────────────────────────────────────
+
 _PROMPT_FILE = config._HERE / "config" / "system_prompt.txt"
 
 def _load_system_prompt() -> str:
     if _PROMPT_FILE.exists():
         text = _PROMPT_FILE.read_text(encoding="utf-8")
-        config.logger.info(f"[Prompt] Loaded config/system_prompt.txt ({len(text)} chars)")
+        logger.info(f"[Prompt] Loaded config/system_prompt.txt ({len(text)} chars)")
         return text
-    config.logger.warning("[Prompt] system_prompt.txt not found — using built-in fallback prompt")
+    logger.warning("[Prompt] system_prompt.txt not found — using built-in fallback prompt")
     return (
         "You are an expert Kubernetes operations assistant.\n"
         "ALWAYS call tools first. NEVER fabricate data.\n"
@@ -80,7 +88,7 @@ def _call_tool(name: str, args: dict, all_tools: dict) -> str:
     try:
         return str(fn(**args))
     except Exception as e:
-        config.logger.error(f"[_call_tool] {name} raised: {e}", exc_info=True)
+        _log_ag.error(f"[_call_tool] {name} raised: {e}", exc_info=True)
         return f"Tool '{name}' failed: {e}"
 
 class AgentState(TypedDict):
@@ -92,7 +100,7 @@ class AgentState(TypedDict):
     req_id: str
 
 def _build_llm():
-    config.logger.info(f"[LLM] Loading model: {config.LLM_MODEL}")
+    _log_ag.info(f"[LLM] Loading model: {config.LLM_MODEL}")
     is_gguf = config.LLM_MODEL.lower().endswith(".gguf") or "gguf" in config.LLM_MODEL.lower()
 
     if is_gguf:
@@ -101,7 +109,7 @@ def _build_llm():
     try:
         import transformers, torch
         is_qwen3 = "qwen3" in config.LLM_MODEL.lower()
-        if is_qwen3: config.logger.info("[LLM] Qwen3 detected — native tool-calling via apply_chat_template")
+        if is_qwen3: _log_ag.info("[LLM] Qwen3 detected — native tool-calling via apply_chat_template")
 
         device_map = "auto" if config.NUM_GPU > 0 else "cpu"
         dtype = torch.bfloat16 if config.NUM_GPU > 0 else torch.float32
@@ -111,10 +119,10 @@ def _build_llm():
             config.LLM_MODEL, torch_dtype=dtype, device_map=device_map, trust_remote_code=True, use_cache=True
         )
         model.eval()
-        config.logger.info("[LLM] Model loaded")
+        _log_ag.info("[LLM] Model loaded")
         return tokenizer, model, is_qwen3
     except Exception as e:
-        config.logger.error(f"[LLM] Load failed: {e}")
+        _log_ag.error(f"[LLM] Load failed: {e}")
         raise
 
 def _build_llm_gguf():
@@ -125,7 +133,7 @@ def _build_llm_gguf():
     n_ctx      = int(os.environ.get("GGUF_N_CTX", "8192"))
     n_threads  = int(os.environ.get("GGUF_N_THREADS", str(os.cpu_count() or 4)))
 
-    config.logger.info(f"[LLM/GGUF] Loading {model_path} | ctx={n_ctx} threads={n_threads}")
+    _log_ag.info(f"[LLM/GGUF] Loading {model_path} | ctx={n_ctx} threads={n_threads}")
     if not os.path.isfile(model_path):
         try:
             from huggingface_hub import hf_hub_download
@@ -136,7 +144,7 @@ def _build_llm_gguf():
                     repo_id, filename, quant = "/".join(parts[:2]), parts[-1], parts[-1]
                 try: 
                     model_path = hf_hub_download(repo_id=repo_id, filename=filename)
-                    config.logger.info(f"[LLM/GGUF] Downloaded {filename} from {repo_id}")
+                    _log_ag.info(f"[LLM/GGUF] Downloaded {filename} from {repo_id}")
                     break
                 except Exception: continue
         except ImportError: pass
@@ -144,14 +152,14 @@ def _build_llm_gguf():
     if not os.path.isfile(model_path): raise FileNotFoundError(f"GGUF model file not found: {model_path}")
     model = Llama(model_path=model_path, n_ctx=n_ctx, n_threads=n_threads, n_gpu_layers=0, verbose=False)
     is_qwen3 = "qwen" in model_path.lower()
-    config.logger.info(f"[LLM/GGUF] Model loaded (CPU, {n_threads} threads, ctx={n_ctx})")
+    _log_ag.info(f"[LLM/GGUF] Model loaded (CPU, {n_threads} threads, ctx={n_ctx})")
     return None, model, is_qwen3
 
 def build_agent():
     all_tools = {**K8S_TOOLS, **RAG_TOOLS}
     tool_schemas = [_registry_to_openai_schema(n, c) for n, c in all_tools.items()]
     tool_names   = [s["function"]["name"] for s in tool_schemas]
-    config.logger.info(f"[build_agent] {len(tool_schemas)} tools: {tool_names}")
+    _log_ag.info(f"[build_agent] {len(tool_schemas)} tools: {tool_names}")
 
     tokenizer, model, _is_qwen3 = _build_llm()
     globals()["_kb_tokenizer"], globals()["_kb_model"], globals()["_kb_is_qwen3"] = tokenizer, model, _is_qwen3
@@ -160,21 +168,185 @@ def build_agent():
     prompt = (_sys_prompt + "\n/no_think") if _is_qwen3 else _sys_prompt
 
     def _prepare_messages_for_hf(msgs: list, req_id: str = "") -> list:
-        if not msgs: return msgs
+        if not msgs:
+            return msgs
+
         has_tool_results = any(isinstance(m, ToolMessage) for m in msgs)
-        if not has_tool_results: return [m for m in msgs if isinstance(m, (HumanMessage, SystemMessage))]
+
+        if not has_tool_results:
+            filtered = [m for m in msgs if isinstance(m, (HumanMessage, SystemMessage))]
+            _log_ag.debug(f"[REQ:{req_id}] [prepare_msgs] tool selection — passing {len(filtered)} msg(s)")
+            return filtered
 
         original_question = next((m.content for m in msgs if isinstance(m, HumanMessage)), "")
         tool_results = [m for m in msgs if isinstance(m, ToolMessage)]
-        
+
+        _oq_lower = original_question.lower()
+        _NS_WORDS = ("namespace", " ns=", " ns ", "in namespace", "for namespace",
+                     "in the namespace", "-n ", "cdp", "cmlwb", "longhorn", "vault",
+                     "cattle", "rancher", "cert", "default namespace")
+        _ns_specified = any(k in _oq_lower for k in _NS_WORDS)
+        _needs_ns = any(
+            tc_name in (getattr(m, "name", "") or "")
+            for m in msgs if isinstance(m, ToolMessage)
+            for tc_name in ("get_pod_status", "get_deployment_status", "get_daemonset_status",
+                            "get_statefulset_status", "get_job_status", "get_hpa_status",
+                            "get_service_status", "get_ingress_status",
+                            "get_resource_quotas", "get_configmap_list", "get_service_accounts")
+        )
+        _ns_prefix = (
+            f"§NS_PREFIX§As no namespace was specified, I am assuming you are requesting for all namespaces.§END_NS§\n\n"
+            if (_needs_ns and not _ns_specified) else ""
+        )
+
+        _tools_used = {getattr(tr, "name", "") for tr in tool_results}
+
+        _tool_char_limit = 40000
         parts = []
         for i, tr in enumerate(tool_results, 1):
-            body = tr.content if len(tr.content) <= 40000 else tr.content[:40000] + "\n...[truncated]"
+            body = tr.content if len(tr.content) <= _tool_char_limit else tr.content[:_tool_char_limit] + "\n...[truncated]"
             parts.append(f"--- TOOL RESULT {i} ---\n{body}\n")
         combined = "".join(parts)
 
-        synthesis_prompt = f"Question: {original_question}\n\nTool Results:\n{combined}\nAnswer the question using only the tool results above."
-        return [HumanMessage(content=synthesis_prompt)]
+        _TOOL_FORMATS = {
+            "get_pod_logs": (
+                "Reproduce the log output EXACTLY as returned by the tool. "
+                "Include every log line with its full timestamp. "
+                "Do NOT summarise, paraphrase, or describe the log content in prose. "
+                "If the tool returned an error, state it exactly."
+            ),
+            "get_unhealthy_pods_detail": (
+                "List EVERY pod from the tool results. "
+                "One bullet per pod. Format: "
+                "`namespace/pod-name`: <phase> | Restarts: <N> | Cause: <reason> "
+                "(use exit code, OOMKilled, liveness probe failure, StartError, or last log lines). "
+                "Do NOT write prose. Do NOT skip any pod."
+            ),
+            "get_pvc_status": (
+                "List every non-Bound PVC from the results. "
+                "Format per PVC: namespace/name, phase, storage class, capacity. "
+                "If all PVCs are Bound, say so explicitly. "
+                "Do NOT include Bound PVCs unless the user asked for all PVCs."
+            ),
+            "get_pv_usage": (
+                "Reproduce the storage usage report in full — do NOT summarise. "
+                "Include every PVC entry: those nearing capacity, within capacity, AND skipped. "
+                "For skipped entries show the exact reason from the tool output."
+            ),
+            "get_coredns_health": (
+                "Report CoreDNS health from the tool results. "
+                "State each pod's phase and readiness. "
+                "Include DNS resolution test results exactly as shown. "
+                "Use bullet points, one per pod/test."
+            ),
+            "describe_pod": (
+                "Report the pod details from the tool results. "
+                "Include: phase, conditions, each container's state and restart count, "
+                "resource requests and limits. Use the exact values from the tool output."
+            ),
+            "query_prometheus_metrics": (
+                "Present the metrics exactly as returned. "
+                "List each series with its last value. Do not round or omit any series."
+            ),
+            "get_pod_images": (
+                "List every pod from the results. "
+                "Format: `namespace/pod-name` [container]: registry/image:tag. "
+                "Do NOT show health fields (phase/restarts/cause) — image and tag only."
+            ),
+            "get_node_resource_requests": (
+                "Reproduce the node resource table exactly. "
+                "Include every node with its CPU and memory figures."
+            ),
+            "kubectl_exec": (
+                "Reproduce the command output VERBATIM. "
+                "Do NOT reformat, summarise, or omit any rows."
+            ),
+            "get_pod_status": (
+                "Reproduce the pod table VERBATIM — every row, every column. "
+                "Do NOT summarise, count, or describe in prose. "
+                "If the result is a single summary sentence (e.g. 'All pods healthy'), "
+                "reproduce it exactly."
+            ),
+            "get_namespace_resource_summary": (
+                "ALWAYS lead with the total figures at the top of the answer: "
+                "total CPU requested, total CPU limit, total memory requested, total memory limit. "
+                "Then list the per-pod breakdown. "
+                "Do NOT start by listing individual pods — the total is the answer to a calculate question."
+            ),
+            "get_node_health": (
+                "Report the node health from the tool results. "
+                "For each node state: name, Ready status, any pressure conditions. "
+                "For GPU nodes include the EXACT GPU count and status string as returned — "
+                "e.g. 'GPU:2/2 (all in use — none free)' or 'GPU:0/2 (none in use — all free)'. "
+                "Do NOT paraphrase GPU status — copy the exact numbers and state label."
+            ),
+            "get_gpu_info": (
+                "Report GPU details from the tool results. "
+                "State the exact GPU model, total allocatable count, and how many are in use vs free. "
+                "Use the exact numbers from the tool output — do NOT say 'available and in use' "
+                "as that is contradictory. State in-use count and free count separately."
+            ),
+        }
+
+        _HEALTH_SWEEP_TOOLS = {
+            "get_node_health", "get_pod_status", "get_deployment_status",
+            "get_pvc_status", "get_events", "get_daemonset_status",
+            "get_statefulset_status", "get_job_status", "get_hpa_status",
+        }
+        _is_health_sweep = (
+            len(tool_results) >= 3
+            and _tools_used.issubset(_HEALTH_SWEEP_TOOLS | {""})
+        )
+
+        _ENUMERATION_TOOLS = {
+            "get_pod_status", "get_deployment_status", "get_daemonset_status",
+            "get_statefulset_status", "get_job_status", "get_hpa_status",
+            "get_service_status", "get_namespace_status",
+        }
+
+        _single_tool = next(iter(_tools_used - {""}), None)
+        if len(_tools_used - {""}) == 1 and _single_tool in _TOOL_FORMATS:
+            synthesis_prompt = (
+                f"Question: {original_question}\n\n"
+                f"Tool Results:\n{combined}\n"
+                + _TOOL_FORMATS[_single_tool]
+            )
+
+        elif _is_health_sweep:
+            synthesis_prompt = (
+                f"Question: {original_question}\n\n"
+                f"Tool Results:\n{combined}\n"
+                "Write a concise cluster health summary:\n"
+                "1. Overall status in one sentence (healthy / issues found).\n"
+                "2. If any problems exist, list them specifically: exact pod, node, "
+                "deployment, PVC, or event with its state.\n"
+                "3. If everything is healthy, say so briefly — do not list healthy items.\n"
+                "Use plain sentences. No markdown headers. No closing remarks."
+            )
+
+        elif _single_tool in _ENUMERATION_TOOLS:
+            synthesis_prompt = (
+                f"Question: {original_question}\n\n"
+                f"Tool Results:\n{combined}\n"
+                "List EVERY item from the tool results. "
+                "One bullet per item. Include namespace, name, and relevant state. "
+                "Do NOT skip or summarise any item. "
+                "If the result is a summary line (e.g. 'All pods healthy'), "
+                "reproduce it exactly without expansion."
+            )
+
+        else:
+            synthesis_prompt = (
+                f"Question: {original_question}\n\n"
+                f"Tool Results:\n{combined}\n"
+                "Answer the question using only the tool results above. "
+                "Be specific — name exact pods, nodes, or resources. "
+                "If the results contain a list, reproduce it in full. "
+                "If the question asks for a count, state the number directly. "
+                "No preamble. No closing remarks."
+            )
+
+        return [HumanMessage(content=_ns_prefix + synthesis_prompt)]
 
     def _msgs_to_qwen3(msgs: list, include_tools: bool) -> list:
         result = []
@@ -304,10 +476,13 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
     def _sse(payload: dict) -> str: return f"data: {json.dumps(payload)}\n\n"
     import uuid, asyncio
     req_id, agent, t0 = uuid.uuid4().hex[:8], get_agent(), time.time()
-    yield _sse({"type": "status", "text": f"🤖 Model: {config.LLM_MODEL}"})
     
+    yield _sse({"type": "status", "text": f"🤖 Model: {config.LLM_MODEL}"})
+    config.logger.info(f"[REQ:{req_id}] /chat/stream  q={user_message[:120]!r}")
+
     _saved_max = config.MAX_NEW_TOKENS
     if max_new_tokens > 0: config.MAX_NEW_TOKENS = max_new_tokens
+    
     all_updates, tools_called, final_answer, iteration_count = [f"🤖 Model: {config.LLM_MODEL}"], [], "", 0
     _hb_queue, _hb_stop = asyncio.Queue(), asyncio.Event()
 
@@ -325,38 +500,81 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
         history_msgs = [HumanMessage(content=t.content) if t.role == "user" else _AIMessage(content=t.content) for t in (history or [])]
         all_messages = history_msgs + [HumanMessage(content=user_message)]
 
-        async for event in agent.astream_events({"messages": all_messages, "tool_calls_made": [], "iteration": 0, "status_updates": [], "req_id": req_id}, version="v2", config={"recursion_limit": 12}):
-            while not _hb_queue.empty(): yield _sse({"type": "heartbeat", "text": f"⏳ Still processing… ({_hb_queue.get_nowait()}s elapsed)", "timeout": config.LLM_TIMEOUT})
-            kind, name = event.get("event", ""), event.get("name", "")
+        async for event in agent.astream_events(
+            {"messages": all_messages, "tool_calls_made": [], "iteration": 0, "status_updates": [], "req_id": req_id}, 
+            version="v2", 
+            config={"recursion_limit": 12}
+        ):
+            while not _hb_queue.empty(): 
+                tick = _hb_queue.get_nowait()
+                yield _sse({"type": "heartbeat", "text": f"⏳ Still processing… ({tick}s elapsed)", "timeout": config.LLM_TIMEOUT})
             
-            if kind == "on_tool_start":
-                tool_name = event.get("name", "unknown_tool")
-                cmd = event.get("data", {}).get("input", {}).get("command") if tool_name == "kubectl_exec" else None
-                txt = f"$ {cmd}" if cmd else f"⚙️ {tool_name}"
-                all_updates.append(txt); tools_called.append(tool_name)
-                yield _sse({"type": "tool", "name": tool_name, "text": txt, "cmd": cmd})
-            elif kind == "on_tool_end":
-                tool_name, output = event.get("name", ""), event.get("data", {}).get("output", "")
-                txt = f"✓ {tool_name}: {str(output)[:80].replace(chr(10), ' ')}…"
-                all_updates.append(txt)
-                yield _sse({"type": "status", "text": txt})
-            elif kind == "on_chain_end" and name == "llm":
+            kind, name = event.get("event", ""), event.get("name", "")
+
+            # 1. LLM Start (Loop counter)
+            if kind == "on_chain_start" and name == "llm":
+                iteration_count += 1
+                txt = f"🧠 Loop {iteration_count} — LLM thinking…"
+                config.logger.info(f"[REQ:{req_id}] {txt}")
+                yield _sse({"type": "iteration", "iteration": iteration_count, "text": txt, "has_tool_calls": None})
+
+            # 2. Node End (Capture state updates from BOTH 'llm' and 'tools' nodes)
+            elif kind == "on_chain_end" and name in ["llm", "tools"]:
                 output = event.get("data", {}).get("output", {})
-                iteration_count = output.get("iteration", iteration_count)
-                has_tool_calls = any(getattr(m, "tool_calls", None) for m in output.get("messages", []))
-                for m in output.get("messages", []):
-                    if getattr(m, "content", "") and not getattr(m, "tool_calls", None): final_answer = m.content
-                itr_txt = f"🔄 Loop {iteration_count} — LLM called tools, waiting for results…" if has_tool_calls else f"✍️ Loop {iteration_count} — LLM synthesising final answer…"
-                yield _sse({"type": "iteration", "iteration": iteration_count, "text": itr_txt, "has_tool_calls": has_tool_calls})
+                if not isinstance(output, dict):
+                    continue
+                
+                # Extract UI status updates (this pushes the 🔧 and ⚙️ icons to the screen)
+                node_updates = output.get("status_updates", [])
+                for u in node_updates:
+                    if u not in all_updates:
+                        all_updates.append(u)
+                        yield _sse({"type": "status", "text": u})
+                
+                # Extract the running list of tools called
+                node_tools = output.get("tool_calls_made", [])
+                for t in node_tools:
+                    if t not in tools_called:
+                        tools_called.append(t)
+
+                # Special LLM logic for extracting final answer & iteration status
+                if name == "llm":
+                    has_tool_calls = any(getattr(m, "tool_calls", None) for m in output.get("messages", []))
+                    
+                    for m in output.get("messages", []):
+                        if getattr(m, "content", "") and not getattr(m, "tool_calls", None): 
+                            final_answer = m.content
+                    
+                    if has_tool_calls:
+                        itr_txt = f"🔄 Loop {iteration_count} — LLM called tools, waiting for results…"
+                    elif final_answer:
+                        itr_txt = f"✍️ Loop {iteration_count} — LLM synthesising final answer…"
+                    else:
+                        itr_txt = f"🔄 Loop {iteration_count} — LLM processing…"
+                    
+                    yield _sse({"type": "iteration", "iteration": iteration_count, "text": itr_txt, "has_tool_calls": has_tool_calls})
 
         elapsed = round(time.time() - t0, 1)
         _hb_stop.set(); _hb_task.cancel()
+        config.logger.info(f"[REQ:{req_id}] stream_done elapsed={elapsed}s tools={list(set(tools_called))}")
+        
         yield _sse({"type": "status", "text": f"✅ Done in {elapsed}s"})
-        yield _sse({"type": "result", "response": _clean_response(final_answer, user_message), "tools_used": list(dict.fromkeys(tools_called)), "iterations": iteration_count, "status_updates": all_updates, "elapsed_seconds": elapsed, "clarification_needed": False})
+        yield _sse({
+            "type": "result", 
+            "response": _clean_response(final_answer, user_message), 
+            "tools_used": list(dict.fromkeys(tools_called)), 
+            "iterations": iteration_count, 
+            "status_updates": all_updates, 
+            "elapsed_seconds": elapsed, 
+            "clarification_needed": False
+        })
+
     except Exception as exc:
         _hb_stop.set(); _hb_task.cancel()
+        config.logger.error(f"[Stream Error] {exc}", exc_info=True)
         yield _sse({"type": "error", "text": str(exc)})
-    finally: config.MAX_NEW_TOKENS = _saved_max
+    finally: 
+        config.MAX_NEW_TOKENS = _saved_max
 
 def _llm_synthesise(context: str, question: str, top_k: int = 50, max_tokens: int = 0) -> str:
     _kb_is_empty = not context or not context.strip() or (isinstance(context, str) and context.startswith("KB_EMPTY:"))
@@ -390,9 +608,50 @@ def _llm_synthesise(context: str, question: str, top_k: int = 50, max_tokens: in
     except Exception as exc: 
         return context or ""
 
-# ── 3. API ENDPOINTS ─────────────────────────────────────────────────────────
+# ── 3. FASTAPI LIFESPAN & SETUP ──────────────────────────────────────────────
 
-app = FastAPI(title="Cloudera ECS AI Ops")
+def _run_startup_checks():
+    SMOKE_TESTS = [("get_node_health", {}), ("get_namespace_status", {}), ("get_pod_status", {"namespace": "all"})]
+    logger.info("[Self-test] Running kubectl tool smoke-tests…")
+    for name, kwargs in SMOKE_TESTS:
+        cfg = K8S_TOOLS.get(name)
+        if cfg is None: continue
+        try:
+            result = cfg["fn"](**kwargs)
+            if "error" in result.lower(): logger.warning(f"[Self-test] ⚠ {name}: {result[:120]}")
+            else: logger.info(f"[Self-test] ✓ {name}: {result.replace(chr(10), ' ')[:80]}…")
+        except Exception as e: logger.warning(f"[Self-test] ⚠ {name} raised: {e}")
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    logger.info("=" * 60)
+    logger.info(f"Cloudera ECS AI Ops")
+    logger.info(f"  LLM      : {config.LLM_MODEL}")
+    logger.info(f"  Embed    : {config.EMBED_MODEL}")
+    logger.info(f"  GPU      : {config.NUM_GPU} GPU(s)")
+    logger.info(f"  Tools    : {len(K8S_TOOLS)} kubectl tools registered")
+    logger.info("=" * 60)
+
+    _run_startup_checks()
+    try:
+        init_db()
+        stats = get_doc_stats()
+        logger.info(f"[LanceDB] Ready — {stats['docs_chunks']} doc chunks, {stats['excel_rows']} Excel rows")
+    except Exception as e: logger.error(f"[LanceDB] Init failed: {e}")
+
+    logger.info("[Agent] Pre-warming LLM…")
+    get_agent()
+    logger.info("Startup complete ✓")
+    yield
+    logger.info("Shutting down")
+
+app = FastAPI(title="Cloudera ECS AI Ops", lifespan=_lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+if _HERE.joinpath("web", "static").exists():
+    app.mount("/static", StaticFiles(directory=str(_HERE / "web" / "static")), name="static")
+
+# ── 4. API ENDPOINTS ─────────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health():
@@ -418,6 +677,7 @@ async def chat(req: ChatRequest):
 async def chat_stream(req: ChatRequest):
     if not req.message.strip(): raise HTTPException(400, "Empty message")
     _decode_secrets_ctx.set(req.decode_secrets)
+    
     import asyncio
     async def _keepalive_stream():
         queue, _SENTINEL = asyncio.Queue(), object()
@@ -665,56 +925,13 @@ async def api_set_config(body: dict):
     if not updated: return _JSONResponse(status_code=400, content={"error": "No recognised config keys in body"})
     return {"ok": True, "updated": updated}
 
-# ── 4. LIFESPAN & STARTUP ────────────────────────────────────────────────────
-
-def _run_startup_checks():
-    SMOKE_TESTS = [("get_node_health", {}), ("get_namespace_status", {}), ("get_pod_status", {"namespace": "all"})]
-    config.logger.info("[Self-test] Running kubectl tool smoke-tests…")
-    for name, kwargs in SMOKE_TESTS:
-        cfg = K8S_TOOLS.get(name)
-        if cfg is None: continue
-        try:
-            result = cfg["fn"](**kwargs)
-            if "error" in result.lower(): config.logger.warning(f"[Self-test] ⚠ {name}: {result[:120]}")
-            else: config.logger.info(f"[Self-test] ✓ {name}: {result.replace(chr(10), ' ')[:80]}…")
-        except Exception as e: config.logger.warning(f"[Self-test] ⚠ {name} raised: {e}")
-
-@app.on_event("startup")
-async def _startup_event():
-    config.logger.info("=" * 60)
-    config.logger.info(f"Cloudera ECS AI Ops")
-    config.logger.info(f"  LLM      : {config.LLM_MODEL}")
-    config.logger.info(f"  Embed    : {config.EMBED_MODEL}")
-    config.logger.info(f"  GPU      : {config.NUM_GPU} GPU(s)")
-    config.logger.info(f"  Tools    : {len(K8S_TOOLS)} kubectl tools registered")
-    config.logger.info("=" * 60)
-
-    _run_startup_checks()
-    try:
-        init_db()
-        stats = get_doc_stats()
-        config.logger.info(f"[LanceDB] Ready — {stats['docs_chunks']} doc chunks, {stats['excel_rows']} Excel rows")
-    except Exception as e: config.logger.error(f"[LanceDB] Init failed: {e}")
-
-    config.logger.info("[Agent] Pre-warming LLM…")
-    get_agent()
-    config.logger.info("Startup complete ✓")
-
-@app.on_event("shutdown")
-async def _shutdown_event():
-    config.logger.info("Shutting down")
-
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
-
-if os.path.exists("web/static"): app.mount("/static", StaticFiles(directory="web/static"), name="static")
-
 @app.get("/", response_class=FileResponse)
 async def serve_ui():
     if _HERE.joinpath("web", "index.html").exists():
         return FileResponse(str(_HERE / "web" / "index.html"), media_type="text/html")
     return _JSONResponse(status_code=404, content={"error": "web/index.html not found"})
 
-# ── 5. ENTRY POINT & STARTUP PRINTS ──────────────────────────────────────────
+# ── 4. ENTRY POINT & EXACT ORIGINAL PRINTS ───────────────────────────────────
 
 if __name__ == "__main__":
     if config.ARGS.ingest:
