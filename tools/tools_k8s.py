@@ -108,6 +108,175 @@ def _is_high_restart(pod, restart_count: int) -> bool:
     run_days = max((now - run_start).total_seconds() / 86400, 0.1)
     return (restart_count / run_days) > 3.0
 
+def get_pod_tolerations(namespace: str = "all",
+                        pod_name: str | None = None,
+                        raw_output: bool = False) -> str:
+    try:
+        if namespace != "all":
+            try:
+                _core.read_namespace(name=namespace)
+            except ApiException as e:
+                if e.status == 404:
+                    return (f"Namespace '{namespace}' does not exist in this cluster. "
+                            f"Cannot report pod tolerations.")
+                raise
+
+        pods = (_core.list_pod_for_all_namespaces()
+                if namespace == "all"
+                else _core.list_namespaced_pod(namespace=namespace))
+
+        if not pods.items:
+            return f"No pods found in namespace '{namespace}'."
+
+        if pod_name:
+            pods.items = [p for p in pods.items if pod_name in p.metadata.name]
+
+        if not pods.items:
+            return f"No pods matching '{pod_name}' found in namespace '{namespace}'."
+
+        if raw_output:
+            hdr = f"{'NAMESPACE':<22} {'POD':<55} {'KEY':<35} {'OP':<10} {'VALUE':<20} {'EFFECT':<12}"
+            rows = [hdr, "-" * len(hdr)]
+
+        lines = []
+
+        for pod in sorted(pods.items, key=lambda p: (p.metadata.namespace, p.metadata.name)):
+            ns = pod.metadata.namespace
+            name = pod.metadata.name
+
+            tolerations = pod.spec.tolerations or []
+
+            if not tolerations:
+                if raw_output:
+                    rows.append(f"{ns:<22} {name:<55} {'<none>':<35} {'-':<10} {'-':<20} {'-':<12}")
+                else:
+                    lines.append(f"{ns}/{name}: no tolerations")
+                continue
+
+            for t in tolerations:
+                key = t.key or "<any>"
+                op = t.operator or "Equal"
+                val = t.value or "-"
+                eff = t.effect or "Any"
+
+                if raw_output:
+                    rows.append(
+                        f"{ns:<22} {name:<55} {key:<35} {op:<10} {val:<20} {eff:<12}"
+                    )
+                else:
+                    lines.append(
+                        f"{ns}/{name} | key:{key} op:{op} value:{val} effect:{eff}"
+                    )
+
+        if raw_output:
+            rows.append(f"\nTotal pods inspected: {len(pods.items)}")
+            return "\n".join(rows)
+
+        return "\n".join(lines)
+
+    except ApiException as e:
+        return f"K8s API error: {e.reason}"
+        
+def get_pod_resource_requests(namespace: str = "all",
+                              pod_name: str | None = None,
+                              raw_output: bool = False) -> str:
+    try:
+        if namespace != "all":
+            try:
+                _core.read_namespace(name=namespace)
+            except ApiException as e:
+                if e.status == 404:
+                    return (f"Namespace '{namespace}' does not exist in this cluster. "
+                            f"Cannot report pod resources for a non-existent namespace.")
+                raise
+
+        pods = (_core.list_pod_for_all_namespaces()
+                if namespace == "all"
+                else _core.list_namespaced_pod(namespace=namespace))
+
+        if not pods.items:
+            return f"No pods found in namespace '{namespace}'."
+
+        if pod_name:
+            pods.items = [p for p in pods.items if pod_name in p.metadata.name]
+
+        if not pods.items:
+            return f"No pods matching '{pod_name}' found in namespace '{namespace}'."
+
+        def _parse_cpu(v):
+            if not v:
+                return 0
+            if v.endswith("m"):
+                return float(v[:-1]) / 1000
+            return float(v)
+
+        def _parse_mem(v):
+            if not v:
+                return 0
+            units = {"Ki": 1/1024/1024, "Mi": 1/1024, "Gi": 1, "Ti": 1024}
+            for u, m in units.items():
+                if v.endswith(u):
+                    return float(v[:-len(u)]) * m
+            return float(v)
+
+        lines = []
+
+        if raw_output:
+            hdr = f"{'NAMESPACE':<22} {'POD':<45} {'CONTAINER':<30} {'CPU_REQ':<10} {'CPU_LIM':<10} {'MEM_REQ':<10} {'MEM_LIM':<10}"
+            rows = [hdr, "-" * len(hdr)]
+
+        for pod in sorted(pods.items, key=lambda p: (p.metadata.namespace, p.metadata.name)):
+            ns = pod.metadata.namespace
+            podn = pod.metadata.name
+
+            cpu_req_total = 0.0
+            cpu_lim_total = 0.0
+            mem_req_total = 0.0
+            mem_lim_total = 0.0
+
+            for c in pod.spec.containers:
+                req = c.resources.requests or {}
+                lim = c.resources.limits or {}
+
+                cpu_req = req.get("cpu", "0")
+                cpu_lim = lim.get("cpu", "0")
+                mem_req = req.get("memory", "0")
+                mem_lim = lim.get("memory", "0")
+
+                cpu_req_total += _parse_cpu(cpu_req)
+                cpu_lim_total += _parse_cpu(cpu_lim)
+                mem_req_total += _parse_mem(mem_req)
+                mem_lim_total += _parse_mem(mem_lim)
+
+                if raw_output:
+                    rows.append(
+                        f"{ns:<22} {podn:<45} {c.name:<30} "
+                        f"{cpu_req:<10} {cpu_lim:<10} {mem_req:<10} {mem_lim:<10}"
+                    )
+                else:
+                    lines.append(
+                        f"{ns}/{podn} | container:{c.name} "
+                        f"| cpu_req:{cpu_req} cpu_lim:{cpu_lim} "
+                        f"| mem_req:{mem_req} mem_lim:{mem_lim}"
+                    )
+
+            if not raw_output:
+                lines.append(
+                    f"  → TOTAL | cpu_req:{cpu_req_total:.3f} cores "
+                    f"| cpu_lim:{cpu_lim_total:.3f} cores "
+                    f"| mem_req:{mem_req_total:.2f}Gi "
+                    f"| mem_lim:{mem_lim_total:.2f}Gi"
+                )
+
+        if raw_output:
+            rows.append(f"\nTotal pods inspected: {len(pods.items)}")
+            return "\n".join(rows)
+
+        return "\n".join(lines)
+
+    except ApiException as e:
+        return f"K8s API error: {e.reason}"
+        
 def get_pod_status(namespace: str = "all", show_all: bool = False, raw_output: bool = False, phase_only: bool = False) -> str:
     try:
         if namespace != "all":
@@ -3610,30 +3779,23 @@ def exec_db_query(namespace: str, sql: str,
     return header + output
 
 K8S_TOOLS: dict = {
-
     "get_pod_status": {
         "fn":          get_pod_status,
         "description": (
-            "List pods in a namespace. "
+            "Check runtime STATUS and health of Kubernetes pods. "
+            "Shows pod phase (Running/Pending/Failed/Unknown), container readiness, restart counts, "
+            "and unhealthy conditions. "
             "By default only UNHEALTHY pods are returned (non-Running, not ready, or high restarts). "
-            "Set show_all=true to list ALL pods including healthy ones — ALWAYS use show_all=true "
-            "when the user asks 'how many pods', 'list pods', 'what pods are running', or "
-            "any question that requires a complete pod count or inventory."
+            "Set show_all=true to list ALL pods including healthy ones. "
+            "Use for: 'list pods', 'which pods are unhealthy', 'which pods are not running', "
+            "'how many pods are running', or pod health troubleshooting. "
+            "Do NOT use for CPU or memory resource requests/limits — use get_pod_resource_requests instead."
         ),
         "parameters":  {
             "namespace":   {"type": "string",  "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "show_all":    {"type": "boolean", "default": False,
-                            "description": "Set true to include healthy/running pods in the output"},
-            "raw_output":  {"type": "boolean", "default": False,
-                            "description": "Set true to return kubectl-style tabular output (use when user asks to 'show', 'display', or wants 'the output' of pods)"},
-            "phase_only":  {"type": "boolean", "default": False,
-                            "description": (
-                                "Set true when the user asks ONLY about pod phase/status "
-                                "(e.g. 'which pods are not Running', 'any pod not Running'). "
-                                "Returns ONLY pods whose phase is Pending/Failed/Unknown. "
-                                "Does NOT include Running pods with high restarts or not-ready containers. "
-                                "Use phase_only=false (default) for health/unhealthy queries."
-                            )},
+            "show_all":    {"type": "boolean", "default": False, "description": "Set true to include healthy/running pods."},
+            "raw_output":  {"type": "boolean", "default": False, "description": "Return kubectl-style tabular output."},
+            "phase_only":  {"type": "boolean", "default": False, "description": "Return only pods whose phase is Pending/Failed/Unknown."},
         },
     },
     "get_pod_logs": {
@@ -3865,20 +4027,57 @@ K8S_TOOLS: dict = {
         "description": "List all namespaces with their status and pod count. ALWAYS use this when the user asks 'how many namespaces', 'list namespaces', 'namespaces with number of pods', or wants a namespace count.",
         "parameters":  {},
     },
+
+    "get_pod_tolerations": {
+        "fn":          get_pod_tolerations,
+        "description": (
+            "Show Kubernetes pod tolerations used for scheduling onto tainted nodes. "
+            "Returns toleration key, operator, value, and effect for each pod. "
+            "Use for: 'which pods tolerate taints', 'show tolerations for pod X', "
+            "'pods that tolerate NoSchedule or NoExecute'. "
+            "Helps diagnose why pods can run on tainted nodes."
+        ),
+        "parameters":  {
+            "namespace": {"type": "string", "default": "all",
+                          "description": "Namespace to query. Defaults to 'all' namespaces."},
+            "pod_name":  {"type": "string",
+                          "description": "Optional pod name filter."},
+            "raw_output": {"type": "boolean", "default": False,
+                           "description": "Return kubectl-style table output."},
+        },
+    },
+    
+    "get_pod_resource_requests": {
+        "fn":          get_pod_resource_requests,
+        "description": (
+            "Show CPU and memory RESOURCE REQUESTS and LIMITS for containers in a specific pod. "
+            "Returns the requested CPU and memory for each container and totals for the pod. "
+            "This is scheduling allocation data from pod.spec.resources, NOT real-time usage. "
+            "Use for: 'cpu request for pod X', 'memory limit for pod Y', "
+            "'resources requested by pod', 'what cpu/ram is allocated to pod'. "
+            "Do NOT use for runtime health/status — use get_pod_status instead. "
+            "Do NOT use for namespace-wide totals — use get_namespace_resource_summary instead."
+        ),
+        "parameters":  {
+            "namespace": {"type": "string", "default": "default", "description": "Namespace of the pod."},
+            "pod_name":  {"type": "string", "description": "Name of the pod to inspect."}
+        },
+    },
+    
     "get_namespace_resource_summary": {
         "fn":          get_namespace_resource_summary,
         "description": (
-            "Aggregate CPU and memory REQUESTS and LIMITS for all pods in a specific namespace. "
-            "Returns the TOTAL across all pods first, then a per-pod breakdown. "
-            "This is scheduling allocation data, NOT real-time consumption. "
-            "Use for: 'calculate CPU requests in namespace X', 'calculate memory requests', "
-            "'total cpu/memory requests in namespace X', 'how much CPU is requested in X', "
-            "'sum of resource requests in X', 'resource limits for namespace X'. "
-            "ALWAYS lead the answer with the TOTAL figures, then list per-pod breakdown. "
-            "Do NOT use for actual usage/consumption — use query_prometheus_metrics instead. "
-            "Do NOT use for per-node allocation — use get_node_resource_requests instead."
+            "Aggregate CPU and memory RESOURCE REQUESTS and LIMITS across ALL pods in a namespace. "
+            "Returns the TOTAL CPU and memory requests/limits first, followed by a per-pod breakdown. "
+            "This represents Kubernetes scheduling allocation, NOT real-time usage. "
+            "Use for: 'total cpu requested in namespace', 'sum of memory requests in namespace', "
+            "'namespace resource allocation', 'how much CPU or RAM is requested in namespace X'. "
+            "Do NOT use for a single pod — use get_pod_resource_requests instead. "
+            "Do NOT use for real-time utilization — use query_prometheus_metrics instead."
         ),
-        "parameters":  {"namespace": {"type": "string", "default": "default", "description": "Namespace to query. Defaults to 'default' — only override when the user explicitly names a namespace."}},
+        "parameters":  {
+            "namespace": {"type": "string", "default": "default", "description": "Namespace to query."}
+        },
     },
 }
 
