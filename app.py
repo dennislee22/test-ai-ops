@@ -714,8 +714,7 @@ if os.path.exists("web/static"): app.mount("/static", StaticFiles(directory="web
 async def serve_ui():
     if os.path.exists("web/index.html"): 
         return FileResponse("web/index.html", media_type="text/html")
-    # Return a proper JSONResponse instead of a raw dict
-    return JSONResponse(
+    return _JSONResponse(
         status_code=404, 
         content={"error": "web/index.html not found"}
     )
