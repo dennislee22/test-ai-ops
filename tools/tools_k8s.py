@@ -893,104 +893,63 @@ def get_hpa_status(namespace: str = "all") -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_pvc_status(namespace: str = "all", detail: bool = False) -> str:
-    _AM = {"ReadWriteOnce": "RWO", "ReadWriteMany": "RWX", "ReadOnlyMany": "ROX",
-           "ReadWriteOncePod": "RWOP"}
+def get_pvc_status(namespace: str = "all") -> str:
+    _AM = {
+        "ReadWriteOnce": "RWO",
+        "ReadWriteMany": "RWX",
+    }
 
     def _access(pvc):
         modes = pvc.spec.access_modes or []
-        return ",".join(_AM.get(m, m) for m in modes) or "?"
+        filtered = [_AM[m] for m in modes if m in _AM]
+        return ",".join(filtered) if filtered else "?"
 
     try:
-        pvcs = (_core.list_persistent_volume_claim_for_all_namespaces()
-                if namespace == "all"
-                else _core.list_namespaced_persistent_volume_claim(
-                    namespace=namespace))
+        pvcs = (
+            _core.list_persistent_volume_claim_for_all_namespaces()
+            if namespace == "all"
+            else _core.list_namespaced_persistent_volume_claim(namespace=namespace)
+        )
+
         if not pvcs.items:
             return f"No PVCs found in namespace '{namespace}'."
 
-        total = len(pvcs.items)
-
-        if namespace != "all":
-            bound_by_am: dict = {}
-            non_bound = []
-            for pvc in pvcs.items:
-                phase = pvc.status.phase or "Unknown"
-                sc    = pvc.spec.storage_class_name or "default"
-                cap   = (pvc.status.capacity or {}).get("storage", "?")
-                vol   = pvc.spec.volume_name or "<unbound>"
-                am    = _access(pvc)
-                if phase == "Bound":
-                    if detail:
-                        key = f"{am} ({sc})"
-                        bound_by_am.setdefault(key, []).append(
-                            f"    {pvc.metadata.name}: {cap} | volume:{vol}")
-                    else:
-                        key = f"{am} ({sc})"
-                        bound_by_am[key] = bound_by_am.get(key, 0) + 1
-                else:
-                    non_bound.append(
-                        f"  {pvc.metadata.name}: {phase} ⚠ | "
-                        f"capacity:{cap} | access:{am} | class:{sc} | volume:{vol}")
-
-            bound_count = (sum(bound_by_am.values()) if not detail
-                           else sum(len(v) for v in bound_by_am.values()))
-            lines = [f"PVCs in '{namespace}': {total} total "
-                     f"({bound_count} Bound, {len(non_bound)} non-Bound)."]
-            if bound_by_am:
-                lines.append("Bound PVCs by access mode + storage class:")
-                for k, val in sorted(bound_by_am.items()):
-                    if detail:
-                        lines.append(f"  {k}: {len(val)} PVC(s)")
-                        lines.extend(val)
-                    else:
-                        lines.append(f"  {k}: {val} PVC(s)")
-            if non_bound:
-                lines.append("Non-Bound PVCs (full detail):")
-                lines.extend(non_bound)
-            return "\n".join(lines)
-
-        bound_by_am: dict = {}
+        lines = []
         non_bound = []
-        by_ns_am: dict = {}
-        for pvc in pvcs.items:
+
+        for pvc in sorted(pvcs.items, key=lambda x: (x.metadata.namespace, x.metadata.name)):
+            ns   = pvc.metadata.namespace
+            name = pvc.metadata.name
             phase = pvc.status.phase or "Unknown"
-            sc    = pvc.spec.storage_class_name or "default"
-            cap   = (pvc.status.capacity or {}).get("storage", "?")
-            am    = _access(pvc)
-            ns_name = pvc.metadata.namespace
-            if phase == "Bound":
-                key = f"{am} ({sc})"
-                bound_by_am[key] = bound_by_am.get(key, 0) + 1
+            sc   = pvc.spec.storage_class_name or "default"
+            cap  = (pvc.status.capacity or {}).get("storage", "?")
+            vol  = pvc.spec.volume_name or "<unbound>"
+            am   = _access(pvc)
 
-                ns_entry = by_ns_am.setdefault(ns_name, {})
-                for mode in (pvc.spec.access_modes or []):
-                    short = _AM.get(mode, mode)
-                    ns_entry[short] = ns_entry.get(short, 0) + 1
-            else:
+            entry = f"{ns}/{name}: {phase} | access:{am} | class:{sc} | capacity:{cap} | volume:{vol}"
+            lines.append(entry)
+
+            if phase != "Bound":
                 non_bound.append(
-                    f"  {pvc.metadata.namespace}/{pvc.metadata.name}: "
-                    f"{phase} ⚠ | access:{am} | class:{sc} capacity:{cap}")
+                    f"{ns}/{name}: {phase} ⚠ | access:{am} | class:{sc}"
+                )
 
-        bound = sum(bound_by_am.values())
-        lines = [f"PVCs across all namespaces: {total} total ({bound} Bound, {len(non_bound)} non-Bound)."]
-        if bound_by_am:
-            lines.append("Bound PVCs by access mode + storage class (cluster totals):")
-            for k, count in sorted(bound_by_am.items()):
-                lines.append(f"  {k}: {count} PVC(s)")
-
-        if by_ns_am:
-            lines.append("\nBound PVCs per namespace by access mode:")
-
-            for ns_name in sorted(by_ns_am, key=lambda n: -sum(by_ns_am[n].values())):
-                counts = by_ns_am[ns_name]
-                summary = "  ".join(f"{am}:{n}" for am, n in sorted(counts.items()))
-                lines.append(f"  {ns_name}: {summary}  (total {sum(counts.values())})")
+        report = [
+            f"PVC report ({len(pvcs.items)} total) for namespace '{namespace}'",
+            "",
+            "All PVCs:",
+            *lines,
+            "",
+            f"Non-Bound PVCs ({len(non_bound)}):"
+        ]
 
         if non_bound:
-            lines.append("Non-Bound PVCs:")
-            lines.extend(non_bound)
-        return "\n".join(lines)
+            report.extend(non_bound)
+        else:
+            report.append("  None")
+
+        return "\n".join(report)
+
     except ApiException as e:
         return f"K8s API error (PVC listing): {e.reason}"
 
@@ -3602,8 +3561,7 @@ K8S_TOOLS: dict = {
         "parameters":  {
             "pod_name":   {"type": "string",
                            "description": "Exact pod name (e.g. 'cdp-release-prometheus-server-86844db8-v8lkg')."},
-            "namespace":  {"type": "string",  "default": "default",
-                           "description": "Namespace the pod lives in. Extract from context — never assume 'default'."},
+            "namespace":  {"type": "string", "default": "default", "description": "Namespace to query. Defaults to 'default' — only override when the user explicitly names a namespace."},
             "tail_lines": {"type": "integer", "default": 50,
                            "description": "Number of log lines to return (max 100)."},
             "container":  {"type": "string",  "default": "",
@@ -3680,28 +3638,14 @@ K8S_TOOLS: dict = {
         "description": "Check HorizontalPodAutoscaler targets and whether any are pinned at max replicas.",
         "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
     },
-
     "get_pvc_status": {
         "fn":          get_pvc_status,
         "description": (
-            "Check PersistentVolumeClaims — access mode (RWO/RWX/ROX), capacity, storage class, bound volume. "
-            "Returns a grouped summary by access mode + storage class (concise, fast). "
-            "Set detail=true only when asked about a specific workload's individual PVC names. "
-            "NAMESPACE RULE — CRITICAL: if the user does not name a specific namespace, "
-            "ALWAYS use namespace='all'. Never infer or guess a namespace (e.g. 'longhorn-system', "
-            "'vault-system') when none was stated. Only scope to a specific namespace when the user "
-            "explicitly names one (e.g. 'PVCs in longhorn-system', 'PVCs for vault')."
+            "Check PersistentVolumeClaims (PVCs) with status, storage class, storage type/access mode (RWO/RWX), "
+            "requested capacity, bound PersistentVolume, associated Pods using the claim, and age. "
+            "Highlights PVCs that are Pending, Lost, or not successfully bound."
         ),
-        "parameters":  {
-            "namespace": {"type": "string",  "default": "all",
-                          "description": (
-                              "Namespace to query. DEFAULT is 'all' — use this whenever the user does "
-                              "not explicitly name a namespace. Only override when the user's question "
-                              "names a namespace directly."
-                          )},
-            "detail":    {"type": "boolean", "default": False,
-                          "description": "Set true only to list individual PVC names (slower on large namespaces)."},
-        },
+        "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
     },
     "get_persistent_volumes": {
         "fn":          get_persistent_volumes,
@@ -3773,8 +3717,7 @@ K8S_TOOLS: dict = {
             "Whether values are shown or hidden is controlled by the user's Security settings — do NOT pass a decode argument."
         ),
         "parameters": {
-            "namespace":   {"type": "string", "default": "default",
-                            "description": "Namespace to query. Defaults to 'default' — only override when the user explicitly names a namespace."},
+            "namespace":   {"type": "string", "default": "default", "description": "Namespace to query. Defaults to 'default' — only override when the user explicitly names a namespace."},
             "name":        {"type": "string", "default": ""},
             "filter_keys": {"type": "array",  "default": None,
                             "description": "Optional list of key name substrings to filter by."},
