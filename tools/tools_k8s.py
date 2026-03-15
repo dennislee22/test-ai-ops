@@ -893,29 +893,17 @@ def get_hpa_status(namespace: str = "all") -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_pvc_status(namespace: str = "all") -> str:
-    _AM = {
-        "ReadWriteOnce": "RWO",
-        "ReadWriteMany": "RWX",
-        "ReadOnlyMany": "ROX"
-    }
-
+def get_pvc_status(namespace: str = "all", status: str = "all") -> str:
+    _AM = {"ReadWriteOnce": "RWO", "ReadWriteMany": "RWX", "ReadOnlyMany": "ROX"}
     try:
-        pvcs = (
-            _core.list_persistent_volume_claim_for_all_namespaces()
-            if namespace == "all"
-            else _core.list_namespaced_persistent_volume_claim(namespace=namespace)
-        )
-
-        pods = (
-            _core.list_pod_for_all_namespaces()
-            if namespace == "all"
-            else _core.list_namespaced_pod(namespace=namespace)
-        )
+        pvcs = (_core.list_persistent_volume_claim_for_all_namespaces()
+                if namespace == "all"
+                else _core.list_namespaced_persistent_volume_claim(namespace=namespace))
+        pods = (_core.list_pod_for_all_namespaces()
+                if namespace == "all"
+                else _core.list_namespaced_pod(namespace=namespace))
 
         pvc_to_pods = {}
-
-        # Map PVC -> pods using it
         for pod in pods.items:
             for vol in pod.spec.volumes or []:
                 if vol.persistent_volume_claim:
@@ -925,50 +913,38 @@ def get_pvc_status(namespace: str = "all") -> str:
                     pvc_to_pods.setdefault(key, []).append(pod.metadata.name)
 
         rows = []
-
         for pvc in pvcs.items:
             ns = pvc.metadata.namespace
             name = pvc.metadata.name
-
-            cap = (pvc.status.capacity or {}).get("storage", "?")
             vol = pvc.spec.volume_name or "<unbound>"
+            cap = (pvc.status.capacity or {}).get("storage", "?")
+            sc = pvc.spec.storage_class_name or "default"
             phase = pvc.status.phase or "Unknown"
-
             modes = pvc.spec.access_modes or []
             access = ",".join(_AM.get(m, m) for m in modes) or "?"
 
+            if status == "bound" and phase != "Bound":
+                continue
+            if status == "not_bound" and phase == "Bound":
+                continue
+
             key = f"{ns}/{name}"
             pods_using = pvc_to_pods.get(key)
+            pod_str = ",".join(pods_using) if pods_using else "unbound"
 
-            pod = ",".join(pods_using) if pods_using else "unbound"
-
-            rows.append([ns, name, vol, cap, access, phase, pod])
+            rows.append([ns, name, vol, cap, sc, access, phase, pod_str])
 
         if not rows:
-            return f"No PVCs found in namespace '{namespace}'."
+            return f"No PVCs with status '{status}' found in namespace '{namespace}'."
 
-        headers = ["NAMESPACE", "PVC", "VOLUME", "CAPACITY", "ACCESS", "STATUS", "POD"]
-
-        col_widths = [
-            max(len(str(row[i])) for row in rows + [headers])
-            for i in range(len(headers))
-        ]
+        headers = ["NAMESPACE", "PVC", "VOLUME", "CAPACITY", "STORAGE CLASS", "ACCESS", "STATUS", "POD"]
+        col_widths = [max(len(str(row[i])) for row in rows + [headers]) for i in range(len(headers))]
 
         lines = []
-
-        header_line = "  ".join(
-            headers[i].ljust(col_widths[i]) for i in range(len(headers))
-        )
-        lines.append(header_line)
-
-        lines.append(
-            "  ".join("-" * col_widths[i] for i in range(len(headers)))
-        )
-
+        lines.append("  ".join(headers[i].ljust(col_widths[i]) for i in range(len(headers))))
+        lines.append("  ".join("-" * col_widths[i] for i in range(len(headers))))
         for row in sorted(rows):
-            lines.append(
-                "  ".join(str(row[i]).ljust(col_widths[i]) for i in range(len(row)))
-            )
+            lines.append("  ".join(str(row[i]).ljust(col_widths[i]) for i in range(len(row))))
 
         return "\n".join(lines)
 
