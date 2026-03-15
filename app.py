@@ -4,7 +4,7 @@ from typing import Annotated, TypedDict, Literal, Optional
 from pathlib import Path
 from contextvars import ContextVar
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form as FastAPIForm
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form as FastAPIForm, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse as _JSONResponse
@@ -20,7 +20,6 @@ from rag import init_db, get_doc_stats, RAG_TOOLS, rag_retrieve, ingest_director
 from rag.retrieve import _MSG_NO_INGEST, _is_kb_topic
 from tools.tools_k8s import K8S_TOOLS, reload_kubeconfig, _core as _k8s_core
 from agent.bypass import should_bypass_llm, build_direct_answer
-from agent.routing import default_tools_for, resolve_namespace
 
 _HERE = Path(__file__).resolve().parent
 _decode_secrets_ctx: ContextVar[bool] = ContextVar("decode_secrets", default=False)
@@ -154,6 +153,56 @@ def _build_llm_gguf():
     _log_ag.info(f"[LLM/GGUF] Model loaded (CPU, {n_threads} threads, ctx={n_ctx})")
     return None, model, is_qwen3
 
+# --- NAMESPACE INTERCEPTOR MAPPER ---
+_LOCAL_NS_MAP = {
+    "vault": "vault-system",
+    "longhorn": "longhorn-system",
+    "cdp": "cdp",
+    "ingress": "ingress-nginx"
+}
+
+_IGNORE_NS = {
+    "all", "the", "any", "which", "what", "my", "this", "a", "some", "in", 
+    "for", "of", "to", "is", "not", "are", "and", "or", "pvc", "pvcs", "pod", "pods", 
+    "node", "nodes", "deployment", "deployments", "status", "health", "check", "get", 
+    "show", "has", "have", "had", "with", "without", "using", "uses", "does", "do"
+}
+
+def _extract_namespace(text: str) -> str:
+    text = text.lower()
+    
+    # 0. Interrogative Short-Circuit: "which namespace", "what ns", "how many namespaces"
+    if re.search(r'\b(which|what|how many|list all|show all)\b\s+(?:namespaces|namespace|ns)\b', text):
+        return "all"
+    
+    # 1. Map known hardcoded keywords
+    for keyword, actual_ns in _LOCAL_NS_MAP.items():
+        if re.search(rf'\b{keyword}\b', text):
+            return actual_ns
+
+    # 2. Explicit "all namespaces", "all ns", or "-a" flag
+    if re.search(r'\ball\b[^a-z0-9-]+(?:namespace|namespaces|namespac|namespcs|ns)\b', text) or "-a" in text.split():
+        return "all"
+        
+    # 3. Explicit flag "-n xyz" or "--namespace=xyz"
+    match_flag = re.search(r'\b(?:-n|--namespace)[\s=]+([a-z0-9-]+)\b', text)
+    if match_flag:
+        return match_flag.group(1)
+            
+    # 4. Forward shorthand "namespace xyz" (ignores punctuation & typos)
+    for match in re.finditer(r'\b(?:namespace|namespaces|namespac|namespcs|ns)\b[^a-z0-9-]+([a-z0-9-]+)\b', text):
+        extracted = match.group(1)
+        if extracted not in _IGNORE_NS and len(extracted) > 1:
+            return extracted
+    
+    # 5. Reverse shorthand "xyz namespace"
+    for match in re.finditer(r'\b([a-z0-9-]+)[^a-z0-9-]+\b(?:namespace|namespaces|namespac|namespcs|ns)\b', text):
+        extracted = match.group(1)
+        if extracted not in _IGNORE_NS and len(extracted) > 1:
+            return extracted
+        
+    return "all"
+
 def build_agent():
     all_tools = {**K8S_TOOLS, **RAG_TOOLS}
     tool_schemas = [_registry_to_openai_schema(n, c) for n, c in all_tools.items()]
@@ -178,26 +227,25 @@ def build_agent():
 
         original_question = next((m.content for m in msgs if isinstance(m, HumanMessage)), "")
         tool_results = [m for m in msgs if isinstance(m, ToolMessage)]
-
-        _oq_lower = original_question.lower()
-        _NS_WORDS = ("namespace", " ns=", " ns ", "in namespace", "for namespace",
-                     "in the namespace", "-n ", "cdp", "cmlwb", "longhorn", "vault",
-                     "cattle", "rancher", "cert", "default namespace")
-        _ns_specified = any(k in _oq_lower for k in _NS_WORDS)
-        _needs_ns = any(
-            tc_name in (getattr(m, "name", "") or "")
-            for m in msgs if isinstance(m, ToolMessage)
-            for tc_name in ("get_pod_status", "get_deployment_status", "get_daemonset_status",
-                            "get_statefulset_status", "get_job_status", "get_hpa_status",
-                            "get_pvc_status", "get_service_status", "get_ingress_status",
-                            "get_resource_quotas", "get_configmap_list", "get_service_accounts")
-        )
-        _ns_prefix = (
-            f"§NS_PREFIX§As no namespace was specified, I am assuming you are requesting for all namespaces.§END_NS§\n\n"
-            if (_needs_ns and not _ns_specified) else ""
-        )
-
+        
         _tools_used = {getattr(tr, "name", "") for tr in tool_results}
+
+        _EXEMPT_TOOLS = {
+            "get_coredns_health", "get_node_health", "get_gpu_info", 
+            "get_pv_usage", "get_persistent_volumes", "query_prometheus_metrics",
+            "get_node_resource_requests", "rag_search", "kubectl_exec", "exec_db_query"
+        }
+        
+        _needs_ns = bool(_tools_used - _EXEMPT_TOOLS - {""})
+        
+        # --- DYNAMIC GUARDRAIL ---
+        _ns_prefix = ""
+        if _needs_ns:
+            detected_ns = _extract_namespace(original_question)
+            if detected_ns == "all":
+                _ns_prefix = "§NS_PREFIX§As no namespace was mentioned, I checked across all namespaces.§END_NS§\n\n"
+            else:
+                _ns_prefix = f"§NS_PREFIX§I mapped the keyword in your question and scoped this check to the `{detected_ns}` namespace.§END_NS§\n\n"
 
         _tool_char_limit = 40000
         parts = []
@@ -205,42 +253,35 @@ def build_agent():
             body = tr.content if len(tr.content) <= _tool_char_limit else tr.content[:_tool_char_limit] + "\n...[truncated]"
             parts.append(f"--- TOOL RESULT {i} ---\n{body}\n")
         combined = "".join(parts)
+        
+        _log_ag.info(f"[REQ:{req_id}] [prepare_msgs] combining {len(tool_results)} tool result(s) ({len(combined)} chars) for LLM synthesis")
 
         _TOOL_FORMATS = {
             "get_pod_logs": (
                 "Reproduce the log output EXACTLY as returned by the tool. "
-                "Include every log line with its full timestamp. "
-                "Do NOT summarise, paraphrase, or describe the log content in prose. "
-                "If the tool returned an error, state it exactly."
+                "Include every log line with its full timestamp. Do NOT summarise."
             ),
             "get_unhealthy_pods_detail": (
-                "List EVERY pod from the tool results. "
-                "One bullet per pod. Format: "
-                "`namespace/pod-name`: <phase> | Restarts: <N> | Cause: <reason> "
-                "(use exit code, OOMKilled, liveness probe failure, StartError, or last log lines). "
-                "Do NOT write prose. Do NOT skip any pod."
+                "List EVERY pod from the tool results. One bullet per pod. "
+                "Format: `namespace/pod-name`: <phase> | Restarts: <N> | Cause: <reason>. Do NOT skip any pod."
             ),
             "get_pvc_status": (
-                "List every non-Bound PVC from the results. "
-                "Format per PVC: namespace/name, phase, storage class, capacity. "
-                "If all PVCs are Bound, say so explicitly. "
+                "List the PVCs from the results. Format per PVC: namespace/name, phase, storage class, capacity. "
+                "If the user asks for 'storage type', explicitly report the 'storage class'. "
                 "Do NOT include Bound PVCs unless the user asked for all PVCs."
             ),
             "get_pv_usage": (
                 "Reproduce the storage usage report in full — do NOT summarise. "
-                "Include every PVC entry: those nearing capacity, within capacity, AND skipped. "
-                "For skipped entries show the exact reason from the tool output."
+                "Include every PVC entry: those nearing capacity, within capacity, AND skipped."
             ),
             "get_coredns_health": (
                 "Report CoreDNS health from the tool results. "
-                "State each pod's phase and readiness. "
-                "Include DNS resolution test results exactly as shown. "
-                "Use bullet points, one per pod/test."
+                "State each pod's phase and readiness. Include DNS resolution test results exactly as shown."
             ),
             "describe_pod": (
                 "Report the pod details from the tool results. "
-                "Include: phase, conditions, each container's state and restart count, "
-                "resource requests and limits. Use the exact values from the tool output."
+                "Include: phase, conditions, container states, restarts, resource requests/limits, "
+                "and volumes (to answer questions about storage types)."
             ),
             "query_prometheus_metrics": (
                 "Present the metrics exactly as returned. "
@@ -248,8 +289,7 @@ def build_agent():
             ),
             "get_pod_images": (
                 "List every pod from the results. "
-                "Format: `namespace/pod-name` [container]: registry/image:tag. "
-                "Do NOT show health fields (phase/restarts/cause) — image and tag only."
+                "Format: `namespace/pod-name` [container]: registry/image:tag."
             ),
             "get_node_resource_requests": (
                 "Reproduce the node resource table exactly. "
@@ -261,28 +301,21 @@ def build_agent():
             ),
             "get_pod_status": (
                 "Reproduce the pod table VERBATIM — every row, every column. "
-                "Do NOT summarise, count, or describe in prose. "
-                "If the result is a single summary sentence (e.g. 'All pods healthy'), "
-                "reproduce it exactly."
+                "Do NOT summarise, count, or describe in prose."
             ),
             "get_namespace_resource_summary": (
-                "ALWAYS lead with the total figures at the top of the answer: "
-                "total CPU requested, total CPU limit, total memory requested, total memory limit. "
-                "Then list the per-pod breakdown. "
-                "Do NOT start by listing individual pods — the total is the answer to a calculate question."
+                "ALWAYS calculate and lead with the total figures at the very top of your answer: "
+                "TOTAL CPU REQUESTED, TOTAL CPU LIMIT, TOTAL MEMORY REQUESTED, TOTAL MEMORY LIMIT. "
+                "Only after providing the totals should you list the per-pod breakdown. "
+                "Do NOT just list the pods—the total is the answer to a calculate question."
             ),
             "get_node_health": (
                 "Report the node health from the tool results. "
-                "For each node state: name, Ready status, any pressure conditions. "
-                "For GPU nodes include the EXACT GPU count and status string as returned — "
-                "e.g. 'GPU:2/2 (all in use — none free)' or 'GPU:0/2 (none in use — all free)'. "
-                "Do NOT paraphrase GPU status — copy the exact numbers and state label."
+                "For GPU nodes include the EXACT GPU count and status string as returned."
             ),
             "get_gpu_info": (
                 "Report GPU details from the tool results. "
-                "State the exact GPU model, total allocatable count, and how many are in use vs free. "
-                "Use the exact numbers from the tool output — do NOT say 'available and in use' "
-                "as that is contradictory. State in-use count and free count separately."
+                "State the exact GPU model, total allocatable count, and how many are in use vs free."
             ),
         }
 
@@ -374,11 +407,12 @@ def build_agent():
 
     def llm_node(state: AgentState):
         itr, msgs, updates = state.get("iteration", 0) + 1, state["messages"], list(state.get("status_updates", []))
+        req_id = state.get("req_id", "")
         if state.get("direct_answer"): 
             return {"messages": [AIMessage(content=state["direct_answer"])], "tool_calls_made": state.get("tool_calls_made", []), "iteration": itr, "status_updates": updates, "direct_answer": None}
         
         has_tool_results = any(isinstance(m, ToolMessage) for m in msgs)
-        invoke_msgs = _prepare_messages_for_hf(msgs, req_id=state.get("req_id", ""))
+        invoke_msgs = _prepare_messages_for_hf(msgs, req_id=req_id)
         chat_msgs = [{"role": "system", "content": prompt}] + _msgs_to_qwen3(invoke_msgs, True)
         
         _max_new = max(512, config.MAX_NEW_TOKENS) if has_tool_results else max(1024, config.MAX_NEW_TOKENS // 2)
@@ -399,10 +433,11 @@ def build_agent():
                 output_ids = model.generate(input_ids, max_new_tokens=_max_new, do_sample=True, temperature=0.7, top_p=0.8, top_k=20, repetition_penalty=1.05, pad_token_id=tokenizer.eos_token_id)
             raw_text = tokenizer.decode(output_ids[0][input_ids.shape[-1]:], skip_special_tokens=True)
 
+        _log_ag.info(f"[REQ:{req_id}] [llm_node] RAW LLM OUTPUT ({len(raw_text)} chars):\n{raw_text!r}")
+
         tcs = _parse_tool_calls(raw_text)
         content = re.sub(r'<tool_call>[\s\S]*?</tool_call>', '', raw_text).strip()
         
-        # Prepend the namespace assumption if it was triggered
         _ns_prepend = ""
         for m in invoke_msgs:
             if isinstance(m, HumanMessage):
@@ -422,12 +457,26 @@ def build_agent():
         user_q = next((m.content for m in state["messages"] if isinstance(m, HumanMessage)), "")
         tcs, direct_answer = getattr(last, "tool_calls", []) or [], None
 
+        # --- INTERCEPTOR: FORCE THE NAMESPACE ---
+        forced_ns = _extract_namespace(user_q)
+
         for tc in tcs:
             name, args = tc["name"], dict(tc.get("args", {}) or {})
+            
+            # Override LLM's namespace choice with our deterministic mapper
+            if "namespace" in args and forced_ns != "all":
+                args["namespace"] = forced_ns
+                config.logger.info(f"[REQ:{state.get('req_id', '')}] Overriding LLM namespace -> forced to '{forced_ns}'")
+            
             if name == "get_secrets": args["decode"] = _decode_secrets_ctx.get()
             tools_called.append(name)
             updates.append(f"$ {args['command']}" if name == "kubectl_exec" and "command" in args else f"⚙️ {name}")
+            
+            # Execute tool and log complete untruncated output
             out = _call_tool(name, args, all_tools)
+            _out_str = str(out)
+            _log_ag.info(f"[REQ:{state.get('req_id', '')}] [tool_node] {name} returned {len(_out_str)} chars:\n{_out_str}")
+            
             results.append(ToolMessage(content=out, tool_call_id=tc["id"], name=name))
 
             if name == "rag_search" and isinstance(out, str) and out.startswith("KB_EMPTY:"):
@@ -463,12 +512,20 @@ def get_agent():
 
 def _clean_response(text: str, user_question: str = "") -> str:
     text = re.sub(r'<think>[\s\S]*?</think>\s*', '', text)
-    text = re.sub(r'<\|im_start\|>\w+\s*\n?[\s\S]*?<\|im_end\|>\n?', '', text)
-    for tok in ['<|im_end|>', '<s>', '</s>', '[INST]', '[/INST]', '<<SYS>>', '<</SYS>>']: text = text.replace(tok, '')
+    
+    # Safely strip formatting tokens without matching random content in between
+    for tok in ['<|im_start|>', '<|im_end|>', '<s>', '</s>', '[INST]', '[/INST]', '<<SYS>>', '<</SYS>>']: 
+        text = text.replace(tok, '')
+        
+    text = text.strip()
+    if text.startswith("assistant\n"):
+        text = text[10:]
+        
     if user_question:
         q_stripped, escaped = user_question.strip(), re.escape(user_question.strip())
         text = re.sub(r'(?i)(\s*' + escaped + r'[?!.]?\s*){2,}', ' ', text)
         text = re.sub(r'(?i)^\s*' + escaped + r'[?!.]?\s*\n', '', text)
+        
     text = re.sub(r'Summarise the above tool results.*', '', text, flags=re.IGNORECASE)
     return re.sub(r'\n{3,}', '\n\n', text).strip()
 
@@ -478,12 +535,21 @@ async def run_agent(user_message: str) -> dict:
     _runnable_agent = get_agent()
     t0 = time.time()
     
+    if isinstance(_runnable_agent, dict):
+        _runnable_agent = build_agent()
+        global _agent
+        _agent = _runnable_agent
+        
     final = await _runnable_agent.ainvoke({"messages": [HumanMessage(content=user_message)], "tool_calls_made": [], "iteration": 0, "status_updates": [f"🤖 Model: {config.LLM_MODEL}"], "req_id": req_id})
     elapsed, last = time.time() - t0, final["messages"][-1]
     raw = last.content if hasattr(last, "content") else str(last)
     updates = final.get("status_updates", [])
     updates.append(f"✅ Done in {elapsed:.0f}s")
-    return {"response": _clean_response(raw, user_message), "tools_used": final.get("tool_calls_made", []), "iterations": final.get("iteration", 0), "status_updates": updates, "elapsed_seconds": round(elapsed, 1), "clarification_needed": False}
+    
+    _final_cleaned = _clean_response(raw, user_message)
+    config.logger.info(f"[REQ:{req_id}] done elapsed={elapsed:.1f}s tools={final.get('tool_calls_made', [])}\n[FINAL ANSWER]\n{_final_cleaned}\n[END FINAL ANSWER]")
+    
+    return {"response": _final_cleaned, "tools_used": final.get("tool_calls_made", []), "iterations": final.get("iteration", 0), "status_updates": updates, "elapsed_seconds": round(elapsed, 1), "clarification_needed": False}
 
 async def run_agent_streaming(user_message: str, history: list = None, max_new_tokens: int = 0):
     def _sse(payload: dict) -> str: return f"data: {json.dumps(payload)}\n\n"
@@ -491,6 +557,10 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
     req_id, t0 = uuid.uuid4().hex[:8], time.time()
     
     _runnable_agent = get_agent()
+    if isinstance(_runnable_agent, dict):
+        _runnable_agent = build_agent()
+        global _agent
+        _agent = _runnable_agent
         
     yield _sse({"type": "status", "text": f"🤖 Model: {config.LLM_MODEL}"})
     config.logger.info(f"[REQ:{req_id}] /chat/stream  q={user_message[:120]!r}")
@@ -566,12 +636,14 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
 
         elapsed = round(time.time() - t0, 1)
         _hb_stop.set(); _hb_task.cancel()
-        config.logger.info(f"[REQ:{req_id}] stream_done elapsed={elapsed}s tools={list(set(tools_called))}")
+        
+        _final_cleaned = _clean_response(final_answer, user_message)
+        config.logger.info(f"[REQ:{req_id}] stream_done elapsed={elapsed}s tools={list(set(tools_called))}\n[FINAL ANSWER]\n{_final_cleaned}\n[END FINAL ANSWER]")
         
         yield _sse({"type": "status", "text": f"✅ Done in {elapsed}s"})
         yield _sse({
             "type": "result", 
-            "response": _clean_response(final_answer, user_message), 
+            "response": _final_cleaned, 
             "tools_used": list(dict.fromkeys(tools_called)), 
             "iterations": iteration_count, 
             "status_updates": all_updates, 
@@ -618,9 +690,114 @@ def _llm_synthesise(context: str, question: str, top_k: int = 50, max_tokens: in
     except Exception as exc: 
         return context or ""
 
-# ── 3. FASTAPI ENDPOINTS ─────────────────────────────────────────────────────
+# ── 3. FASTAPI SETUP & LIFESPAN ──────────────────────────────────────────────
 
-app = FastAPI(title="Cloudera ECS AI Ops")
+def _run_startup_checks():
+    SMOKE_TESTS = [("get_node_health", {}), ("get_namespace_status", {}), ("get_pod_status", {"namespace": "all"})]
+    config.logger.info("[Self-test] Running kubectl tool smoke-tests…")
+    for name, kwargs in SMOKE_TESTS:
+        cfg = K8S_TOOLS.get(name)
+        if cfg is None: continue
+        try:
+            result = cfg["fn"](**kwargs)
+            if "error" in result.lower(): config.logger.warning(f"[Self-test] ⚠ {name}: {result[:120]}")
+            else: config.logger.info(f"[Self-test] ✓ {name}: {result.replace(chr(10), ' ')[:80]}…")
+        except Exception as e: config.logger.warning(f"[Self-test] ⚠ {name} raised: {e}")
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    config.logger.info("=" * 60)
+    config.logger.info(f"Cloudera ECS AI Ops")
+    config.logger.info(f"  Creator  : dennislee@cloudera.com")
+    config.logger.info(f"  LLM      : {config.LLM_MODEL}")
+    config.logger.info(f"  Embed    : {config.EMBED_MODEL}")
+    config.logger.info(f"  GPU      : {config.NUM_GPU} GPU(s)")
+    config.logger.info(f"  Tools    : {len(K8S_TOOLS) + len(RAG_TOOLS)} total tools registered")
+    config.logger.info(f"  LanceDB  : {config.LANCEDB_DIR}")
+    config.logger.info("=" * 60)
+
+    _run_startup_checks()
+    try:
+        init_db()
+        stats = get_doc_stats()
+        config.logger.info(f"[LanceDB] Ready — {stats['docs_chunks']} doc chunks, {stats['excel_rows']} Excel rows")
+    except Exception as e: config.logger.error(f"[LanceDB] Init failed: {e}")
+
+    config.logger.info("[Agent] Pre-warming LLM…")
+    get_agent()
+    config.logger.info("Startup complete ✓")
+    
+    yield
+    
+    config.logger.info("Shutting down")
+
+app = FastAPI(title="Cloudera ECS AI Ops", lifespan=_lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+if _HERE.joinpath("web", "static").exists():
+    app.mount("/static", StaticFiles(directory=str(_HERE / "web" / "static")), name="static")
+
+# ── 4. API ENDPOINTS ─────────────────────────────────────────────────────────
+
+def _gpu_metrics() -> list:
+    gpus = []
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        for i in range(pynvml.nvmlDeviceGetCount()):
+            h    = pynvml.nvmlDeviceGetHandleByIndex(i)
+            name = pynvml.nvmlDeviceGetName(h)
+            if isinstance(name, bytes):
+                name = name.decode()
+            util = pynvml.nvmlDeviceGetUtilizationRates(h)
+            mem  = pynvml.nvmlDeviceGetMemoryInfo(h)
+            try:    temp = pynvml.nvmlDeviceGetTemperature(h, pynvml.NVML_TEMPERATURE_GPU)
+            except: temp = 0
+            try:    pw   = round(pynvml.nvmlDeviceGetPowerUsage(h) / 1000.0, 1)
+            except: pw   = None
+            gpus.append({
+                "index":        i,
+                "name":         name,
+                "util_pct":     util.gpu,
+                "mem_used_gb":  round(mem.used  / 1e9, 1),
+                "mem_total_gb": round(mem.total / 1e9, 1),
+                "mem_pct":      round(mem.used  / mem.total * 100, 1),
+                "temp_c":       temp,
+                "power_w":      pw,
+            })
+        pynvml.nvmlShutdown()
+    except Exception:
+        pass
+    return gpus
+
+@app.get("/api", summary="API index — lists every endpoint with curl examples")
+@app.get("/api/", include_in_schema=False)
+async def api_index(request: Request):
+    base = str(request.base_url).rstrip("/")
+    return {
+        "description": "Cloudera ECS AI Ops — curl-friendly REST API",
+        "endpoints": [
+            {"method": "GET",  "path": "/api/info",           "description": "Model, GPU, cluster info"},
+            {"method": "POST", "path": "/api/ask",            "description": "Ask the AI chatbot (blocking)",
+             "curl": f'curl -s -X POST {base}/api/ask -H "Content-Type: application/json" -d \'{{"q":"list all pods with problems"}}\''},
+            {"method": "POST", "path": "/api/tool",           "description": "Call a specific K8s tool directly",
+             "curl": f'curl -s -X POST {base}/api/tool -H "Content-Type: application/json" -d \'{{"name":"get_pod_status","args":{{"namespace":"all","show_all":true}}}}\''},
+            {"method": "GET",  "path": "/api/tools",          "description": "List all registered tools and their signatures"},
+            {"method": "GET",  "path": "/api/pods",           "description": "Pod health summary  (optional: ?ns=cdp-drs)"},
+            {"method": "GET",  "path": "/api/pods/raw",       "description": "kubectl-style pod table  (optional: ?ns=cdp-drs)",
+             "curl": f"curl -s '{base}/api/pods/raw?ns=longhorn-system'"},
+            {"method": "GET",  "path": "/api/nodes",          "description": "Node health and GPU summary"},
+            {"method": "GET",  "path": "/api/events",         "description": "Cluster events  (optional: ?ns=X&warn=1 for warnings only)",
+             "curl": f"curl -s '{base}/api/events?warn=1'"},
+            {"method": "GET",  "path": "/api/deployments",    "description": "Deployment status  (optional: ?ns=X)"},
+            {"method": "GET",  "path": "/api/pvcs",           "description": "PVC / storage status  (optional: ?ns=X)"},
+            {"method": "GET",  "path": "/api/namespaces",     "description": "All namespaces and their status"},
+            {"method": "GET",  "path": "/api/rag/stats",      "description": "LanceDB document and Excel row statistics"},
+            {"method": "GET",  "path": "/api/rag/files",      "description": "List all previously ingested filenames"},
+            {"method": "GET",  "path": "/api/rag/query",      "description": "RAG-only query for Knowledge Bot (no LLM, no truncation)"},
+            {"method": "GET",  "path": "/metrics",            "description": "Live CPU / RAM / GPU metrics"},
+        ],
+    }
 
 @app.get("/health")
 async def health():
@@ -667,17 +844,38 @@ async def chat_stream(req: ChatRequest):
 
 @app.get("/metrics")
 async def metrics():
-    cpu_per, mem, freq = psutil.cpu_percent(interval=0.2, percpu=True), psutil.virtual_memory(), psutil.cpu_freq()
+    cpu_per = psutil.cpu_percent(interval=0.2, percpu=True)
+    mem     = psutil.virtual_memory()
+    freq    = psutil.cpu_freq()
     return {
-        "cpu_total": round(psutil.cpu_percent(interval=None), 1), 
-        "cpu_per_core": [round(p, 1) for p in cpu_per], 
-        "cpu_count": psutil.cpu_count(logical=True), 
-        "freq_mhz": round(freq.current) if freq else 0, 
-        "load_avg": [round(x, 2) for x in psutil.getloadavg()], 
-        "mem_total_gb": round(mem.total / 1e9, 1), 
-        "mem_used_gb": round(mem.used / 1e9, 1), 
-        "mem_pct": mem.percent, 
-        "num_gpu": config.NUM_GPU
+        "cpu_total":    round(psutil.cpu_percent(interval=None), 1),
+        "cpu_per_core": [round(p, 1) for p in cpu_per],
+        "cpu_count":    psutil.cpu_count(logical=True),
+        "freq_mhz":     round(freq.current) if freq else 0,
+        "load_avg":     [round(x, 2) for x in psutil.getloadavg()],
+        "mem_total_gb": round(mem.total / 1e9, 1),
+        "mem_used_gb":  round(mem.used  / 1e9, 1),
+        "mem_pct":      mem.percent,
+        "gpus":         _gpu_metrics(),
+        "num_gpu":      config.NUM_GPU,
+    }
+
+@app.get("/api/system", summary="Live CPU / RAM / GPU utilisation metrics")
+async def api_system():
+    cpu_per = psutil.cpu_percent(interval=0.2, percpu=True)
+    mem     = psutil.virtual_memory()
+    freq    = psutil.cpu_freq()
+    return {
+        "cpu_total_pct":  round(psutil.cpu_percent(interval=None), 1),
+        "cpu_per_core":   [round(p, 1) for p in cpu_per],
+        "cpu_count":      psutil.cpu_count(logical=True),
+        "freq_mhz":       round(freq.current) if freq else 0,
+        "load_avg_1_5_15": [round(x, 2) for x in psutil.getloadavg()],
+        "ram_total_gb":   round(mem.total / 1e9, 1),
+        "ram_used_gb":    round(mem.used  / 1e9, 1),
+        "ram_pct":        mem.percent,
+        "gpus":           _gpu_metrics(),
+        "num_gpu":        config.NUM_GPU,
     }
 
 @app.post("/ingest")
@@ -895,55 +1093,11 @@ async def api_set_config(body: dict):
     if not updated: return _JSONResponse(status_code=400, content={"error": "No recognised config keys in body"})
     return {"ok": True, "updated": updated}
 
-@app.get("/", response_class=FileResponse)
+@app.get("/")
 async def serve_ui():
     if _HERE.joinpath("web", "index.html").exists():
         return FileResponse(str(_HERE / "web" / "index.html"), media_type="text/html")
     return _JSONResponse(status_code=404, content={"error": "web/index.html not found"})
-
-# ── 4. LIFESPAN & STARTUP ────────────────────────────────────────────────────
-
-def _run_startup_checks():
-    SMOKE_TESTS = [("get_node_health", {}), ("get_namespace_status", {}), ("get_pod_status", {"namespace": "all"})]
-    config.logger.info("[Self-test] Running kubectl tool smoke-tests…")
-    for name, kwargs in SMOKE_TESTS:
-        cfg = K8S_TOOLS.get(name)
-        if cfg is None: continue
-        try:
-            result = cfg["fn"](**kwargs)
-            if "error" in result.lower(): config.logger.warning(f"[Self-test] ⚠ {name}: {result[:120]}")
-            else: config.logger.info(f"[Self-test] ✓ {name}: {result.replace(chr(10), ' ')[:80]}…")
-        except Exception as e: config.logger.warning(f"[Self-test] ⚠ {name} raised: {e}")
-
-@app.on_event("startup")
-async def _startup_event():
-    config.logger.info("=" * 60)
-    config.logger.info(f"Cloudera ECS AI Ops")
-    config.logger.info(f"  LLM      : {config.LLM_MODEL}")
-    config.logger.info(f"  Embed    : {config.EMBED_MODEL}")
-    config.logger.info(f"  GPU      : {config.NUM_GPU} GPU(s)")
-    config.logger.info(f"  Tools    : {len(K8S_TOOLS)} kubectl tools registered")
-    config.logger.info("=" * 60)
-
-    _run_startup_checks()
-    try:
-        init_db()
-        stats = get_doc_stats()
-        config.logger.info(f"[LanceDB] Ready — {stats['docs_chunks']} doc chunks, {stats['excel_rows']} Excel rows")
-    except Exception as e: config.logger.error(f"[LanceDB] Init failed: {e}")
-
-    config.logger.info("[Agent] Pre-warming LLM…")
-    get_agent()
-    config.logger.info("Startup complete ✓")
-
-@app.on_event("shutdown")
-async def _shutdown_event():
-    config.logger.info("Shutting down")
-
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
-
-if _HERE.joinpath("web", "static").exists():
-    app.mount("/static", StaticFiles(directory=str(_HERE / "web" / "static")), name="static")
 
 if __name__ == "__main__":
     if config.ARGS.ingest:
@@ -957,22 +1111,5 @@ if __name__ == "__main__":
             icon = ("✓" if r["status"] == "ingested" else "—" if r["status"] == "skipped" else "✗")
             print(f"  {icon}  {r['file']:<42} {r['status']:<10} ({r['chunks']} chunks)")
         print()
-
-    gpu_str    = (f"{config.NUM_GPU} GPU(s) — GPU inference" if config.NUM_GPU > 0 else "None — CPU inference")
-    tool_count = len(K8S_TOOLS)
-
-    print(f"""
-╔════════════════════════════════════════════════════════════╗
-║            Cloudera ECS AI Ops                             ║
-╠════════════════════════════════════════════════════════════╣
-║  Creator  : dennislee@cloudera.com                         ║
-║  LLM      : {config.LLM_MODEL:<46} ║
-║  Embed    : {config.EMBED_MODEL:<46} ║
-║  GPU      : {gpu_str:<46} ║
-║  Tools    : {tool_count} kubectl tools registered{'':<26} ║
-║  LanceDB  : {config.LANCEDB_DIR:<46} ║
-║  Server   : http://{config.ARGS.host}:{config.ARGS.port:<38} ║
-╚════════════════════════════════════════════════════════════╝
-""")
 
     uvicorn.run("app:app", host=config.ARGS.host, port=config.ARGS.port, reload=config.ARGS.reload, log_level="warning")
