@@ -3614,7 +3614,7 @@ K8S_TOOLS: dict = {
     "get_pod_status": {
         "fn":          get_pod_status,
         "description": (
-            "List pods"
+            "List pods in a namespace. "
             "By default only UNHEALTHY pods are returned (non-Running, not ready, or high restarts). "
             "Set show_all=true to list ALL pods including healthy ones — ALWAYS use show_all=true "
             "when the user asks 'how many pods', 'list pods', 'what pods are running', or "
