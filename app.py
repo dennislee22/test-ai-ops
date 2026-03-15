@@ -1032,7 +1032,7 @@ def build_agent():
             for m in msgs if isinstance(m, ToolMessage)
             for tc_name in ("get_pod_status", "get_deployment_status", "get_daemonset_status",
                             "get_statefulset_status", "get_job_status", "get_hpa_status",
-                            "get_pvc_status", "get_service_status", "get_ingress_status",
+                            "get_service_status", "get_ingress_status",
                             "get_resource_quotas", "get_configmap_list", "get_service_accounts")
         )
         _ns_prefix = (
