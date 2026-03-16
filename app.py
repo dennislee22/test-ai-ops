@@ -328,18 +328,6 @@ def build_agent():
                 + _TOOL_FORMATS[_single_tool]
             )
 
-        elif _is_health_sweep:
-            synthesis_prompt = (
-                f"Question: {original_question}\n\n"
-                f"Tool Results:\n{combined}\n"
-                "Write a concise cluster health summary:\n"
-                "1. Overall status in one sentence (healthy / issues found).\n"
-                "2. If any problems exist, list them specifically: exact pod, node, "
-                "deployment, PVC, or event with its state.\n"
-                "3. If everything is healthy, say so briefly — do not list healthy items.\n"
-                "Use plain sentences. No markdown headers. No closing remarks."
-            )
-
         elif _single_tool in _ENUMERATION_TOOLS:
             synthesis_prompt = (
                 f"Question: {original_question}\n\n"
