@@ -1040,9 +1040,15 @@ async def api_kb_stream(req: KbAskRequest):
             return
 
         _clean_q = re.sub(r'[^\w\s]', '', q.lower()).strip()
+        
         _greetings = {
             "hi", "hello", "hey", "how are you", "who are you", 
             "what are you", "how are you doing", "good morning", "good afternoon"
+        }
+        
+        _capabilities = {
+            "what can you do", "what do you do", "how can you help", 
+            "how can you help me", "what are your capabilities", "help"
         }
         
         if _clean_q in _greetings:
@@ -1055,7 +1061,23 @@ async def api_kb_stream(req: KbAskRequest):
             })
             return
             
-        # --- SANITY CHECK: ENFORCE COMPLETE SENTENCES/QUESTIONS ---
+        if _clean_q in _capabilities:
+            yield _sse({
+                "type": "result", 
+                "answer": (
+                    "I am the ECS Knowledge Bot. I can search through our ingested documentation to help you with:\n\n"
+                    "• **Known Issues:** Troubleshooting and bugs.\n"
+                    "• **Past Learnings:** Historical incidents and resolutions.\n"
+                    "• **Dos and Don'ts:** Best practices and configuration guidelines.\n"
+                    "• **Prerequisites:** Setup requirements.\n\n"
+                    "Just ask me a detailed question like, *'List all known issues with Longhorn in 1.5.5 SP1'*."
+                ), 
+                "query": q, 
+                "elapsed": 0.0, 
+                "top_k": req.top_k
+            })
+            return
+
         word_count = len(q.split())
         if word_count < 3:
             yield _sse({
@@ -1066,7 +1088,6 @@ async def api_kb_stream(req: KbAskRequest):
                 "top_k": req.top_k
             })
             return
-        # ----------------------------------------------------------
 
         top_k, sheet = max(10, min(req.top_k, 500)), req.sheet
         
