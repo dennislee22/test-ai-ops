@@ -161,14 +161,13 @@ def _build_llm_gguf():
 _LOCAL_NS_MAP = {
     "vault": "vault-system",
     "longhorn": "longhorn-system",
-    "cdp": "cdp",
-    "ingress": "ingress-nginx"
+    "cdp": "cdp"
 }
 
 _IGNORE_NS = {
-    "all", "the", "any", "which", "what", "my", "this", "a", "some", "in", 
+    "all", "the", "any", "which", "what", "my", "this", "that", "a", "some", "in", "specific",
     "for", "of", "to", "is", "not", "are", "and", "or", "pvc", "pvcs", "pod", "pods", 
-    "node", "nodes", "deployment", "deployments", "status", "health", "check", "get", 
+    "node", "nodes", "deployment", "deployments", "status", "health", "check", "get", "individual",
     "show", "has", "have", "had", "with", "without", "using", "uses", "does", "do"
 }
 

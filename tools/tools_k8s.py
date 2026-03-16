@@ -762,26 +762,57 @@ def get_node_capacity() -> str:
         return f"K8s API error: {e.reason}"
 
 def get_node_labels(node_name: str = None) -> str:
-    nodes = _core.list_node().items
-    results = []
-    for node in nodes:
-        if node_name and node.metadata.name != node_name:
-            continue
-        labels = node.metadata.labels or {}
-        roles = [k.split("/")[-1] for k, v in labels.items() if k.startswith("node-role.kubernetes.io/")]
-        results.append(f"{node.metadata.name}: roles={roles}, labels={labels}")
-    return "\n".join(results)
+    try:
+        nodes = _core.list_node()
+        if not nodes.items:
+            return "No nodes found."
+
+        results = []
+        for node in nodes.items:
+            if node_name and node.metadata.name != node_name:
+                continue
+
+            labels = node.metadata.labels or {}
+            roles = [
+                k.split("/")[-1]
+                for k, v in labels.items()
+                if k.startswith("node-role.kubernetes.io/")
+            ]
+            results.append(f"{node.metadata.name}: roles={roles}, labels={labels}")
+
+        if not results:
+            if node_name:
+                return f"Node '{node_name}' not found."
+            return "No nodes matched the query."
+
+        return "\n".join(results)
+
+    except ApiException as e:
+        return f"K8s API error: {e.reason}"
 
 def get_node_taints(node_name: str = None) -> str:
-    nodes = _core.list_node().items
-    results = []
-    for node in nodes:
-        if node_name and node.metadata.name != node_name:
-            continue
-        node_taints = node.spec.taints or []
-        taints_str = ", ".join([f"{t.key}={t.value}:{t.effect}" for t in node_taints]) or "None"
-        results.append(f"{node.metadata.name}: {taints_str}")
-    return "\n".join(results)
+    try:
+        nodes = _core.list_node()
+        if not nodes.items:
+            return "No nodes found."
+
+        results = []
+        for node in nodes.items:
+            if node_name and node.metadata.name != node_name:
+                continue
+            node_taints = node.spec.taints or []
+            taints_str = ", ".join([f"{t.key}={t.value}:{t.effect}" for t in node_taints]) or "None"
+            results.append(f"{node.metadata.name}: {taints_str}")
+
+        if not results:
+            if node_name:
+                return f"Node '{node_name}' not found."
+            return "No taints found on any nodes."
+
+        return "\n".join(results)
+
+    except ApiException as e:
+        return f"K8s API error: {e.reason}"
 
 def get_node_resource_requests() -> str:
     """Aggregate CPU/memory requests and limits per node from all running pods."""
