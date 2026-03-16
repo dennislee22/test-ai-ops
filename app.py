@@ -156,7 +156,7 @@ def _build_llm_gguf():
     _log_ag.info(f"[LLM/GGUF] Model loaded (CPU, {n_threads} threads, ctx={n_ctx})")
     return None, model, is_qwen3
 
-# --- NAMESPACE INTERCEPTOR MAPPER ---
+# --- Namespace Interceptor
 _LOCAL_NS_MAP = {
     "vault": "vault-system",
     "longhorn": "longhorn-system",
