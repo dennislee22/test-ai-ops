@@ -308,24 +308,11 @@ def build_agent():
                 "Report the node health from the tool results. "
                 "For GPU nodes include the EXACT GPU count and status string as returned."
             ),
-            "get_node_taints": {
-                "Report taint from each node."
-            },
             "get_gpu_info": (
                 "Report GPU details from the tool results. "
                 "State the exact GPU model, total allocatable count, and how many are in use vs free."
             ),
         }
-
-        _HEALTH_SWEEP_TOOLS = {
-            "get_node_health", "get_pod_status", "get_deployment_status",
-            "get_pvc_status", "get_events", "get_daemonset_status",
-            "get_statefulset_status", "get_job_status", "get_hpa_status",
-        }
-        _is_health_sweep = (
-            len(tool_results) >= 3
-            and _tools_used.issubset(_HEALTH_SWEEP_TOOLS | {""})
-        )
 
         _ENUMERATION_TOOLS = {
             "get_pod_status", "get_deployment_status", "get_daemonset_status",
@@ -372,7 +359,9 @@ def build_agent():
                 "Be specific — name exact pods, nodes, or resources. "
                 "If the results contain a list, reproduce it in full. "
                 "If the question asks for a count, state the number directly. "
-                "No preamble. No closing remarks."
+                "CRITICAL INSTRUCTION: You already have all the data required. "
+                "DO NOT output any <tool_call> tags. DO NOT call any more tools. "
+                "Write the final plain-text answer to the user right now."
             )
 
         return [HumanMessage(content=_ns_prefix + synthesis_prompt)]
