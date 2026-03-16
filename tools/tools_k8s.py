@@ -685,6 +685,68 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
 
     return "\n".join(out)
 
+def get_cluster_version() -> str:
+    try:
+        version_info = _version.get_code()
+        server_version = version_info.git_version if hasattr(version_info, "git_version") else "unknown"
+        client_version = _version.get_version()
+        return f"Kubernetes version: server={server_version}, client={client_version}"
+    except ApiException as e:
+        return f"K8s API error: {e.reason}"
+
+def get_storage_classes() -> str:
+    try:
+        scs = _storage.list_storage_class()
+        if not scs.items:
+            return "No StorageClasses found."
+        lines = ["StorageClasses:"]
+        for sc in sorted(scs.items, key=lambda s: s.metadata.name):
+            default = sc.metadata.annotations.get("storageclass.kubernetes.io/is-default-class") == "true"
+            lines.append(f"  {sc.metadata.name} | Provisioner: {sc.provisioner} | Default: {default}")
+        return "\n".join(lines)
+    except ApiException as e:
+        return f"K8s API error: {e.reason}"
+
+def get_endpoints_status(namespace: str = "all") -> str:
+    try:
+        eps = (_core.list_endpoints_for_all_namespaces()
+               if namespace == "all"
+               else _core.list_namespaced_endpoints(namespace=namespace))
+        if not eps.items:
+            return f"No Endpoints found in namespace '{namespace}'."
+        lines = [f"Endpoints in '{namespace}':"]
+        for ep in sorted(eps.items, key=lambda e: (e.metadata.namespace, e.metadata.name)):
+            subsets = ep.subsets or []
+            addresses_count = sum(len(s.addresses or []) for s in subsets)
+            ports_count = sum(len(s.ports or []) for s in subsets)
+            lines.append(f"  {ep.metadata.namespace}/{ep.metadata.name}: {addresses_count} addresses, {ports_count} ports")
+        return "\n".join(lines)
+    except ApiException as e:
+        return f"K8s API error: {e.reason}"
+    
+def get_node_capacity() -> str:
+    try:
+        nodes = _core.list_node()
+        if not nodes.items:
+            return "No nodes found."
+        lines = ["Node capacity:"]
+        for node in sorted(nodes.items, key=lambda n: n.metadata.name):
+            alloc = node.status.allocatable or {}
+            cpu = alloc.get("cpu", "n/a")
+            mem = alloc.get("memory", "n/a")
+            gpu = 0
+            for key in alloc:
+                if "nvidia.com/gpu" in key or "amd.com/gpu" in key:
+                    try:
+                        gpu += int(alloc[key])
+                    except (ValueError, TypeError):
+                        pass
+            gpu_str = f", GPU: {gpu}" if gpu else ""
+            lines.append(f"  {node.metadata.name}: CPU={cpu}, Mem={mem}{gpu_str}")
+        return "\n".join(lines)
+    except ApiException as e:
+        return f"K8s API error: {e.reason}"
+
 def get_node_labels(node_name: str) -> str:
     try:
         node = _core.read_node(name=node_name)
@@ -3923,7 +3985,6 @@ K8S_TOOLS: dict = {
             "namespace": {"type": "string", "default": "default", "description": "Namespace to query. Defaults to 'default' — only override when the user explicitly names a namespace."},
         },
     },
-
     "get_node_health": {
         "fn":          get_node_health,
         "description": (
@@ -3937,7 +3998,6 @@ K8S_TOOLS: dict = {
         ),
         "parameters":  {},
     },
-
     "get_gpu_info": {
         "fn":          get_gpu_info,
         "description": (
@@ -4055,6 +4115,51 @@ K8S_TOOLS: dict = {
             "Highlights PVCs that are Pending, Lost, or not successfully bound."
         ),
         "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
+    },
+    "get_cluster_version": {
+        "fn":          get_cluster_version,
+        "description": (
+            "Show the Kubernetes cluster version. "
+            "Returns both server (API server) and client versions. "
+            "Use for questions like: 'what Kubernetes version is running?', "
+            "'cluster API version', or 'client vs server version'. "
+            "Do NOT use for node health, storage, or pod status."
+        ),
+        "parameters":  {},
+    },
+    "get_storage_classes": {
+        "fn":          get_storage_classes,
+        "description": (
+            "List all StorageClasses in the cluster. "
+            "Shows provisioner type and whether each class is default. "
+            "Use for questions like: 'what storage classes exist?', "
+            "'which storage class is default?', or 'how is persistent storage provisioned?'. "
+            "Do NOT use for PVC or PV usage — use get_pvc_status or get_pv_usage instead."
+        ),
+        "parameters":  {},
+    },
+    "get_endpoints_status": {
+        "fn":          get_endpoints_status,
+        "description": (
+            "List Kubernetes Endpoints in a namespace or across all namespaces. "
+            "Shows the number of addresses and ports for each Endpoint. "
+            "Use for questions like: 'which pods/services are reachable?', "
+            "'how many endpoints exist in namespace X?', or 'is service Y healthy?'. "
+            "Do NOT use for actual pod or service health — use get_pod_status or get_service_status instead."
+        ),
+        "parameters":  {
+            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces."}
+        },
+    },
+    "get_node_capacity": {
+        "fn":          get_node_capacity,
+        "description": (
+            "Show the CPU, memory, and GPU allocatable capacity of each Kubernetes node. "
+            "Use for questions like: 'how many CPUs/memory are available per node?', "
+            "'which nodes have GPUs?', or 'node capacity details'. "
+            "Do NOT use for real-time usage — use get_node_health or query_prometheus_metrics instead."
+        ),
+        "parameters":  {},
     },
     "get_persistent_volumes": {
         "fn":          get_persistent_volumes,
