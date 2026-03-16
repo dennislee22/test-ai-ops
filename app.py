@@ -235,7 +235,7 @@ def build_agent():
 
         _EXEMPT_TOOLS = {
             "get_coredns_health", "get_node_info", "get_gpu_info", "get_node_capacity", "run_cluster_health",
-            "get_pv_usage", "get_persistent_volumes", "query_prometheus_metrics",
+            "get_pv_usage", "get_persistent_volumes", "query_prometheus_metrics", "find_resource",
             "get_node_resource_requests", "rag_search", "kubectl_exec", "exec_db_query",
             "get_node_labels", "get_node_taints", "get_storage_classes", "get_endpoints_status", "get_cluster_version"
         }
