@@ -649,20 +649,24 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
         config.MAX_NEW_TOKENS = _saved_max
 
 def _llm_synthesise(context: str, question: str, top_k: int = 50, max_tokens: int = 0) -> str:
-    _kb_is_empty = not context or not context.strip() or (isinstance(context, str) and context.startswith("KB_EMPTY:"))
-    _no_match    = (isinstance(context, str) and context.strip() == "No relevant documentation found.")
+    try: 
+        tok, mdl, is_q3 = globals()["_kb_tokenizer"], globals()["_kb_model"], globals()["_kb_is_qwen3"]
+    except KeyError: 
+        return context or ""
     
-    # RAG Guardrail
-    if _kb_is_empty: 
-        return _MSG_NO_INGEST
-    if _no_match:
-        return "I'm sorry, I could not find any relevant documentation in the knowledge base to answer your question."
+    kb_prompt_path = config._HERE / "config" / "kb_prompt.txt"
+    if kb_prompt_path.exists():
+        sys_prompt = kb_prompt_path.read_text(encoding="utf-8")
+    else:
+        sys_prompt = (
+            "You are the ECS Knowledge Bot for Cloudera ECS. Your job is to answer questions using ONLY the provided Knowledge Base Context.\n"
+            "1. If the context says 'KB_EMPTY' or 'No relevant documentation', tell the user you don't have the answer in your database. Do not make things up.\n"
+            "2. If the user greets you or asks what you can do, politely introduce yourself. Tell them you can search for 'Known Issues', 'Past Learnings', 'Dos and Donts', and 'Prerequisites'.\n"
+            "3. For technical questions, answer STRICTLY using the context provided."
+        )
     
-    try: tok, mdl, is_q3 = globals()["_kb_tokenizer"], globals()["_kb_model"], globals()["_kb_is_qwen3"]
-    except KeyError: return context or ""
+    user_msg = f"[KNOWLEDGE BASE CONTEXT]\n{context}\n[END CONTEXT]\n\nQuestion: {question}"
     
-    sys_prompt = "You are the ECS Knowledge Bot for Cloudera ECS... Answer questions strictly from the knowledge base context provided."
-    user_msg = f"[KNOWLEDGE BASE CONTEXT]\n{context}\n[END CONTEXT]\n\nQuestion: {question}\n\nAnswer using only the context above." if context else f"Question: {question}"
     msgs = [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_msg}]
     _max_out = max_tokens if max_tokens > 0 else min(512 + top_k * 16, 4096)
     
@@ -675,10 +679,11 @@ def _llm_synthesise(context: str, question: str, top_k: int = 50, max_tokens: in
             kw = {"add_generation_prompt": True}
             if is_q3: kw["enable_thinking"] = False
             encoded = tok.apply_chat_template(msgs, tokenize=True, return_tensors="pt", **kw)
-            ids = (encoded["input_ids"] if hasattr(encoded, "__getitem__") and not hasattr(encoded, "shape") else encoded).to(mdl.device)
+            input_ids = (encoded["input_ids"] if hasattr(encoded, "__getitem__") and not hasattr(encoded, "shape") else encoded).to(mdl.device)
             with torch.no_grad(): 
-                out = mdl.generate(ids, max_new_tokens=_max_out, do_sample=False, temperature=1.0, repetition_penalty=1.05, pad_token_id=tok.eos_token_id)
-            raw = tok.decode(out[0][ids.shape[-1]:], skip_special_tokens=True)
+                out = mdl.generate(input_ids, max_new_tokens=_max_out, do_sample=False, temperature=1.0, repetition_penalty=1.05, pad_token_id=tok.eos_token_id)
+            raw = tok.decode(out[0][input_ids.shape[-1]:], skip_special_tokens=True)
+            
         return re.sub(r'<think>[\s\S]*?</think>\s*', '', raw).strip() or context or ""
     except Exception as exc: 
         return context or ""
