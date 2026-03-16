@@ -761,7 +761,7 @@ def get_node_capacity() -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_node_labels(node_name: str = None, label_search: str = None) -> str:
+def get_node_labels(node_name: str = None, search: str = None) -> str:
     try:
         nodes = _core.list_node().items
         if not nodes:
@@ -769,61 +769,69 @@ def get_node_labels(node_name: str = None, label_search: str = None) -> str:
 
         results = []
         for node in sorted(nodes, key=lambda n: n.metadata.name):
-            if node_name and node_name != "all" and node.metadata.name != node_name:
+            if node_name and node.metadata.name != node_name:
                 continue
 
             labels = node.metadata.labels or {}
-            if label_search:
-                matching = {k: v for k, v in labels.items() if label_search in k or label_search in str(v)}
-                if not matching:
-                    continue
-            else:
-                matching = labels
+            roles = [k.split("/")[-1] for k, v in labels.items()
+                     if k.startswith("node-role.kubernetes.io/")] or ["worker"]
 
-            roles = [k.split("/")[-1] for k, v in labels.items() if k.startswith("node-role.kubernetes.io/")]
-            results.append(f"{node.metadata.name}: roles={roles}, labels={matching}")
+            filtered_labels = {}
+            for k, v in labels.items():
+                if search is None or search.lower() in k.lower() or search.lower() in str(v).lower():
+                    filtered_labels[k] = v
+
+            if not filtered_labels:
+                if search:
+                    continue  # skip this node if no label matches search
+                else:
+                    filtered_labels = labels  # show all if no search
+
+            results.append(f"{node.metadata.name}: roles={roles}")
+            for k in sorted(filtered_labels.keys()):
+                results.append(f"  {k} = {filtered_labels[k]}")
 
         if not results:
-            if label_search:
-                return f"No nodes found with label matching '{label_search}'."
-            return "No nodes found."
+            return f"No matching node(s) found for '{search or node_name}'."
 
         return "\n".join(results)
 
     except ApiException as e:
-        return f"K8s API error listing nodes: {e.reason}"
+        return f"K8s API error: {e.reason}"
+    except Exception as ex:
+        return f"Unexpected error listing node labels: {ex}"
 
-def get_node_taints(node_name: str = None, taint_search: str = None) -> str:
+def get_node_taints(node_name: str = None, search: str = None) -> str:
     try:
         nodes = _core.list_node().items
-        if not nodes:
-            return "No nodes found."
+    except ApiException as e:
+        return f"K8s API error: {e.reason}"
 
-        results = []
-        for node in sorted(nodes, key=lambda n: n.metadata.name):
-            if node_name and node_name != "all" and node.metadata.name != node_name:
+    results = []
+
+    for node in nodes:
+        if node_name and node.metadata.name != node_name:
+            continue
+
+        taints = node.spec.taints or []
+        if taints:
+            taint_str = ", ".join(
+                f"{t.key}={t.value}:{t.effect}" if t.value else f"{t.key}:{t.effect}"
+                for t in taints
+            )
+        else:
+            taint_str = "None"
+
+        if search:
+            if search not in taint_str:
                 continue
 
-            node_taints = node.spec.taints or []
-            if taint_search:
-                matching = [t for t in node_taints if taint_search in t.key or taint_search in str(t.value)]
-                if not matching:
-                    continue
-                taints_str = ", ".join([f"{t.key}={t.value}:{t.effect}" for t in matching])
-            else:
-                taints_str = ", ".join([f"{t.key}={t.value}:{t.effect}" for t in node_taints]) or "None"
+        results.append(f"{node.metadata.name}: {taint_str}")
 
-            results.append(f"{node.metadata.name}: {taints_str}")
+    if not results:
+        return f"No tainted nodes found{' for ' + repr(search) if search else ''}."
 
-        if not results:
-            if taint_search:
-                return f"No tainted nodes found matching '{taint_search}'."
-            return "No tainted nodes found."
-
-        return "\n".join(results)
-
-    except ApiException as e:
-        return f"K8s API error listing nodes: {e.reason}"
+    return "\n".join(results)
     
 def get_node_resource_requests() -> str:
     """Aggregate CPU/memory requests and limits per node from all running pods."""
@@ -911,88 +919,80 @@ def get_node_resource_requests() -> str:
         )
     return "\n".join(lines)
 
-def get_node_health() -> str:
+def get_node_info(node_name: str = None) -> str:
     try:
-        nodes = _core.list_node()
-        if not nodes.items:
+        nodes = _core.list_node().items
+        if not nodes:
             return "No nodes found."
 
         gpu_used_by_node: dict = {}
         try:
-            all_pods = _core.list_pod_for_all_namespaces(
-                field_selector="status.phase=Running")
+            all_pods = _core.list_pod_for_all_namespaces(field_selector="status.phase=Running")
             for pod in all_pods.items:
-                node_name = pod.spec.node_name or ""
-                if not node_name:
+                n_name = pod.spec.node_name or ""
+                if not n_name:
                     continue
                 for container in (pod.spec.containers or []):
                     reqs = (container.resources.requests or {}) if container.resources else {}
                     for key, val in reqs.items():
                         if "nvidia.com/gpu" in key or "amd.com/gpu" in key:
                             try:
-                                gpu_used_by_node[node_name] = (
-                                    gpu_used_by_node.get(node_name, 0) + int(val))
+                                gpu_used_by_node[n_name] = gpu_used_by_node.get(n_name, 0) + int(val)
                             except (ValueError, TypeError):
                                 pass
         except Exception:
             pass
 
-        lines        = ["Node health:"]
-        gpu_nodes    = 0
+        lines = ["Node info:"]
+        gpu_nodes = 0
         tainted_nodes = 0
 
-        for node in nodes.items:
+        for node in nodes:
+            if node_name and node.metadata.name != node_name:
+                continue
+
             roles = [k.replace("node-role.kubernetes.io/", "")
                      for k in (node.metadata.labels or {})
                      if k.startswith("node-role.kubernetes.io/")] or ["worker"]
 
             conds = {c.type: c.status for c in (node.status.conditions or [])}
 
-            pressure = [t for t in ["MemoryPressure", "DiskPressure", "PIDPressure"]
-                        if conds.get(t) == "True"]
+            pressure = [t for t in ["MemoryPressure", "DiskPressure", "PIDPressure"] if conds.get(t) == "True"]
 
             alloc = node.status.allocatable or {}
 
-            gpu_allocatable = 0
+            gpu_alloc = 0
             for key in alloc:
                 if "nvidia.com/gpu" in key or "amd.com/gpu" in key:
                     try:
-                        gpu_allocatable += int(alloc[key])
+                        gpu_alloc += int(alloc[key])
                     except (ValueError, TypeError):
                         pass
 
-            if gpu_allocatable:
+            if gpu_alloc:
                 gpu_nodes += 1
 
             gpu_used = gpu_used_by_node.get(node.metadata.name, 0)
-
-            if gpu_allocatable:
-                _gpu_free = gpu_allocatable - gpu_used
+            if gpu_alloc:
+                free_gpu = gpu_alloc - gpu_used
                 if gpu_used == 0:
-                    _gpu_status = "none in use — all free"
-                elif gpu_used >= gpu_allocatable:
-                    _gpu_status = "all in use — none free"
+                    gpu_str = " GPU:0/{0} (none in use — all free)".format(gpu_alloc)
+                elif gpu_used >= gpu_alloc:
+                    gpu_str = f" GPU:{gpu_used}/{gpu_alloc} (all in use — none free)"
                 else:
-                    _gpu_status = f"{gpu_used} in use, {_gpu_free} free"
-                gpu_str = f" GPU:{gpu_used}/{gpu_allocatable} ({_gpu_status})"
+                    gpu_str = f" GPU:{gpu_used}/{gpu_alloc} ({gpu_used} in use, {free_gpu} free)"
             else:
                 gpu_str = ""
 
-            # --- Taints ---
             taints = node.spec.taints or []
             if taints:
                 tainted_nodes += 1
-                taint_str = ", ".join(
-                    f"{t.key}={t.value}:{t.effect}" if t.value else f"{t.key}:{t.effect}"
-                    for t in taints
-                )
+                taint_str = ", ".join(f"{t.key}={t.value}:{t.effect}" if t.value else f"{t.key}:{t.effect}" for t in taints)
                 taint_str = f" | Taints: {taint_str}"
             else:
                 taint_str = ""
 
-            # --- Important labels ---
             labels = node.metadata.labels or {}
-
             sched_labels = []
             for k in (
                 "topology.kubernetes.io/zone",
@@ -1004,7 +1004,6 @@ def get_node_health() -> str:
             ):
                 if k in labels:
                     sched_labels.append(f"{k.split('/')[-1]}={labels[k]}")
-
             label_str = f" | Labels: {', '.join(sched_labels)}" if sched_labels else ""
 
             lines.append(
@@ -1018,7 +1017,7 @@ def get_node_health() -> str:
             )
 
         lines.append(
-            f"Summary: {len(nodes.items)} node(s) total, "
+            f"Summary: {len(nodes)} node(s) total, "
             f"{gpu_nodes} with GPU(s), "
             f"{tainted_nodes} tainted."
         )
@@ -3291,7 +3290,7 @@ def _handle_get(p: dict) -> str:
 
     fns = _get_resource_fns(resource)
     if fns is None:
-        return f"[ERROR] Unsupported resource type: {resource!r}. Use get_pod_status, get_node_health, or other specific tools."
+        return f"[ERROR] Unsupported resource type: {resource!r}. Use get_pod_status, get_node_info, or other specific tools."
 
     list_all, list_ns, get_one, kind = fns
 

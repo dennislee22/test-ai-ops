@@ -1,5 +1,5 @@
 from tools.tools_k8s import (
-    get_pod_status, get_pod_logs, describe_pod, get_node_health, get_gpu_info,
+    get_pod_status, get_pod_logs, describe_pod, get_node_info, get_gpu_info,
     get_node_labels, get_node_taints, get_events, get_deployment_status,
     get_daemonset_status, get_statefulset_status, get_job_status, get_hpa_status,
     get_pvc_status, get_cluster_version, get_storage_classes, get_endpoints_status,
@@ -83,8 +83,8 @@ K8S_TOOL_METADATA: dict = {
         },
     },
     
-    "get_node_health": {
-        "fn":          get_node_health,
+    "get_node_info": {
+        "fn":          get_node_info,
         "description": (
             "Check Kubernetes node health and scheduling status. "
             "Shows node readiness, memory/disk/PID pressure conditions, allocatable CPU and memory, "
@@ -94,7 +94,9 @@ K8S_TOOL_METADATA: dict = {
             "Taints are defined on nodes and restrict scheduling. Labels provide metadata and scheduling hints. "
             "Do NOT use this tool for pod-level tolerations — use pod tools instead."
         ),
-        "parameters":  {},
+        "parameters":  {
+            "node_name": {"type": "string", "default": None, "description": "Optional specific node to query; defaults to all nodes if not provided."},
+        },
     },
     
     "get_gpu_info": {
