@@ -1038,6 +1038,25 @@ async def api_kb_stream(req: KbAskRequest):
         if not q: 
             yield _sse({"type": "error", "text": "Empty query"})
             return
+
+        # --- CHIT-CHAT BYPASS: INTERCEPT GREETINGS ---
+        # Strip punctuation to catch "how are you?", "hello!", etc.
+        _clean_q = re.sub(r'[^\w\s]', '', q.lower()).strip()
+        _greetings = {
+            "hi", "hello", "hey", "how are you", "who are you", 
+            "what are you", "how are you doing", "good morning", "good afternoon"
+        }
+        
+        if _clean_q in _greetings:
+            yield _sse({
+                "type": "result", 
+                "answer": "Hello! I am the ECS Knowledge Bot. I'm here to help you search through the documentation. What would you like to know today?", 
+                "query": q, 
+                "elapsed": 0.0, 
+                "top_k": req.top_k
+            })
+            return
+        # ---------------------------------------------
             
         # --- SANITY CHECK: ENFORCE COMPLETE SENTENCES/QUESTIONS ---
         word_count = len(q.split())
