@@ -564,6 +564,7 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
     if max_new_tokens > 0: config.MAX_NEW_TOKENS = max_new_tokens
     
     all_updates, tools_called, final_answer, iteration_count = [f"🤖 Model: {config.LLM_MODEL}"], [], "", 0
+    last_tool_content = ""  # <-- Added fallback tracking variable
     _hb_queue, _hb_stop = asyncio.Queue(), asyncio.Event()
 
     async def _heartbeat_task():
@@ -613,6 +614,14 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
                     if t not in tools_called:
                         tools_called.append(t)
 
+                # --- NEW FALLBACK TRACKER ---
+                if name == "tools":
+                    # Safely extract and join all tool outputs from this step
+                    tool_texts = [m.content for m in output.get("messages", []) if hasattr(m, "content") and m.content]
+                    if tool_texts:
+                        last_tool_content = "\n\n---\n\n".join(tool_texts)
+                # ----------------------------
+
                 if name == "llm":
                     has_tool_calls = any(getattr(m, "tool_calls", None) for m in output.get("messages", []))
                     
@@ -634,11 +643,15 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
         
         _final_cleaned = _clean_response(final_answer, user_message)
  
+        # --- REWRITTEN FALLBACK LOGIC ---
         if not _final_cleaned.strip():
             config.logger.warning(f"[REQ:{req_id}] LLM returned blank response. Falling back to raw tool output.")
-            tool_msgs = [m for m in all_messages + output.get("messages", []) if isinstance(m, ToolMessage)]
-            if tool_msgs:
-                _final_cleaned = "⚠️ The AI could not synthesize a summary, but here is the raw data:\n\n" + tool_msgs[-1].content
+            
+            if last_tool_content:
+                _final_cleaned = f"⚠️ The AI could not synthesize a summary, but here is the raw data:\n\n{last_tool_content}"
+            else:
+                _final_cleaned = "⚠️ The AI encountered an error and returned a blank response without retrieving any data."
+        # --------------------------------
 
         config.logger.info(f"[REQ:{req_id}] stream_done elapsed={elapsed}s tools={list(set(tools_called))}\n[FINAL ANSWER]\n{_final_cleaned}\n[END FINAL ANSWER]")
         
