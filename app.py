@@ -286,10 +286,10 @@ def build_agent():
                 "List every pod from the results. "
                 "Format: 'namespace/pod-name' [container]: registry/image:tag."
             ),
-            "get_node_resource_requests": (
-                "Reproduce the node resource table exactly. "
-                "Include every node with its CPU and memory figures."
-            ),
+      #      "get_node_resource_requests": (
+      #          "Reproduce the node resource table exactly. "
+      #          "Include every node with its CPU and memory figures."
+      #      ),
             "kubectl_exec": (
                 "Reproduce the command output VERBATIM. "
                 "Do NOT reformat, summarise, or omit any rows."
