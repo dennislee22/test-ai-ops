@@ -304,10 +304,10 @@ def build_agent():
                 "Only after providing the totals should you list the per-pod breakdown. "
                 "Do NOT just list the pods—the total is the answer to a calculate question."
             ),
-            "get_node_info": (
-                "Report the node health from the tool results. "
-                "For GPU nodes include the EXACT GPU count and status string as returned."
-            ),
+          #  "get_node_info": (
+          #      "Report the node health from the tool results. "
+          #      "For GPU nodes include the EXACT GPU count and status string as returned."
+          #  ),
             "get_gpu_info": (
                 "Report GPU details from the tool results. "
                 "State the exact GPU model, total allocatable count, and how many are in use vs free."
