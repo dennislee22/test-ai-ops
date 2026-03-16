@@ -212,17 +212,22 @@ K8S_TOOL_METADATA: dict = {
     "get_pvc_status": {
         "fn":          get_pvc_status,
         "description": (
-            "Show Kubernetes PersistentVolumeClaim (PVC) status for a namespace. "
-            "Lists PVCs with their phase, access modes, storage class, capacity, and bound volume. "
-            "Also reports non-Bound PVCs separately. "
-            "Use for: 'PVC status in namespace X', 'show unbound PVCs', "
-            "'PVC access modes and storage class', 'PVC capacity and volume assignment'. "
-            "Supports a summary mode showing counts by phase instead of detailed per-PVC info."
+            "Show the status of PersistentVolumeClaims (PVCs) in a namespace. "
+            "Provides a summary of Bound, Pending, Lost, and Unknown PVCs. "
+            "With show_all=True, lists all PVCs with access mode, storage class, capacity, and bound volume. "
+            "With phase_only=True, returns only a summary of counts per phase without extra details. "
+            "Use for questions like: 'what PVCs exist in namespace X', "
+            "'which PVCs are unbound', or 'PVC status summary'."
         ),
         "parameters":  {
-            "namespace":  {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "show_all":   {"type": "boolean", "default": False, "description": "Include all PVCs in the report, not just non-Bound ones."},
-            "phase_only": {"type": "boolean", "default": False, "description": "Show only a summary of PVC counts by phase, without per-PVC details."},
+            "namespace":      {"type": "string", "default": "all",
+                               "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
+            "show_all":       {"type": "boolean", "default": False,
+                               "description": "Include detailed info for all PVCs in the output."},
+            "phase_only":     {"type": "boolean", "default": False,
+                               "description": "Only show counts of PVCs per phase without listing details."},
+            "non_bound_only": {"type": "boolean", "default": False,
+                               "description": "Show only PVCs that are not Bound (Pending, Lost, Unknown)."}
         },
     },
     

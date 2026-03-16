@@ -1323,16 +1323,12 @@ def get_hpa_status(namespace: str = "all") -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_pvc_status(namespace: str = "all", show_all: bool = False, phase_only: bool = False) -> str:
-    _ACCESS_MODES = {
-        "ReadWriteOnce": "RWO",
-        "ReadWriteMany": "RWX",
-        "ReadOnlyMany":  "ROX",
-    }
+def get_pvc_status(namespace: str = "all", show_all: bool = False, phase_only: bool = False, non_bound_only: bool = False) -> str:
+    _AM = {"ReadWriteOnce": "RWO", "ReadWriteMany": "RWX"}
 
-    def _access_modes_str(pvc):
+    def _access(pvc):
         modes = pvc.spec.access_modes or []
-        filtered = [_ACCESS_MODES[m] for m in modes if m in _ACCESS_MODES]
+        filtered = [_AM[m] for m in modes if m in _AM]
         return ",".join(filtered) if filtered else "?"
 
     try:
@@ -1345,50 +1341,39 @@ def get_pvc_status(namespace: str = "all", show_all: bool = False, phase_only: b
         if not pvcs.items:
             return f"No PVCs found in namespace '{namespace}'."
 
-        if phase_only:
-            phase_counts = {"Bound": 0, "Pending": 0, "Lost": 0, "Failed": 0, "Unknown": 0}
-            for pvc in pvcs.items:
-                phase = pvc.status.phase or "Unknown"
-                phase_counts[phase] = phase_counts.get(phase, 0) + 1
-            summary_lines = [f"PVC summary for namespace '{namespace}':"]
-            for phase, count in phase_counts.items():
-                summary_lines.append(f"  {phase}: {count}")
-            return "\n".join(summary_lines)
-
-        all_lines = []
-        non_bound_lines = []
+        summary_counts = {"Bound": 0, "Pending": 0, "Lost": 0, "Unknown": 0}
+        detail_lines = []
 
         for pvc in sorted(pvcs.items, key=lambda x: (x.metadata.namespace, x.metadata.name)):
-            ns   = pvc.metadata.namespace
+            ns = pvc.metadata.namespace
             name = pvc.metadata.name
             phase = pvc.status.phase or "Unknown"
-            sc   = pvc.spec.storage_class_name or "default"
-            cap  = (pvc.status.capacity or {}).get("storage", "?")
-            vol  = pvc.spec.volume_name or "<unbound>"
-            am   = _access_modes_str(pvc)
+            sc = pvc.spec.storage_class_name or "default"
+            cap = (pvc.status.capacity or {}).get("storage", "?")
+            vol = pvc.spec.volume_name or "<unbound>"
+            am = _access(pvc)
 
-            line = f"{ns}/{name}: {phase} | access:{am} | class:{sc} | capacity:{cap} | volume:{vol}"
-            all_lines.append(line)
+            summary_counts[phase] = summary_counts.get(phase, 0) + 1
 
-            if phase != "Bound":
-                non_bound_lines.append(f"{ns}/{name}: {phase} ⚠ | access:{am} | class:{sc}")
+            if show_all or phase_only or (non_bound_only and phase != "Bound"):
+                detail_lines.append(
+                    f"{ns}/{name}: {phase} | access:{am} | class:{sc} | capacity:{cap} | volume:{vol}"
+                )
 
-        report_lines = [
-            f"PVC report ({len(pvcs.items)} total) for namespace '{namespace}':",
-            "",
+        lines = [
+            f"PVC summary for namespace '{namespace}':",
+            f"  Total PVCs: {len(pvcs.items)} | "
+            f"Bound: {summary_counts.get('Bound',0)} | "
+            f"Pending: {summary_counts.get('Pending',0)} | "
+            f"Lost: {summary_counts.get('Lost',0)} | "
+            f"Unknown: {summary_counts.get('Unknown',0)}"
         ]
 
-        if show_all or non_bound_lines:
-            report_lines.append("All PVCs:")
-            report_lines.extend(all_lines)
-            report_lines.append("")
-            report_lines.append(f"Non-Bound PVCs ({len(non_bound_lines)}):")
-            report_lines.extend(non_bound_lines if non_bound_lines else ["  None"])
-        else:
-            report_lines.append(f"Non-Bound PVCs ({len(non_bound_lines)}):")
-            report_lines.extend(non_bound_lines if non_bound_lines else ["  None"])
+        if detail_lines:
+            lines.append("\nDetails:")
+            lines.extend(detail_lines)
 
-        return "\n".join(report_lines)
+        return "\n".join(lines)
 
     except ApiException as e:
         return f"K8s API error (PVC listing): {e.reason}"
