@@ -284,7 +284,7 @@ def build_agent():
             ),
             "get_pod_images": (
                 "List every pod from the results. "
-                "Format: `namespace/pod-name` [container]: registry/image:tag."
+                "Format: 'namespace/pod-name' [container]: registry/image:tag."
             ),
             "get_node_resource_requests": (
                 "Reproduce the node resource table exactly. "

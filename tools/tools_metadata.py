@@ -36,29 +36,17 @@ K8S_TOOL_METADATA: dict = {
     "get_pod_storage": {
         "fn":          get_pod_storage,
         "description": (
-            "Show what storage types (PVCs, emptyDir, hostPath, etc.) pods are using in a namespace. "
-            "Returns a summary per namespace with pod counts by phase (Running, Pending, Failed, Unknown). "
-            "With show_all=True, lists each pod and its storage types. "
-            "With phase_only=True, shows only the per-namespace summary without per-pod details. "
-            "Use for: 'what storage do pods in namespace X use', 'which pods use PVCs', "
-            "'list storage classes used by pods'."
+            "Show storage types (PVC access modes like RWO/RWX) used by pods in a namespace. "
+            "Returns a summary of storage types across pods. "
+            "Use `show_all=True` to include per-pod PVC details with access modes. "
+            "Use this for: 'which pods use RWX', 'list all storage types in namespace X', "
+            "'what PVCs are attached to pod Y'."
         ),
         "parameters":  {
-            "namespace":  {
-                "type": "string",
-                "default": "all",
-                "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."
-            },
-            "show_all": {
-                "type": "boolean",
-                "default": False,
-                "description": "Include all pods with their storage details, even healthy pods."
-            },
-            "phase_only": {
-                "type": "boolean",
-                "default": False,
-                "description": "Only show per-namespace summary of pods by phase, without per-pod storage details."
-            },
+            "namespace": {"type": "string", "default": "all",
+                          "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
+            "show_all":  {"type": "boolean", "default": False,
+                          "description": "Include per-pod PVC details. Defaults to False for a brief summary."},
         },
     },
     

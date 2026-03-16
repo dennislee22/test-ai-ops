@@ -768,28 +768,25 @@ def get_node_labels(node_name: str = None, label_search: str = None) -> str:
             return "No nodes found."
 
         results = []
-
         for node in sorted(nodes, key=lambda n: n.metadata.name):
             if node_name and node_name != "all" and node.metadata.name != node_name:
                 continue
 
             labels = node.metadata.labels or {}
-            roles = [k.split("/")[-1] for k, v in labels.items() if k.startswith("node-role.kubernetes.io/")]
-
             if label_search:
-                matches = {k: v for k, v in labels.items() if label_search in k or label_search in str(v)}
-                if not matches:
+                matching = {k: v for k, v in labels.items() if label_search in k or label_search in str(v)}
+                if not matching:
                     continue
-                labels_str = str(matches)
             else:
-                labels_str = str(labels)
+                matching = labels
 
-            results.append(f"{node.metadata.name}: roles={roles}, labels={labels_str}")
+            roles = [k.split("/")[-1] for k, v in labels.items() if k.startswith("node-role.kubernetes.io/")]
+            results.append(f"{node.metadata.name}: roles={roles}, labels={matching}")
 
         if not results:
             if label_search:
-                return f"No matching node(s) found for '{label_search}'."
-            return "No nodes found with labels."
+                return f"No nodes found with label matching '{label_search}'."
+            return "No nodes found."
 
         return "\n".join(results)
 
@@ -803,29 +800,24 @@ def get_node_taints(node_name: str = None, taint_search: str = None) -> str:
             return "No nodes found."
 
         results = []
-
         for node in sorted(nodes, key=lambda n: n.metadata.name):
             if node_name and node_name != "all" and node.metadata.name != node_name:
                 continue
 
             node_taints = node.spec.taints or []
-            if not node_taints:
-                taints_str = "None"
+            if taint_search:
+                matching = [t for t in node_taints if taint_search in t.key or taint_search in str(t.value)]
+                if not matching:
+                    continue
+                taints_str = ", ".join([f"{t.key}={t.value}:{t.effect}" for t in matching])
             else:
-                taints_list = []
-                for t in node_taints:
-                    entry = f"{t.key}={t.value}:{t.effect}"
-                    if taint_search and taint_search not in entry:
-                        continue
-                    taints_list.append(entry)
-                taints_str = ", ".join(taints_list) if taints_list else "None"
+                taints_str = ", ".join([f"{t.key}={t.value}:{t.effect}" for t in node_taints]) or "None"
 
-            if taints_str != "None":
-                results.append(f"{node.metadata.name}: {taints_str}")
+            results.append(f"{node.metadata.name}: {taints_str}")
 
         if not results:
             if taint_search:
-                return f"No matching taint(s) found for '{taint_search}'."
+                return f"No tainted nodes found matching '{taint_search}'."
             return "No tainted nodes found."
 
         return "\n".join(results)
@@ -2683,85 +2675,50 @@ def run_cluster_health(namespace: str = "all", show_all: bool = False, raw_outpu
     except ApiException as e:
         return f"[ERROR] K8s API error: {e.reason}"
 
-def get_pod_storage(namespace: str = "all", show_all: bool = False, phase_only: bool = False) -> str:
+def get_pod_storage(namespace: str = "all", show_all: bool = False) -> str:
     try:
-        if namespace != "all":
-            try:
-                _core.read_namespace(name=namespace)
-            except ApiException as e:
-                if e.status == 404:
-                    return f"Namespace '{namespace}' does not exist."
-                raise
-
-        pods = (_core.list_pod_for_all_namespaces() if namespace == "all"
-                else _core.list_namespaced_pod(namespace=namespace))
-
-        if not pods.items:
+        pods = (
+            _core.list_namespaced_pod(namespace=namespace).items
+            if namespace != "all"
+            else _core.list_pod_for_all_namespaces().items
+        )
+        if not pods:
             return f"No pods found in namespace '{namespace}'."
 
-        ns_storage_info = {}
-        for pod in pods.items:
-            ns_name = pod.metadata.namespace
-            volumes = pod.spec.volumes or []
-
-            storage_types = []
-            for vol in volumes:
-                pvc_name = getattr(vol.persistent_volume_claim, "claim_name", None)
-                if pvc_name:
-                    try:
-                        pvc = _core.read_namespaced_persistent_volume_claim(
-                            name=pvc_name, namespace=ns_name
-                        )
-                        sc = pvc.spec.storage_class_name or "default"
-                        storage_types.append(sc)
-                    except ApiException:
-                        storage_types.append("Unknown")
-                elif getattr(vol, "empty_dir", None):
-                    storage_types.append("emptyDir")
-                elif getattr(vol, "host_path", None):
-                    storage_types.append("hostPath")
-                else:
-                    storage_types.append("other")
-
-            phase = pod.status.phase or "Unknown"
-            ns_storage_info.setdefault(ns_name, []).append({
-                "pod_name": pod.metadata.name,
-                "phase": phase,
-                "storage_types": storage_types
-            })
-
+        storage_summary = {}
         lines = []
-        for ns_name, pod_list in sorted(ns_storage_info.items()):
-            total_pods = len(pod_list)
-            phases_count = {"Running": 0, "Pending": 0, "Failed": 0, "Unknown": 0}
-            for p in pod_list:
-                if p["phase"] in phases_count:
-                    phases_count[p["phase"]] += 1
-                else:
-                    phases_count["Unknown"] += 1
 
-            line = (f"{ns_name}: {total_pods} pod(s) | "
-                    f"Running: {phases_count['Running']}, "
-                    f"Pending: {phases_count['Pending']}, "
-                    f"Failed: {phases_count['Failed']}, "
-                    f"Unknown: {phases_count['Unknown']}")
-            lines.append(line)
+        for pod in pods:
+            pod_name = pod.metadata.name
+            pod_ns   = pod.metadata.namespace
+            pod_pvcs = []
+
+            for vol in pod.spec.volumes or []:
+                if vol.persistent_volume_claim:
+                    pvc_name = vol.persistent_volume_claim.claim_name
+                    pvc = _core.read_namespaced_persistent_volume_claim(pvc_name, pod_ns)
+                    modes = pvc.spec.access_modes or []
+                    amodes = [m for m in modes if m in ["ReadWriteOnce", "ReadWriteMany"]]
+                    mode_str = ",".join(amodes) if amodes else "Unknown"
+                    pod_pvcs.append(f"{pvc_name}({mode_str})")
+                    storage_summary[mode_str] = storage_summary.get(mode_str, 0) + 1
 
             if show_all:
-                for p in pod_list:
-                    types = ", ".join(p["storage_types"]) if p["storage_types"] else "None"
-                    lines.append(f"  {p['pod_name']}: phase={p['phase']} | storage={types}")
+                lines.append(f"{pod_ns}/{pod_name}: " + (", ".join(pod_pvcs) if pod_pvcs else "No PVCs"))
 
-        if phase_only:
-            return "\n".join(lines)
+        summary_lines = [f"In namespace '{namespace}': {len(pods)} pods."]
+        summary_lines.append("Storage types used across pods:")
+        for stype, count in storage_summary.items():
+            summary_lines.append(f"  {stype}: {count} pod(s)")
 
-        if not show_all:
-            lines.append("\nUse show_all=True to see per-pod storage details.")
+        if show_all:
+            summary_lines.append("\nPer-pod storage:")
+            summary_lines.extend(lines)
 
-        return "\n".join(lines)
+        return "\n".join(summary_lines)
 
     except ApiException as e:
-        return f"[ERROR] K8s API error listing pods: {e.reason}"
+        return f"K8s API error: {e.reason}"
     
 def get_namespace_status(namespace: str = "all", show_all: bool = False, phase_only: bool = False) -> str:
     try:
