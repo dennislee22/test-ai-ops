@@ -26,7 +26,7 @@ def _load_k8s():
 
 _load_k8s()
 
-_version_api = k8s_client.VersionApi()
+_version_api = _k8s.VersionApi()
 _storage = _k8s.StorageV1Api()
 _core   = _k8s.CoreV1Api()
 _apps   = _k8s.AppsV1Api()
