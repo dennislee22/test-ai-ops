@@ -1039,6 +1039,7 @@ async def api_kb_stream(req: KbAskRequest):
             yield _sse({"type": "error", "text": "Empty query"})
             return
 
+        # --- CHIT-CHAT & CAPABILITIES BYPASS: INTERCEPT GREETINGS AND HELP ---
         _clean_q = re.sub(r'[^\w\s]', '', q.lower()).strip()
         
         _greetings = {
@@ -1077,9 +1078,13 @@ async def api_kb_stream(req: KbAskRequest):
                 "top_k": req.top_k
             })
             return
-
-        word_count = len(q.split())
-        if word_count < 3:
+        # ---------------------------------------------------------------------
+            
+        # --- SANITY CHECK: ENFORCE COMPLETE SENTENCES/QUESTIONS ---
+        words = q.split()
+        max_word_len = max((len(w) for w in words), default=0)
+        
+        if len(words) < 3 or max_word_len < 3:
             yield _sse({
                 "type": "result", 
                 "answer": "Please ask a complete question or provide a more detailed statement (e.g., 'Why my vault pod is not running?' or 'List all known issues with Longhorn in 1.5.5 SP1').", 
@@ -1088,6 +1093,7 @@ async def api_kb_stream(req: KbAskRequest):
                 "top_k": req.top_k
             })
             return
+        # ----------------------------------------------------------
 
         top_k, sheet = max(10, min(req.top_k, 500)), req.sheet
         
