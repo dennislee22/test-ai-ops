@@ -18,7 +18,8 @@ from langgraph.graph.message import add_messages
 import config.config as config
 from rag import init_db, get_doc_stats, RAG_TOOLS, rag_retrieve, ingest_directory, ingest_file, ingest_excel
 from rag.retrieve import _MSG_NO_INGEST
-from tools.tools_k8s import K8S_TOOLS, reload_kubeconfig, _core as _k8s_core
+from tools.tools_k8s import reload_kubeconfig, _core as _k8s_core
+from tools.tools_metadata import K8S_TOOL_METADATA
 from agent.bypass import should_bypass_llm, build_direct_answer
 
 _HERE = Path(__file__).resolve().parent
@@ -207,7 +208,7 @@ def _extract_namespace(text: str) -> str:
     return "all"
 
 def build_agent():
-    all_tools = {**K8S_TOOLS, **RAG_TOOLS}
+    all_tools = {**K8S_TOOL_METADATA, **RAG_TOOLS}
     tool_schemas = [_registry_to_openai_schema(n, c) for n, c in all_tools.items()]
     tool_names = [s["function"]["name"] for s in tool_schemas]
     _log_ag.info(f"[build_agent] {len(tool_schemas)} tools: {tool_names}")
@@ -694,7 +695,7 @@ def _run_startup_checks():
     SMOKE_TESTS = [("get_node_health", {}), ("get_namespace_status", {}), ("get_pod_status", {"namespace": "all"})]
     config.logger.info("[Self-test] Running kubectl tool smoke-tests…")
     for name, kwargs in SMOKE_TESTS:
-        cfg = K8S_TOOLS.get(name)
+        cfg = K8S_TOOL_METADATA.get(name)
         if cfg is None: continue
         try:
             result = cfg["fn"](**kwargs)
@@ -710,7 +711,7 @@ async def _lifespan(app: FastAPI):
     config.logger.info(f"  LLM      : {config.LLM_MODEL}")
     config.logger.info(f"  Embed    : {config.EMBED_MODEL}")
     config.logger.info(f"  GPU      : {config.NUM_GPU} GPU(s)")
-    config.logger.info(f"  Tools    : {len(K8S_TOOLS) + len(RAG_TOOLS)} total tools registered")
+    config.logger.info(f"  Tools    : {len(K8S_TOOL_METADATA) + len(RAG_TOOLS)} total tools registered")
     config.logger.info(f"  LanceDB  : {config.LANCEDB_DIR}")
     config.logger.info("=" * 60)
 
@@ -800,7 +801,7 @@ async def api_index(request: Request):
 @app.get("/health")
 async def health():
     stats = get_doc_stats()
-    return {"status": "ok", "model": config.LLM_MODEL, "num_gpu": config.NUM_GPU, "lancedb_docs": stats["docs_chunks"], "lancedb_excel_rows": stats["excel_rows"], "k8s_tools": len(K8S_TOOLS), "cluster_server": config.CLUSTER_SERVER}
+    return {"status": "ok", "model": config.LLM_MODEL, "num_gpu": config.NUM_GPU, "lancedb_docs": stats["docs_chunks"], "lancedb_excel_rows": stats["excel_rows"], "K8S_TOOL_METADATA": len(K8S_TOOL_METADATA), "cluster_server": config.CLUSTER_SERVER}
 
 @app.post("/api/kubeconfig")
 async def apply_kubeconfig(req: KubeconfigRequest):
@@ -911,8 +912,8 @@ async def api_ask(req: AskRequest):
 @app.post("/api/tool")
 async def api_tool(req: ToolCallRequest):
     import asyncio, inspect
-    entry = K8S_TOOLS.get(req.name)
-    if not entry: return _JSONResponse(status_code=404, content={"error": f"Tool '{req.name}' not found.", "available": list(K8S_TOOLS.keys())})
+    entry = K8S_TOOL_METADATA.get(req.name)
+    if not entry: return _JSONResponse(status_code=404, content={"error": f"Tool '{req.name}' not found.", "available": list(K8S_TOOL_METADATA.keys())})
     fn = entry.get("fn")
     if fn is None: return _JSONResponse(status_code=501, content={"error": f"Tool '{req.name}' has no callable fn."})
     try:
@@ -926,7 +927,7 @@ async def api_tool(req: ToolCallRequest):
 async def api_tools():
     import inspect as _inspect
     out = {}
-    for name, entry in K8S_TOOLS.items():
+    for name, entry in K8S_TOOL_METADATA.items():
         fn = entry.get("fn")
         params = {}
         if fn:
