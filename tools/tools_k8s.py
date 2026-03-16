@@ -932,7 +932,7 @@ def get_node_resource_requests() -> str:
         )
     return "\n".join(lines)
 
-def get_node_info(search: str = None) -> str:
+def get_node_info(node_name: str = None) -> str:
     try:
         nodes = _core.list_node().items
         if not nodes:
@@ -942,7 +942,7 @@ def get_node_info(search: str = None) -> str:
         results = []
 
         for node in nodes:
-            if search and search not in node.metadata.name:
+            if node_name and node_name not in node.metadata.name:
                 continue
 
             roles = []
@@ -963,7 +963,9 @@ def get_node_info(search: str = None) -> str:
 
             results.append(f"{node.metadata.name}\t{roles_str}\t{ready_status}\t{cpu}\t{mem}\t{gpu}")
 
-        if search and not results:
+        if node_name and not results:
+            # fallback to all nodes
+            results = []
             for node in nodes:
                 roles = []
                 for label_key in node.metadata.labels or {}:
@@ -983,7 +985,7 @@ def get_node_info(search: str = None) -> str:
 
                 results.append(f"{node.metadata.name}\t{roles_str}\t{ready_status}\t{cpu}\t{mem}\t{gpu}")
 
-            return f"No matches for '{search}'. Showing all nodes:\n" + "\n".join([lines[0]] + results)
+            return f"No matches for '{node_name}'. Showing all nodes:\n" + "\n".join([lines[0]] + results)
 
         return "\n".join([lines[0]] + results)
 
