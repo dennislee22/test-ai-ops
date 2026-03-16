@@ -234,10 +234,10 @@ def build_agent():
         _tools_used = {getattr(tr, "name", "") for tr in tool_results}
 
         _EXEMPT_TOOLS = {
-            "get_coredns_health", "get_node_health", "get_gpu_info", 
+            "get_coredns_health", "get_node_health", "get_gpu_info", "get_node_capacity",
             "get_pv_usage", "get_persistent_volumes", "query_prometheus_metrics",
             "get_node_resource_requests", "rag_search", "kubectl_exec", "exec_db_query",
-            "get_node_labels", "get_node_taints"
+            "get_node_labels", "get_node_taints", "get_storage_classes", "get_endpoints_status", "get_cluster_version"
         }
         
         _needs_ns = bool(_tools_used - _EXEMPT_TOOLS - {""})
