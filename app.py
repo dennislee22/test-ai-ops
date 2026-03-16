@@ -234,7 +234,7 @@ def build_agent():
         _tools_used = {getattr(tr, "name", "") for tr in tool_results}
 
         _EXEMPT_TOOLS = {
-            "get_coredns_health", "get_node_health", "get_gpu_info", "get_node_capacity",
+            "get_coredns_health", "get_node_info", "get_gpu_info", "get_node_capacity",
             "get_pv_usage", "get_persistent_volumes", "query_prometheus_metrics",
             "get_node_resource_requests", "rag_search", "kubectl_exec", "exec_db_query",
             "get_node_labels", "get_node_taints", "get_storage_classes", "get_endpoints_status", "get_cluster_version"
@@ -304,7 +304,7 @@ def build_agent():
                 "Only after providing the totals should you list the per-pod breakdown. "
                 "Do NOT just list the pods—the total is the answer to a calculate question."
             ),
-            "get_node_health": (
+            "get_node_info": (
                 "Report the node health from the tool results. "
                 "For GPU nodes include the EXACT GPU count and status string as returned."
             ),
@@ -686,7 +686,7 @@ def _llm_synthesise(context: str, question: str, top_k: int = 50, max_tokens: in
 # ── 3. FASTAPI SETUP & LIFESPAN ──────────────────────────────────────────────
 
 def _run_startup_checks():
-    SMOKE_TESTS = [("get_node_health", {}), ("get_namespace_status", {}), ("get_pod_status", {"namespace": "all"})]
+    SMOKE_TESTS = [("get_node_info", {}), ("get_namespace_status", {}), ("get_pod_status", {"namespace": "all"})]
     config.logger.info("[Self-test] Running kubectl tool smoke-tests…")
     for name, kwargs in SMOKE_TESTS:
         cfg = K8S_TOOL_METADATA.get(name)
@@ -946,9 +946,9 @@ async def api_pods_raw(ns: str = "all"):
 
 @app.get("/api/nodes")
 async def api_nodes():
-    from tools.tools_k8s import get_node_health
+    from tools.tools_k8s import get_node_info
     import asyncio
-    raw = await asyncio.get_event_loop().run_in_executor(None, get_node_health)
+    raw = await asyncio.get_event_loop().run_in_executor(None, get_node_info)
     return {"output": raw}
 
 @app.get("/api/events")
