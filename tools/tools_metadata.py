@@ -36,19 +36,29 @@ K8S_TOOL_METADATA: dict = {
     "get_pod_storage": {
         "fn":          get_pod_storage,
         "description": (
-            "Show which PersistentVolumeClaims (PVCs) are used by pods in a namespace, "
-            "including their phase (Bound/Unbound), access mode, storage class, and capacity. "
-            "Supports concise summaries or full details depending on the flags. "
-            "Use for: 'which PVCs are used by pods in namespace X', "
-            "'which pods have unbound storage', or 'storage usage by pod'."
+            "Show what storage types (PVCs, emptyDir, hostPath, etc.) pods are using in a namespace. "
+            "Returns a summary per namespace with pod counts by phase (Running, Pending, Failed, Unknown). "
+            "With show_all=True, lists each pod and its storage types. "
+            "With phase_only=True, shows only the per-namespace summary without per-pod details. "
+            "Use for: 'what storage do pods in namespace X use', 'which pods use PVCs', "
+            "'list storage classes used by pods'."
         ),
         "parameters":  {
-            "namespace": {"type": "string", "default": "all",
-                          "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "show_all":  {"type": "boolean", "default": False,
-                          "description": "Include all pods in the output, even if all their PVCs are Bound."},
-            "phase_only":{"type": "boolean", "default": False,
-                          "description": "Show only a brief summary per pod (e.g., #Bound vs #Unbound PVCs) without full details."},
+            "namespace":  {
+                "type": "string",
+                "default": "all",
+                "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."
+            },
+            "show_all": {
+                "type": "boolean",
+                "default": False,
+                "description": "Include all pods with their storage details, even healthy pods."
+            },
+            "phase_only": {
+                "type": "boolean",
+                "default": False,
+                "description": "Only show per-namespace summary of pods by phase, without per-pod storage details."
+            },
         },
     },
     

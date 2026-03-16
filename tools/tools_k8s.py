@@ -2649,97 +2649,84 @@ def run_cluster_health(namespace: str = "all", show_all: bool = False, raw_outpu
         return f"[ERROR] K8s API error: {e.reason}"
 
 def get_pod_storage(namespace: str = "all", show_all: bool = False, phase_only: bool = False) -> str:
-    _AM = {
-        "ReadWriteOnce": "RWO",
-        "ReadWriteMany": "RWX",
-    }
-
-    def _access(pvc):
-        modes = pvc.spec.access_modes or []
-        filtered = [_AM[m] for m in modes if m in _AM]
-        return ",".join(filtered) if filtered else "?"
-
     try:
-        pods = (
-            _core.list_pod_for_all_namespaces().items
-            if namespace == "all"
-            else _core.list_namespaced_pod(namespace)
-        )
-        if not pods:
+        if namespace != "all":
+            try:
+                _core.read_namespace(name=namespace)
+            except ApiException as e:
+                if e.status == 404:
+                    return f"Namespace '{namespace}' does not exist."
+                raise
+
+        pods = (_core.list_pod_for_all_namespaces() if namespace == "all"
+                else _core.list_namespaced_pod(namespace=namespace))
+
+        if not pods.items:
             return f"No pods found in namespace '{namespace}'."
 
-        # Get PVC info for all pods
-        pod_pvc_info = {}
-        for pod in pods:
-            pod_ns = pod.metadata.namespace
-            pod_name = pod.metadata.name
-            pod_vols = []
+        ns_storage_info = {}
+        for pod in pods.items:
+            ns_name = pod.metadata.namespace
+            volumes = pod.spec.volumes or []
 
-            for vol in pod.spec.volumes or []:
-                if getattr(vol, "persistent_volume_claim", None):
-                    pvc_name = vol.persistent_volume_claim.claim_name
+            storage_types = []
+            for vol in volumes:
+                pvc_name = getattr(vol.persistent_volume_claim, "claim_name", None)
+                if pvc_name:
                     try:
-                        pvc = _core.read_namespaced_persistent_volume_claim(pvc_name, pod_ns)
-                        phase = pvc.status.phase or "Unknown"
-                        sc = pvc.spec.storage_class_name or "default"
-                        cap = (pvc.status.capacity or {}).get("storage", "?")
-                        am = _access(pvc)
-                        pod_vols.append({
-                            "name": pvc_name,
-                            "phase": phase,
-                            "access": am,
-                            "class": sc,
-                            "capacity": cap
-                        })
-                    except ApiException:
-                        pod_vols.append({
-                            "name": pvc_name,
-                            "phase": "Missing",
-                            "access": "?",
-                            "class": "?",
-                            "capacity": "?"
-                        })
-
-            pod_pvc_info[f"{pod_ns}/{pod_name}"] = pod_vols
-
-        # Prepare output
-        lines = []
-        if phase_only:
-            # Summary per pod: #Bound / #Unbound PVCs
-            for pod_key, vols in sorted(pod_pvc_info.items()):
-                bound = sum(1 for v in vols if v["phase"] == "Bound")
-                unbound = sum(1 for v in vols if v["phase"] != "Bound")
-                lines.append(f"{pod_key}: {bound} Bound, {unbound} Unbound PVC(s)")
-        else:
-            # Full details
-            for pod_key, vols in sorted(pod_pvc_info.items()):
-                if not vols:
-                    lines.append(f"{pod_key}: No PVCs")
-                else:
-                    lines.append(f"{pod_key}:")
-                    for v in vols:
-                        lines.append(
-                            f"  {v['name']}: phase={v['phase']}, access={v['access']}, "
-                            f"class={v['class']}, capacity={v['capacity']}"
+                        pvc = _core.read_namespaced_persistent_volume_claim(
+                            name=pvc_name, namespace=ns_name
                         )
-            if not show_all:
-                # Optional: Only show pods with unbound/missing PVCs
-                filtered_lines = []
-                for pod_key, vols in sorted(pod_pvc_info.items()):
-                    if any(v["phase"] != "Bound" for v in vols):
-                        filtered_lines.append(f"{pod_key}:")
-                        for v in vols:
-                            filtered_lines.append(
-                                f"  {v['name']}: phase={v['phase']}, access={v['access']}, "
-                                f"class={v['class']}, capacity={v['capacity']}"
-                            )
-                if filtered_lines:
-                    lines = filtered_lines
+                        sc = pvc.spec.storage_class_name or "default"
+                        storage_types.append(sc)
+                    except ApiException:
+                        storage_types.append("Unknown")
+                elif getattr(vol, "empty_dir", None):
+                    storage_types.append("emptyDir")
+                elif getattr(vol, "host_path", None):
+                    storage_types.append("hostPath")
+                else:
+                    storage_types.append("other")
+
+            phase = pod.status.phase or "Unknown"
+            ns_storage_info.setdefault(ns_name, []).append({
+                "pod_name": pod.metadata.name,
+                "phase": phase,
+                "storage_types": storage_types
+            })
+
+        lines = []
+        for ns_name, pod_list in sorted(ns_storage_info.items()):
+            total_pods = len(pod_list)
+            phases_count = {"Running": 0, "Pending": 0, "Failed": 0, "Unknown": 0}
+            for p in pod_list:
+                if p["phase"] in phases_count:
+                    phases_count[p["phase"]] += 1
+                else:
+                    phases_count["Unknown"] += 1
+
+            line = (f"{ns_name}: {total_pods} pod(s) | "
+                    f"Running: {phases_count['Running']}, "
+                    f"Pending: {phases_count['Pending']}, "
+                    f"Failed: {phases_count['Failed']}, "
+                    f"Unknown: {phases_count['Unknown']}")
+            lines.append(line)
+
+            if show_all:
+                for p in pod_list:
+                    types = ", ".join(p["storage_types"]) if p["storage_types"] else "None"
+                    lines.append(f"  {p['pod_name']}: phase={p['phase']} | storage={types}")
+
+        if phase_only:
+            return "\n".join(lines)
+
+        if not show_all:
+            lines.append("\nUse show_all=True to see per-pod storage details.")
 
         return "\n".join(lines)
 
     except ApiException as e:
-        return f"K8s API error (PVC listing): {e.reason}"
+        return f"[ERROR] K8s API error listing pods: {e.reason}"
     
 def get_namespace_status(namespace: str = "all", show_all: bool = False) -> str:
     try:
