@@ -161,11 +161,13 @@ K8S_TOOL_METADATA: dict = {
     "find_resource": {
         "fn":          find_resource,
         "description": (
-            "Search for Kubernetes resources by name substring. "
-            "Supports pods, services, ingresses, and persistent volume claims (PVCs). "
+            "Locate Kubernetes resources by name substring. Primarily used for pods: "
+            "find pods by partial name, showing namespace, node, and status. "
+            "Also supports services, ingresses, and persistent volume claims (PVCs). "
             "Optionally filter by resource type and namespace. "
             "Returns a tab-delimited table with Resource Type, Namespace, Name, and relevant details "
             "(e.g., pod status and node, service type and cluster IP, ingress hosts, PVC status and size). "
+            "Example: 'where is grafana pod?' → shows pod name, namespace, node, and status. "
             "If no matches are found, falls back to listing all resources of the specified type."
         ),
         "parameters":  {
