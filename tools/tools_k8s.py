@@ -26,6 +26,7 @@ def _load_k8s():
 
 _load_k8s()
 
+_version_api = k8s_client.VersionApi()
 _storage = _k8s.StorageV1Api()
 _core   = _k8s.CoreV1Api()
 _apps   = _k8s.AppsV1Api()
@@ -688,12 +689,14 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
 
 def get_cluster_version() -> str:
     try:
-        version_info = _version.get_code()
-        server_version = version_info.git_version if hasattr(version_info, "git_version") else "unknown"
-        client_version = _version.get_version()
-        return f"Kubernetes version: server={server_version}, client={client_version}"
-    except ApiException as e:
-        return f"K8s API error: {e.reason}"
+        version_info = _version_api.get_code()
+        return (
+            f"Major: {version_info.major}, Minor: {version_info.minor}, "
+            f"GitVersion: {version_info.git_version}, GitCommit: {version_info.git_commit}, "
+            f"GitTreeState: {version_info.git_tree_state}, BuildDate: {version_info.build_date}"
+        )
+    except Exception as e:
+        return f"[ERROR] Failed to get cluster version: {e}"
 
 def get_storage_classes() -> str:
     try:
@@ -758,38 +761,27 @@ def get_node_capacity() -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_node_labels(node_name: str) -> str:
-    try:
-        node = _core.read_node(name=node_name)
+def get_node_labels(node_name: str = None) -> str:
+    nodes = _core.list_node().items
+    results = []
+    for node in nodes:
+        if node_name and node.metadata.name != node_name:
+            continue
         labels = node.metadata.labels or {}
-        if not labels:
-            return f"Node '{node_name}' has no labels."
-        lines = [f"Labels for node '{node_name}':"]
-        for k, v in sorted(labels.items()):
-            lines.append(f"  {k}={v}")
-        return "\n".join(lines)
-    except ApiException as e:
-        if e.status == 404:
-            return f"Node '{node_name}' not found."
-        return f"K8s API error: {e.reason}"
+        roles = [k.split("/")[-1] for k, v in labels.items() if k.startswith("node-role.kubernetes.io/")]
+        results.append(f"{node.metadata.name}: roles={roles}, labels={labels}")
+    return "\n".join(results)
 
-def get_node_taints(node_name: str) -> str:
-    try:
-        node = _core.read_node(name=node_name)
-        taints = node.spec.taints or []
-        if not taints:
-            return f"Node '{node_name}' has no taints."
-        lines = [f"Taints for node '{node_name}':"]
-        for t in taints:
-            if t.value:
-                lines.append(f"  {t.key}={t.value}:{t.effect}")
-            else:
-                lines.append(f"  {t.key}:{t.effect}")
-        return "\n".join(lines)
-    except ApiException as e:
-        if e.status == 404:
-            return f"Node '{node_name}' not found."
-        return f"K8s API error: {e.reason}"
+def get_node_taints(node_name: str = None) -> str:
+    nodes = _core.list_node().items
+    results = []
+    for node in nodes:
+        if node_name and node.metadata.name != node_name:
+            continue
+        node_taints = node.spec.taints or []
+        taints_str = ", ".join([f"{t.key}={t.value}:{t.effect}" for t in node_taints]) or "None"
+        results.append(f"{node.metadata.name}: {taints_str}")
+    return "\n".join(results)
 
 def get_node_resource_requests() -> str:
     """Aggregate CPU/memory requests and limits per node from all running pods."""
@@ -2555,7 +2547,7 @@ def get_pod_images(namespace: str = "all") -> str:
     header = f"Pod images in '{namespace}' ({len(pods.items)} pods):"
     return header + "\n" + "\n".join(rows)
 
-def get_namespace_status() -> str:
+def get_namespace_status(detailed: bool = False) -> str:
     try:
         items, _cont = [], None
         while True:
@@ -2564,37 +2556,71 @@ def get_namespace_status() -> str:
                 kw["_continue"] = _cont
             page = _core.list_namespace(**kw)
             items.extend(page.items)
-            _cont = (page.metadata._continue
-                     if page.metadata and page.metadata._continue else None)
+            _cont = (page.metadata._continue if page.metadata and page.metadata._continue else None)
             if not _cont:
                 break
         if not items:
             return "No namespaces found."
 
-        ns_pod_counts: dict = {}
+        ns_info = {}
         for ns in items:
             ns_name = ns.metadata.name
+            ns_phase = ns.status.phase or "Active"
             try:
                 pods = _core.list_namespaced_pod(namespace=ns_name, limit=1000)
-                ns_pod_counts[ns_name] = len(pods.items)
             except ApiException:
-                ns_pod_counts[ns_name] = -1
+                pods = None
 
-        active = sum(1 for ns in items if (ns.status.phase or "Active") == "Active")
-        lines = [f"Total namespaces: {len(items)} ({active} Active).",
-                 f"{'NAMESPACE':<40} {'STATUS':<10} {'PODS':>5}"]
-        for ns in items:
-            ns_name = ns.metadata.name
-            count   = ns_pod_counts.get(ns_name, 0)
-            count_s = str(count) if count >= 0 else "err"
+            pod_counts = {"Running": 0, "Pending": 0, "Failed": 0, "Unknown": 0, "Unhealthy": 0}
+            unhealthy_pods = []
+
+            if pods and pods.items:
+                for pod in pods.items:
+                    phase = pod.status.phase or "Unknown"
+                    pod_counts[phase] = pod_counts.get(phase, 0) + 1
+
+                    ready = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
+                    total = len(pod.spec.containers)
+                    restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
+                    bad_conditions = [f"{c.type}={c.status}" for c in (pod.status.conditions or []) if c.status != "True"]
+
+                    if ready < total or restarts > 5 or bad_conditions:
+                        pod_counts["Unhealthy"] += 1
+                        unhealthy_pods.append(
+                            f"  {pod.metadata.name}: {phase} | Ready {ready}/{total} | Restarts:{restarts}"
+                            + (f" [{', '.join(bad_conditions)}]" if bad_conditions else "")
+                        )
+
+            ns_info[ns_name] = {
+                "phase": ns_phase,
+                "pod_counts": pod_counts,
+                "unhealthy_pods": unhealthy_pods,
+                "total_pods": sum(pod_counts.values()) - pod_counts["Unhealthy"]
+            }
+
+        lines = [f"Total namespaces: {len(items)} ({sum(1 for ns in items if (ns.status.phase or 'Active') == 'Active')} Active).",
+                 f"{'NAMESPACE':<30} {'STATUS':<10} {'TOTAL':>5} {'Running':>7} {'Pending':>7} {'Failed':>7} {'Unknown':>7} {'Unhealthy':>9}"]
+        for ns_name in sorted(ns_info.keys()):
+            info = ns_info[ns_name]
+            counts = info["pod_counts"]
+            total = info["total_pods"] + counts["Unhealthy"]
             lines.append(
-                f"  {ns_name:<38} {ns.status.phase or 'Active':<10} {count_s:>5}"
+                f"{ns_name:<30} {info['phase']:<10} {total:>5} "
+                f"{counts['Running']:>7} {counts['Pending']:>7} {counts['Failed']:>7} {counts['Unknown']:>7} {counts['Unhealthy']:>9}"
             )
-        return "\n".join(lines)
+
+        if not detailed:
+            return "\n".join(lines)
+
+        detail_lines = []
+        for ns_name, info in sorted(ns_info.items()):
+            if info["unhealthy_pods"]:
+                detail_lines.append(f"\nNamespace '{ns_name}' has {len(info['unhealthy_pods'])} unhealthy pods:")
+                detail_lines.extend(info["unhealthy_pods"])
+        return "\n".join(lines + detail_lines)
+
     except ApiException as e:
         return f"[ERROR] K8s API error listing namespaces: {e.reason}"
-
-_KUBECTL_MAX_OUT  = int(os.getenv("KUBECTL_MAX_CHARS", "20000"))
 
 def _safe_reason(e) -> str:
     try:
@@ -3441,24 +3467,9 @@ def _handle_logs(p: dict) -> str:
     logs = core_v1.read_namespaced_pod_log(name=p["name"], namespace=p["namespace"], tail_lines=50)
     return logs
 
-
 def kubectl_exec(command: str) -> str:
-    """
-    Executes a read-only kubectl command against the Kubernetes cluster.
-    
-    Use this tool to inspect cluster state, view resources, and read logs.
-    
-    Args:
-        command (str): The full kubectl command to run. E.g., 'kubectl get pods -n default'.
-        
-    Notes:
-        - ONLY supports read operations (get, describe, logs, top, rollout, auth, api-resources, version).
-        - Does NOT support shell piping or filtering (|, grep, awk). If you need to filter, 
-          either use '-o jsonpath=...' or use a specific diagnostic tool if available.
-        - Output is truncated to prevent context window overflow.
-    """
     command = command.strip()
-    _log.info(f"[kubectl_exec] Executing: {command!r}")
+    _log.info(f"[kubectl_exec] {command!r}")
 
     if not re.match(r"^kubectl(\s|$)", command):
         return "[ERROR] Command must start with 'kubectl'."
@@ -3468,53 +3479,49 @@ def kubectl_exec(command: str) -> str:
         return (
             "[ERROR] Shell operators and pipes (||, &&, |, awk, grep, 2>/dev/null) are NOT "
             "supported by kubectl_exec — it uses the Kubernetes Python API directly. "
-            "Please use a dedicated tool instead, or use native '-o jsonpath' filtering."
+            "Please use a dedicated tool instead: get_pod_status(namespace=..., show_all=True), "
+            "get_pvc_status(namespace=...), get_events(namespace=...), etc."
         )
 
     p = _parse_kubectl(command)
     verb = p["verb"]
-    output = p.get("output")
+
+    if verb in _BLOCKED_VERBS:
+        return f"[ERROR] {_BLOCKED_VERBS[verb]}"
+
+    if verb in _KUBECTL_WRITE_VERBS and not _ALLOW_WRITES:
+        return (
+            f"[ERROR] Write operation '{verb}' is disabled. "
+            "Set KUBECTL_ALLOW_WRITES=true in your env file to enable writes."
+        )
 
     try:
         if verb == "get":
-            if output and output.startswith("json"):
-                obj = _handle_get(p, raw=True)
-                if output.startswith("jsonpath="):
-                    try:
-                        from jsonpath_ng import parse
-                        expr = parse(output[len("jsonpath="):])
-                        matches = [match.value for match in expr.find(obj)]
-                        return json.dumps(matches)
-                    except Exception as e:
-                        return f"[ERROR] Invalid jsonpath expression: {e}"
-                else:
-                    return json.dumps(obj, indent=2)
             out = _handle_get(p)
-            
         elif verb == "describe":
             out = _handle_describe(p)
         elif verb == "logs":
             out = _handle_logs(p)
-        elif verb in ("top", "rollout", "auth", "api-resources", "version"):
-             out = f"[Mocked API Response] Output for 'kubectl {verb}'..."
+        elif verb == "top":
+            out = _handle_top(p)
+        elif verb == "rollout":
+            out = _handle_rollout(p)
+        elif verb == "auth":
+            out = _handle_auth_cani(p)
+        elif verb == "api-resources":
+            out = _handle_api_resources()
+        elif verb == "version":
+            out = _handle_version()
         elif verb in _KUBECTL_READ_VERBS:
-            out = f"[ERROR] kubectl {verb} not implemented in API mode. Use a specific tool."
+            out = f"[ERROR] kubectl {verb} is not yet implemented in API mode. Use a specific tool instead."
         else:
-            out = f"[ERROR] Unknown or forbidden kubectl verb: {verb!r}"
-
-    except ApiException as e:
-        try:
-            reason = json.loads(e.body).get("message", e.reason)
-        except:
-            reason = e.reason
-        out = f"K8s API error: {reason}"
+            out = f"[ERROR] Unknown kubectl verb: {verb!r}"
     except Exception as exc:
         _log.exception(f"[kubectl_exec] Unexpected error: {exc}")
         out = f"[ERROR] Unexpected error: {exc}"
 
     if len(out) > _KUBECTL_MAX_OUT:
         out = out[:_KUBECTL_MAX_OUT] + f"\n...[output truncated at {_KUBECTL_MAX_OUT} chars]"
-
     return out
 
 def _parse_cpu_to_millicores(cpu_str: str) -> int:
@@ -4455,8 +4462,40 @@ K8S_TOOLS: dict = {
 
     "get_namespace_status": {
         "fn":          get_namespace_status,
-        "description": "List all namespaces with their status and pod count. ALWAYS use this when the user asks 'how many namespaces', 'list namespaces', 'namespaces with number of pods', or wants a namespace count.",
-        "parameters":  {},
+        "description": (
+            "List all namespaces with their status and pod count. "
+            "Provides totals of pods in Running, Pending, Failed, Unknown, and Unhealthy states. "
+            "When details=True, also lists the unhealthy pods per namespace with ready counts, restarts, "
+            "and failing conditions. ALWAYS use this when the user asks 'how many namespaces', "
+            "'list namespaces', 'namespaces with number of pods', or wants a namespace count."
+        ),
+        "parameters":  {
+            "namespace": {
+                "type": "string",
+                "default": "default",
+                "description": "Namespace to query. Defaults to 'default' — only override when the user explicitly names a namespace."
+            },
+            "details": {
+                "type": "boolean",
+                "default": False,
+                "description": "Include per-namespace pod breakdowns and unhealthy pod details if True."
+            },
+            "phase_only": {
+                "type": "boolean",
+                "default": False,
+                "description": "Only report pods by phase, e.g., non-Running pods, without extra details."
+            },
+            "show_all": {
+                "type": "boolean",
+                "default": False,
+                "description": "Include all pods in counts, even those that are healthy and Running."
+            },
+            "failed_only": {
+                "type": "boolean",
+                "default": False,
+                "description": "Include only namespaces that have pods in Failed, Pending, or Unknown phases."
+            }
+        },
     },
 
     "get_pod_tolerations": {
