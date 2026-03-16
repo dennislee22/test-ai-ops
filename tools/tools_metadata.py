@@ -87,16 +87,25 @@ K8S_TOOL_METADATA: dict = {
         "fn":          get_node_info,
         "description": (
             "Check Kubernetes node health and scheduling status. "
-            "Shows node readiness, memory/disk/PID pressure conditions, allocatable CPU and memory, "
-            "GPU usage, node roles, taints, and key labels. "
+            "Lists nodes with columns: Node Name, Roles, Ready, CPU, Mem, GPU. "
             "Supports filtering for a specific node by name. "
+            "If a node name is provided and no match is found, it falls back to listing all nodes with a warning. "
             "Use for questions like: 'which node has taints', 'are nodes healthy', "
             "'node readiness', 'list node ecs-w-01', or 'why pods cannot schedule'. "
-            "Taints are defined on nodes and restrict scheduling. Labels provide metadata and scheduling hints. "
-            "Do NOT use this tool for pod-level tolerations — use pod tools instead."
+            "Roles are extracted from node labels. Allocatable CPU, memory, and GPU "
+            "are reported directly from the Kubernetes API. "
+            "Does NOT calculate pod-level GPU usage or tolerations."
         ),
         "parameters":  {
-            "node_name": {"type": "string", "default": None, "description": "Optional specific node to query; defaults to all nodes if not provided."},
+            "node_name": {
+                "type": "string",
+                "default": None,
+                "description": (
+                    "Optional specific node to query. Supports substring matching; "
+                    "if not provided, all nodes are listed. "
+                    "If no nodes match the search, the function falls back to listing all nodes."
+                ),
+            },
         },
     },
     

@@ -932,85 +932,63 @@ def get_node_resource_requests() -> str:
         )
     return "\n".join(lines)
 
-def get_node_info(node_name: str = None) -> str:
+def get_node_info(search: str = None) -> str:
     try:
-        nodes = _core.list_node()
-        if not nodes.items:
+        nodes = _core.list_node().items
+        if not nodes:
             return "No nodes found."
 
-        gpu_used_by_node: dict = {}
-        try:
-            all_pods = _core.list_pod_for_all_namespaces(
-                field_selector="status.phase=Running")
-            for pod in all_pods.items:
-                n_name = pod.spec.node_name or ""
-                if not n_name:
-                    continue
-                for container in (pod.spec.containers or []):
-                    reqs = (container.resources.requests or {}) if container.resources else {}
-                    for key, val in reqs.items():
-                        if "nvidia.com/gpu" in key or "amd.com/gpu" in key:
-                            try:
-                                gpu_used_by_node[n_name] = (
-                                    gpu_used_by_node.get(n_name, 0) + int(val))
-                            except (ValueError, TypeError):
-                                pass
-        except Exception:
-            pass
+        lines = ["Node Name\tRoles\tReady\tCPU\tMem\tGPU"]
+        results = []
 
-        lines       = ["Node Info:"]
-        gpu_nodes   = 0
-
-        for node in nodes.items:
-            if node_name and node_name not in node.metadata.name:
+        for node in nodes:
+            if search and search not in node.metadata.name:
                 continue
 
-            roles = [k.replace("node-role.kubernetes.io/", "")
-                     for k in (node.metadata.labels or {})
-                     if k.startswith("node-role.kubernetes.io/")] or ["worker"]
+            roles = []
+            for label_key in node.metadata.labels or {}:
+                if label_key.startswith("node-role.kubernetes.io/"):
+                    roles.append(label_key.replace("node-role.kubernetes.io/", ""))
+            roles_str = ",".join(roles) if roles else "worker"
 
-            conds = {c.type: c.status for c in (node.status.conditions or [])}
-            pressure = [t for t in ["MemoryPressure", "DiskPressure", "PIDPressure"]
-                        if conds.get(t) == "True"]
+            ready_status = "Unknown"
+            for cond in node.status.conditions or []:
+                if cond.type == "Ready":
+                    ready_status = cond.status
+                    break
 
-            alloc = node.status.allocatable or {}
-            gpu_allocatable = 0
-            for key in alloc:
-                if "nvidia.com/gpu" in key or "amd.com/gpu" in key:
-                    try:
-                        gpu_allocatable += int(alloc[key])
-                    except (ValueError, TypeError):
-                        pass
-            if gpu_allocatable:
-                gpu_nodes += 1
+            cpu = node.status.allocatable.get("cpu", "n/a")
+            mem = node.status.allocatable.get("memory", "n/a")
+            gpu = node.status.allocatable.get("nvidia.com/gpu", "0")
 
-            gpu_used = gpu_used_by_node.get(node.metadata.name, 0)
-            if gpu_allocatable:
-                _gpu_free = gpu_allocatable - gpu_used
-                if gpu_used == 0:
-                    _gpu_status = "none in use — all free"
-                elif gpu_used >= gpu_allocatable:
-                    _gpu_status = "all in use — none free"
-                else:
-                    _gpu_status = f"{gpu_used} in use, {_gpu_free} free"
-                gpu_str = f" GPU:{gpu_used}/{gpu_allocatable} ({_gpu_status})"
-            else:
-                gpu_str = ""
+            results.append(f"{node.metadata.name}\t{roles_str}\t{ready_status}\t{cpu}\t{mem}\t{gpu}")
 
-            lines.append(
-                f"  {node.metadata.name} [{','.join(roles)}]: "
-                f"Ready={conds.get('Ready','?')}"
-                + (f" ⚠ {','.join(pressure)}" if pressure else "")
-                + f" | CPU:{alloc.get('cpu','n/a')} Mem:{alloc.get('memory','n/a')}"
-                + gpu_str
-            )
+        if search and not results:
+            for node in nodes:
+                roles = []
+                for label_key in node.metadata.labels or {}:
+                    if label_key.startswith("node-role.kubernetes.io/"):
+                        roles.append(label_key.replace("node-role.kubernetes.io/", ""))
+                roles_str = ",".join(roles) if roles else "worker"
 
-        total_nodes = len([n for n in nodes.items if not node_name or node_name in n.metadata.name])
-        lines.append(f"Summary: {total_nodes} node(s) total, {gpu_nodes} with GPU(s).")
-        return "\n".join(lines)
+                ready_status = "Unknown"
+                for cond in node.status.conditions or []:
+                    if cond.type == "Ready":
+                        ready_status = cond.status
+                        break
 
-    except ApiException as e:
-        return f"K8s API error: {e.reason}"
+                cpu = node.status.allocatable.get("cpu", "n/a")
+                mem = node.status.allocatable.get("memory", "n/a")
+                gpu = node.status.allocatable.get("nvidia.com/gpu", "0")
+
+                results.append(f"{node.metadata.name}\t{roles_str}\t{ready_status}\t{cpu}\t{mem}\t{gpu}")
+
+            return f"No matches for '{search}'. Showing all nodes:\n" + "\n".join([lines[0]] + results)
+
+        return "\n".join([lines[0]] + results)
+
+    except Exception as e:
+        return f"Unexpected error: {str(e)}"
         
 def get_gpu_info() -> str:
     try:
