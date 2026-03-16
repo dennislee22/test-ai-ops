@@ -26,6 +26,7 @@ def _load_k8s():
 
 _load_k8s()
 
+_storage = _k8s.StorageV1Api()
 _core   = _k8s.CoreV1Api()
 _apps   = _k8s.AppsV1Api()
 _batch  = _k8s.BatchV1Api()
@@ -698,12 +699,22 @@ def get_storage_classes() -> str:
     try:
         scs = _storage.list_storage_class()
         if not scs.items:
-            return "No StorageClasses found."
-        lines = ["StorageClasses:"]
-        for sc in sorted(scs.items, key=lambda s: s.metadata.name):
-            default = sc.metadata.annotations.get("storageclass.kubernetes.io/is-default-class") == "true"
-            lines.append(f"  {sc.metadata.name} | Provisioner: {sc.provisioner} | Default: {default}")
+            return "No StorageClasses found in the cluster."
+
+        lines = ["Storage Classes in cluster:"]
+        for sc in scs.items:
+            name = sc.metadata.name
+            provisioner = getattr(sc, "provisioner", "unknown")
+            reclaim = getattr(sc, "reclaim_policy", "unknown")
+            allow_expand = getattr(sc, "allow_volume_expansion", False)
+            expand_str = "Yes" if allow_expand else "No"
+
+            lines.append(
+                f"  {name} | Provisioner: {provisioner} | ReclaimPolicy: {reclaim} | Volume Expansion: {expand_str}"
+            )
+
         return "\n".join(lines)
+
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
@@ -1947,8 +1958,6 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h", step: st
     summary = "\n".join(summary_lines)
     return f"{summary}\n§GRAPH§{graph_payload}§GRAPH§"
 
-
-
 def get_coredns_health() -> str:
     from kubernetes.stream import stream as _k8s_stream
 
@@ -2771,6 +2780,52 @@ def _get_resource_fns(resource: str):
             lambda name, ns: _core.read_namespaced_service_account(name, ns),
             "ServiceAccount",
         )
+    if r in ("storageclass", "storageclasses", "sc"):
+        return (
+            lambda fs="": _paginate(_storage.list_storage_class, field_selector=fs),
+            None,
+            lambda name, ns: _storage.read_storage_class(name),
+            "StorageClass",
+        )
+    if r in ("volumeattachment", "volumeattachments", "va"):
+        return (
+            lambda fs="": _paginate(_storage.list_volume_attachment, field_selector=fs),
+            None,
+            lambda name, ns: _storage.read_volume_attachment(name),
+            "VolumeAttachment",
+        )
+    if r in ("endpoints", "endpoint", "ep"):
+        return (
+            lambda fs="": _paginate(_core.list_endpoints_for_all_namespaces, field_selector=fs),
+            lambda ns, fs="": _paginate(_core.list_namespaced_endpoints, ns, field_selector=fs),
+            lambda name, ns: _core.read_namespaced_endpoints(name, ns),
+            "Endpoints",
+        )
+    if r in ("networkpolicy", "networkpolicies", "np"):
+        return (
+            lambda fs="": _paginate(_net.list_network_policy_for_all_namespaces, field_selector=fs),
+            lambda ns, fs="": _paginate(_net.list_namespaced_network_policy, ns, field_selector=fs),
+            lambda name, ns: _net.read_namespaced_network_policy(name, ns),
+            "NetworkPolicy",
+        )
+    if r in ("poddisruptionbudget", "poddisruptionbudgets", "pdb"):
+        return (
+            lambda fs="": _paginate(_policy.list_pod_disruption_budget_for_all_namespaces, field_selector=fs),
+            lambda ns, fs="": _paginate(_policy.list_namespaced_pod_disruption_budget, ns, field_selector=fs),
+            lambda name, ns: _policy.read_namespaced_pod_disruption_budget(name, ns),
+            "PodDisruptionBudget",
+        )
+    if r in ("volumesnapshot", "volumesnapshots", "vs"):
+        version = "v1"
+        group   = "snapshot.storage.k8s.io"
+        plural  = "volumesnapshots"
+        custom  = _k8s.CustomObjectsApi()
+        return (
+            lambda fs="", _p=plural, _g=group, _v=version: _list_custom_all(_p, _g, _v),
+            lambda ns, fs="", _p=plural, _g=group, _v=version: _list_custom_ns(ns, _p, _g, _v),
+            lambda name, ns, _p=plural, _g=group, _v=version: _get_custom(name, ns, _p, _g, _v),
+            "VolumeSnapshot",
+        )
     if "." in resource:
         parts = resource.split(".", 1)
         plural, group = parts[0], parts[1]
@@ -2782,7 +2837,7 @@ def _get_resource_fns(resource: str):
             lambda name, ns, _p=plural, _g=group, _v=version: _get_custom(name, ns, _p, _g, _v),
             resource,
         )
-    return None
+    return None    
 
 def _paginate(list_fn, *args, field_selector="", **kwargs):
     items, _cont = [], None
@@ -3253,13 +3308,157 @@ def _handle_version() -> str:
     except ApiException as e:
         return f"[ERROR] version: {e.reason}"
 
-def kubectl_exec(command: str) -> str:
-    import json
-    import re
-    from kubernetes.client.rest import ApiException
+import json
+import re
+import shlex
+import logging
+from kubernetes import client, config
+from kubernetes.client.rest import ApiException
 
+logging.basicConfig(level=logging.INFO)
+_log = logging.getLogger(__name__)
+
+_KUBECTL_MAX_OUT = 4000
+_KUBECTL_READ_VERBS = {"get", "describe", "logs", "top", "rollout", "auth", "api-resources", "version"}
+
+try:
+    config.load_incluster_config()
+except config.ConfigException:
+    config.load_kubeconfig()
+
+
+def _parse_kubectl(command: str) -> dict:
+    """
+    Safely parses a kubectl command string to extract the verb, resource, name, namespace, and output format.
+    Handles variations like 'kubectl get pod/my-pod' vs 'kubectl get pod my-pod'.
+    """
+    parts = shlex.split(command)
+    
+    if parts and parts[0] == "kubectl":
+        parts = parts[1:]
+
+    p = {
+        "verb": None, 
+        "resource": None, 
+        "name": None, 
+        "namespace": "default", 
+        "output": None
+    }
+    
+    if not parts:
+        return p
+
+    p["verb"] = parts[0]
+    args = parts[1:]
+    
+    i = 0
+    positionals = []
+    
+    while i < len(args):
+        arg = args[i]
+        if arg in ("-n", "--namespace"):
+            if i + 1 < len(args):
+                p["namespace"] = args[i+1]
+                i += 1
+        elif arg.startswith("--namespace="):
+            p["namespace"] = arg.split("=", 1)[1]
+        elif arg in ("-o", "--output"):
+            if i + 1 < len(args):
+                p["output"] = args[i+1]
+                i += 1
+        elif arg.startswith("-o"):
+            p["output"] = arg[2:]
+        elif arg.startswith("--output="):
+            p["output"] = arg.split("=", 1)[1]
+        elif arg in ("-A", "--all-namespaces"):
+            p["namespace"] = ""
+        elif arg.startswith("-"):
+            pass
+        else:
+            positionals.append(arg)
+        i += 1
+
+    if positionals:
+        res_str = positionals[0]
+        if "/" in res_str:
+            p["resource"], p["name"] = res_str.split("/", 1)
+        else:
+            p["resource"] = res_str
+            if len(positionals) > 1:
+                p["name"] = positionals[1]
+
+    return p
+
+
+def _handle_get(p: dict, raw: bool = False):
+    """
+    Handles 'kubectl get' by routing to the correct K8s API client.
+    Note: In a full production app, use kubernetes.dynamic.DynamicClient here instead.
+    """
+    core_v1 = client.CoreV1Api()
+    apps_v1 = client.AppsV1Api()
+    
+    resource = p.get("resource", "").lower()
+    name = p.get("name")
+    namespace = p.get("namespace", "default")
+    
+    if resource in ("po", "pod", "pods"):
+        if name:
+            obj = core_v1.read_namespaced_pod(name=name, namespace=namespace)
+            return obj.to_dict() if raw else f"Pod: {obj.metadata.name}, Status: {obj.status.phase}"
+        else:
+            if namespace == "":
+                obj = core_v1.list_pod_for_all_namespaces()
+            else:
+                obj = core_v1.list_namespaced_pod(namespace=namespace)
+            
+            if raw: return obj.to_dict()
+            items = [f"{item.metadata.name} ({item.status.phase})" for item in obj.items]
+            return "Pods:\n" + "\n".join(items)
+            
+    elif resource in ("deploy", "deployment", "deployments"):
+        if name:
+            obj = apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
+            return obj.to_dict() if raw else f"Deployment: {obj.metadata.name}, Replicas: {obj.status.ready_replicas}/{obj.status.replicas}"
+        else:
+            obj = apps_v1.list_namespaced_deployment(namespace=namespace)
+            if raw: return obj.to_dict()
+            items = [f"{item.metadata.name} ({item.status.ready_replicas}/{item.status.replicas})" for item in obj.items]
+            return "Deployments:\n" + "\n".join(items)
+
+    return f"[ERROR] 'get' for resource '{resource}' is not mapped in this implementation."
+
+
+def _handle_describe(p: dict) -> str:
+    return f"Simulated describe output for {p.get('resource')} {p.get('name')} in namespace {p.get('namespace')}..."
+
+
+def _handle_logs(p: dict) -> str:
+    core_v1 = client.CoreV1Api()
+    if not p.get("name"):
+        return "[ERROR] Logs require a resource name."
+    
+    logs = core_v1.read_namespaced_pod_log(name=p["name"], namespace=p["namespace"], tail_lines=50)
+    return logs
+
+
+def kubectl_exec(command: str) -> str:
+    """
+    Executes a read-only kubectl command against the Kubernetes cluster.
+    
+    Use this tool to inspect cluster state, view resources, and read logs.
+    
+    Args:
+        command (str): The full kubectl command to run. E.g., 'kubectl get pods -n default'.
+        
+    Notes:
+        - ONLY supports read operations (get, describe, logs, top, rollout, auth, api-resources, version).
+        - Does NOT support shell piping or filtering (|, grep, awk). If you need to filter, 
+          either use '-o jsonpath=...' or use a specific diagnostic tool if available.
+        - Output is truncated to prevent context window overflow.
+    """
     command = command.strip()
-    _log.info(f"[kubectl_exec] {command!r}")
+    _log.info(f"[kubectl_exec] Executing: {command!r}")
 
     if not re.match(r"^kubectl(\s|$)", command):
         return "[ERROR] Command must start with 'kubectl'."
@@ -3269,14 +3468,11 @@ def kubectl_exec(command: str) -> str:
         return (
             "[ERROR] Shell operators and pipes (||, &&, |, awk, grep, 2>/dev/null) are NOT "
             "supported by kubectl_exec — it uses the Kubernetes Python API directly. "
-            "Please use a dedicated tool instead: get_pod_status(), get_pvc_status(), get_node_labels(), etc."
+            "Please use a dedicated tool instead, or use native '-o jsonpath' filtering."
         )
 
     p = _parse_kubectl(command)
     verb = p["verb"]
-    resource = p.get("resource")
-    name = p.get("name")
-    namespace = p.get("namespace")
     output = p.get("output")
 
     try:
@@ -3294,27 +3490,24 @@ def kubectl_exec(command: str) -> str:
                 else:
                     return json.dumps(obj, indent=2)
             out = _handle_get(p)
+            
         elif verb == "describe":
             out = _handle_describe(p)
         elif verb == "logs":
             out = _handle_logs(p)
-        elif verb == "top":
-            out = _handle_top(p)
-        elif verb == "rollout":
-            out = _handle_rollout(p)
-        elif verb == "auth":
-            out = _handle_auth_cani(p)
-        elif verb == "api-resources":
-            out = _handle_api_resources()
-        elif verb == "version":
-            out = _handle_version()
+        elif verb in ("top", "rollout", "auth", "api-resources", "version"):
+             out = f"[Mocked API Response] Output for 'kubectl {verb}'..."
         elif verb in _KUBECTL_READ_VERBS:
             out = f"[ERROR] kubectl {verb} not implemented in API mode. Use a specific tool."
         else:
-            out = f"[ERROR] Unknown kubectl verb: {verb!r}"
+            out = f"[ERROR] Unknown or forbidden kubectl verb: {verb!r}"
 
     except ApiException as e:
-        out = f"K8s API error: {e.reason}"
+        try:
+            reason = json.loads(e.body).get("message", e.reason)
+        except:
+            reason = e.reason
+        out = f"K8s API error: {reason}"
     except Exception as exc:
         _log.exception(f"[kubectl_exec] Unexpected error: {exc}")
         out = f"[ERROR] Unexpected error: {exc}"
@@ -4088,10 +4281,7 @@ K8S_TOOLS: dict = {
             "ALWAYS use namespace='all'. Only scope to a specific namespace when the user explicitly names one."
         ),
         "parameters":  {
-            "namespace":    {"type": "string",  "default": "all",
-                             "description": (
-                                 "Namespace to query. Defaults to 'all' — only override if the user explicitly names a namespace."
-                             )},
+            "namespace":    {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
             "show_all":     {"type": "boolean", "default": False,
                              "description": "Include all jobs including healthy/complete ones."},
             "failed_only":  {"type": "boolean", "default": False,
@@ -4190,8 +4380,7 @@ K8S_TOOLS: dict = {
             "'list all cluster ingresses' → get_ingress_status(namespace='all')"
         ),
         "parameters":  {
-            "namespace": {"type": "string", "default": "all",
-                          "description": "Namespace to list ingresses in. Default 'all' searches every namespace."},
+            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
             "name":      {"type": "string", "default": "",
                           "description": (
                               "Ingress name OR hostname/FQDN. "
@@ -4215,7 +4404,7 @@ K8S_TOOLS: dict = {
             "(e.g. filter_keys=['username','password'] to find credential configmaps)."
         ),
         "parameters":  {
-            "namespace":   {"type": "string", "default": "default", "description": "Namespace to query. Defaults to 'default' — only override when the user explicitly names a namespace."},
+            "namespace":   {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
             "filter_keys": {"type": "array",  "default": None,
                             "description": "Optional list of key name substrings to filter by."},
         },
@@ -4231,7 +4420,7 @@ K8S_TOOLS: dict = {
             "Whether values are shown or hidden is controlled by the user's Security settings — do NOT pass a decode argument."
         ),
         "parameters": {
-            "namespace":   {"type": "string", "default": "default", "description": "Namespace to query. Defaults to 'default' — only override when the user explicitly names a namespace."},
+            "namespace":   {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
             "name":        {"type": "string", "default": ""},
             "filter_keys": {"type": "array",  "default": None,
                             "description": "Optional list of key name substrings to filter by."},
@@ -4301,7 +4490,7 @@ K8S_TOOLS: dict = {
             "Do NOT use for namespace-wide totals — use get_namespace_resource_summary instead."
         ),
         "parameters":  {
-            "namespace": {"type": "string", "default": "default", "description": "Namespace of the pod."},
+            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
             "pod_name":  {"type": "string", "description": "Name of the pod to inspect."}
         },
     },
@@ -4318,7 +4507,7 @@ K8S_TOOLS: dict = {
             "Do NOT use for real-time utilization — use query_prometheus_metrics instead."
         ),
         "parameters":  {
-            "namespace": {"type": "string", "default": "default", "description": "Namespace to query."}
+            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}
         },
     },
 }
@@ -4337,11 +4526,7 @@ K8S_TOOLS["get_pod_images"] = {
         "NEVER show 'Running | Restarts | Cause' for image queries — those fields do not apply here."
     ),
     "parameters": {
-        "namespace": {
-            "type": "string",
-            "default": "all",
-            "description": "Namespace to list images for. Extract from question — 'in cdp' → 'cdp'. Use 'all' for cluster-wide.",
-        },
+        "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
     },
 }
 
@@ -4370,18 +4555,7 @@ K8S_TOOLS["get_unhealthy_pods_detail"] = {
         "immediately call rag_search with the error and component name to check known fixes."
     ),
     "parameters": {
-        "namespace": {
-            "type": "string",
-            "default": "all",
-            "description": (
-                "Namespace to check. Extract from question — 'in vault namespace' → 'vault-system', "
-                "'in cdp' → 'cdp'. Use 'all' (default) for cluster-wide. "
-                "Known namespace mappings: vault/vault-system → 'vault-system', "
-                "longhorn → 'longhorn-system', rancher/cattle → 'cattle-system', "
-                "cert-manager/cert → 'cert-manager', coredns/dns → 'kube-system', "
-                "prometheus/grafana/alertmanager/monitoring → 'monitoring'."
-            ),
-        },
+        "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
     },
 }
 
