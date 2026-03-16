@@ -2728,7 +2728,7 @@ def get_pod_storage(namespace: str = "all", show_all: bool = False, phase_only: 
     except ApiException as e:
         return f"[ERROR] K8s API error listing pods: {e.reason}"
     
-def get_namespace_status(namespace: str = "all", show_all: bool = False) -> str:
+def get_namespace_status(namespace: str = "all", show_all: bool = False, phase_only: bool = False) -> str:
     try:
         if namespace != "all":
             try:
@@ -2739,54 +2739,47 @@ def get_namespace_status(namespace: str = "all", show_all: bool = False) -> str:
                 raise
 
         ns_items = _core.list_namespace().items if namespace == "all" else [_core.read_namespace(namespace)]
-        ns_pod_counts = {}
+        ns_pod_info = {}
 
         for ns in ns_items:
             ns_name = ns.metadata.name
             pods = _core.list_namespaced_pod(ns_name, limit=1000).items
-            counts = {"Running": 0, "Pending": 0, "Failed": 0, "Unknown": 0}
-            unhealthy = 0
+            pod_counts = {"Running": 0, "Pending": 0, "Failed": 0, "Unknown": 0}
 
             for pod in pods:
                 phase = pod.status.phase or "Unknown"
-                counts[phase] = counts.get(phase, 0) + 1
+                pod_counts[phase] = pod_counts.get(phase, 0) + 1
 
-                ready = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
-                total = len(pod.spec.containers)
-                restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
-                if ready < total or restarts > 5:
-                    unhealthy += 1
+            ns_pod_info[ns_name] = {"phase": ns.status.phase or "Active", "pod_counts": pod_counts}
 
-            ns_pod_counts[ns_name] = {
-                "phase": ns.status.phase or "Active",
-                "counts": counts,
-                "unhealthy": unhealthy,
-                "total": sum(counts.values())
-            }
-
-        # Compact summary for “least pods” queries
-        if not show_all:
-            summary_lines = [
-                f"{'NAMESPACE':<30} {'STATUS':<10} {'TOTAL':>5} {'Unhealthy':>9}"
-            ]
-            for ns_name, info in sorted(ns_pod_counts.items(), key=lambda x: x[1]["total"]):
-                summary_lines.append(
-                    f"{ns_name:<30} {info['phase']:<10} {info['total']:>5} {info['unhealthy']:>9}"
-                )
-            return "\n".join(summary_lines)
-
-        # Full detail if show_all=True
         lines = [
-            f"{'NAMESPACE':<30} {'STATUS':<10} {'TOTAL':>5} {'Running':>7} {'Pending':>7} "
-            f"{'Failed':>7} {'Unknown':>7} {'Unhealthy':>9}"
+            f"{'NAMESPACE':<30} {'STATUS':<10} {'TOTAL':>5} {'Running':>7} {'Pending':>7} {'Failed':>7} {'Unknown':>7}"
         ]
-        for ns_name, info in sorted(ns_pod_counts.items()):
-            counts = info["counts"]
+
+        # Track least and most pods
+        pod_totals = {}
+
+        for ns_name, info in sorted(ns_pod_info.items()):
+            counts = info["pod_counts"]
+            total = sum(counts.values())
+            pod_totals[ns_name] = total
             lines.append(
-                f"{ns_name:<30} {info['phase']:<10} {info['total']:>5} "
-                f"{counts['Running']:>7} {counts['Pending']:>7} {counts['Failed']:>7} "
-                f"{counts['Unknown']:>7} {info['unhealthy']:>9}"
+                f"{ns_name:<30} {info['phase']:<10} {total:>5} "
+                f"{counts['Running']:>7} {counts['Pending']:>7} {counts['Failed']:>7} {counts['Unknown']:>7}"
             )
+
+        if show_all:
+            lines.append("")
+            lines.append("Namespaces pod summary (all details included above).")
+
+        # Add least and most pods summary
+        if pod_totals:
+            least_ns = min(pod_totals, key=pod_totals.get)
+            most_ns = max(pod_totals, key=pod_totals.get)
+            lines.append("")
+            lines.append(f"Namespace with the least pods: {least_ns} ({pod_totals[least_ns]} pods)")
+            lines.append(f"Namespace with the most pods: {most_ns} ({pod_totals[most_ns]} pods)")
+
         return "\n".join(lines)
 
     except ApiException as e:
