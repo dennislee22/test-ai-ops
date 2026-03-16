@@ -778,7 +778,16 @@ def get_node_labels(search: str = None) -> str:
 
             # If search is provided, filter labels containing the substring
             if search:
-                label_lines = [l for l in label_lines if search in l]
+                filtered_labels = [l for l in label_lines if search.lower() in l.lower()]
+                if filtered_labels:
+                    label_lines = filtered_labels
+                else:
+                    # fallback: show all labels if none matched
+                    label_lines = label_lines
+                    results.append(
+                        f"No labels matched '{search}' for node '{node_name}'. Showing all labels:\n  " + "\n  ".join(label_lines)
+                    )
+                    continue  # skip normal append below
 
             if label_lines:
                 results.append(
@@ -786,7 +795,9 @@ def get_node_labels(search: str = None) -> str:
                 )
 
         if not results:
-            return f"No matching node(s) found for '{search}'."
+            if search:
+                return f"No matching node(s) found for '{search}'."
+            return "No labels found on any nodes."
 
         return "\n".join(results)
 
@@ -814,9 +825,20 @@ def get_node_taints(search: str = None) -> str:
 
                 results.append(f"{node.metadata.name}: {taint_str}")
 
+        # If a search was applied and no matches, show all tainted nodes
+        if search and not results:
+            for node in nodes:
+                node_taints = node.spec.taints or []
+                if not node_taints:
+                    continue
+                for t in node_taints:
+                    taint_str = f"{t.key}={t.value}:{t.effect}" if t.value else f"{t.key}:{t.effect}"
+                    results.append(f"{node.metadata.name}: {taint_str}")
+            if results:
+                return f"No matches for '{search}'. Showing all tainted nodes:\n" + "\n".join(results)
+            return f"No tainted nodes found at all."
+
         if not results:
-            if search:
-                return f"No tainted nodes found matching '{search}'."
             return "No tainted nodes found."
 
         return "\n".join(results)
@@ -912,13 +934,14 @@ def get_node_resource_requests() -> str:
 
 def get_node_info(node_name: str = None) -> str:
     try:
-        nodes = _core.list_node().items
-        if not nodes:
+        nodes = _core.list_node()
+        if not nodes.items:
             return "No nodes found."
 
         gpu_used_by_node: dict = {}
         try:
-            all_pods = _core.list_pod_for_all_namespaces(field_selector="status.phase=Running")
+            all_pods = _core.list_pod_for_all_namespaces(
+                field_selector="status.phase=Running")
             for pod in all_pods.items:
                 n_name = pod.spec.node_name or ""
                 if not n_name:
@@ -928,18 +951,18 @@ def get_node_info(node_name: str = None) -> str:
                     for key, val in reqs.items():
                         if "nvidia.com/gpu" in key or "amd.com/gpu" in key:
                             try:
-                                gpu_used_by_node[n_name] = gpu_used_by_node.get(n_name, 0) + int(val)
+                                gpu_used_by_node[n_name] = (
+                                    gpu_used_by_node.get(n_name, 0) + int(val))
                             except (ValueError, TypeError):
                                 pass
         except Exception:
             pass
 
-        lines = ["Node info:"]
-        gpu_nodes = 0
-        tainted_nodes = 0
+        lines       = ["Node Info:"]
+        gpu_nodes   = 0
 
-        for node in nodes:
-            if node_name and node.metadata.name != node_name:
+        for node in nodes.items:
+            if node_name and node_name not in node.metadata.name:
                 continue
 
             roles = [k.replace("node-role.kubernetes.io/", "")
@@ -947,55 +970,32 @@ def get_node_info(node_name: str = None) -> str:
                      if k.startswith("node-role.kubernetes.io/")] or ["worker"]
 
             conds = {c.type: c.status for c in (node.status.conditions or [])}
-
-            pressure = [t for t in ["MemoryPressure", "DiskPressure", "PIDPressure"] if conds.get(t) == "True"]
+            pressure = [t for t in ["MemoryPressure", "DiskPressure", "PIDPressure"]
+                        if conds.get(t) == "True"]
 
             alloc = node.status.allocatable or {}
-
-            gpu_alloc = 0
+            gpu_allocatable = 0
             for key in alloc:
                 if "nvidia.com/gpu" in key or "amd.com/gpu" in key:
                     try:
-                        gpu_alloc += int(alloc[key])
+                        gpu_allocatable += int(alloc[key])
                     except (ValueError, TypeError):
                         pass
-
-            if gpu_alloc:
+            if gpu_allocatable:
                 gpu_nodes += 1
 
             gpu_used = gpu_used_by_node.get(node.metadata.name, 0)
-            if gpu_alloc:
-                free_gpu = gpu_alloc - gpu_used
+            if gpu_allocatable:
+                _gpu_free = gpu_allocatable - gpu_used
                 if gpu_used == 0:
-                    gpu_str = " GPU:0/{0} (none in use — all free)".format(gpu_alloc)
-                elif gpu_used >= gpu_alloc:
-                    gpu_str = f" GPU:{gpu_used}/{gpu_alloc} (all in use — none free)"
+                    _gpu_status = "none in use — all free"
+                elif gpu_used >= gpu_allocatable:
+                    _gpu_status = "all in use — none free"
                 else:
-                    gpu_str = f" GPU:{gpu_used}/{gpu_alloc} ({gpu_used} in use, {free_gpu} free)"
+                    _gpu_status = f"{gpu_used} in use, {_gpu_free} free"
+                gpu_str = f" GPU:{gpu_used}/{gpu_allocatable} ({_gpu_status})"
             else:
                 gpu_str = ""
-
-            taints = node.spec.taints or []
-            if taints:
-                tainted_nodes += 1
-                taint_str = ", ".join(f"{t.key}={t.value}:{t.effect}" if t.value else f"{t.key}:{t.effect}" for t in taints)
-                taint_str = f" | Taints: {taint_str}"
-            else:
-                taint_str = ""
-
-            labels = node.metadata.labels or {}
-            sched_labels = []
-            for k in (
-                "topology.kubernetes.io/zone",
-                "topology.kubernetes.io/region",
-                "node.kubernetes.io/instance-type",
-                "beta.kubernetes.io/instance-type",
-                "kubernetes.io/os",
-                "kubernetes.io/arch",
-            ):
-                if k in labels:
-                    sched_labels.append(f"{k.split('/')[-1]}={labels[k]}")
-            label_str = f" | Labels: {', '.join(sched_labels)}" if sched_labels else ""
 
             lines.append(
                 f"  {node.metadata.name} [{','.join(roles)}]: "
@@ -1003,16 +1003,10 @@ def get_node_info(node_name: str = None) -> str:
                 + (f" ⚠ {','.join(pressure)}" if pressure else "")
                 + f" | CPU:{alloc.get('cpu','n/a')} Mem:{alloc.get('memory','n/a')}"
                 + gpu_str
-                + taint_str
-                + label_str
             )
 
-        lines.append(
-            f"Summary: {len(nodes)} node(s) total, "
-            f"{gpu_nodes} with GPU(s), "
-            f"{tainted_nodes} tainted."
-        )
-
+        total_nodes = len([n for n in nodes.items if not node_name or node_name in n.metadata.name])
+        lines.append(f"Summary: {total_nodes} node(s) total, {gpu_nodes} with GPU(s).")
         return "\n".join(lines)
 
     except ApiException as e:

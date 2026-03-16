@@ -89,8 +89,9 @@ K8S_TOOL_METADATA: dict = {
             "Check Kubernetes node health and scheduling status. "
             "Shows node readiness, memory/disk/PID pressure conditions, allocatable CPU and memory, "
             "GPU usage, node roles, taints, and key labels. "
+            "Supports filtering for a specific node by name. "
             "Use for questions like: 'which node has taints', 'are nodes healthy', "
-            "'node readiness', or 'why pods cannot schedule'. "
+            "'node readiness', 'list node ecs-w-01', or 'why pods cannot schedule'. "
             "Taints are defined on nodes and restrict scheduling. Labels provide metadata and scheduling hints. "
             "Do NOT use this tool for pod-level tolerations — use pod tools instead."
         ),
