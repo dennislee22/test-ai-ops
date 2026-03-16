@@ -236,7 +236,8 @@ def build_agent():
         _EXEMPT_TOOLS = {
             "get_coredns_health", "get_node_health", "get_gpu_info", 
             "get_pv_usage", "get_persistent_volumes", "query_prometheus_metrics",
-            "get_node_resource_requests", "rag_search", "kubectl_exec", "exec_db_query"
+            "get_node_resource_requests", "rag_search", "kubectl_exec", "exec_db_query",
+            "get_node_labels", "get_node_taints"
         }
         
         _needs_ns = bool(_tools_used - _EXEMPT_TOOLS - {""})
