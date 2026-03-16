@@ -1,3 +1,17 @@
+from tools.tools_k8s import (
+    get_pod_status, get_pod_logs, describe_pod, get_node_health, get_gpu_info,
+    get_node_labels, get_node_taints, get_events, get_deployment_status,
+    get_daemonset_status, get_statefulset_status, get_job_status, get_hpa_status,
+    get_pvc_status, get_cluster_version, get_storage_classes, get_endpoints_status,
+    get_node_capacity, get_persistent_volumes, get_service_status, get_ingress_status,
+    get_configmap_list, get_secrets, get_resource_quotas, get_limit_ranges,
+    get_service_accounts, get_cluster_role_bindings, get_namespace_status,
+    get_pod_tolerations, get_pod_resource_requests, run_cluster_health,
+    get_namespace_resource_summary, get_pod_images, get_unhealthy_pods_detail,
+    get_coredns_health, get_pv_usage, get_node_resource_requests,
+    query_prometheus_metrics, kubectl_exec, exec_db_query
+)
+
 K8S_TOOL_METADATA: dict = {
     "get_pod_status": {
         "fn":          get_pod_status,
