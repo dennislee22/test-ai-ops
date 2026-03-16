@@ -165,9 +165,9 @@ _LOCAL_NS_MAP = {
 }
 
 _IGNORE_NS = {
-    "all", "the", "any", "which", "what", "my", "this", "that", "a", "some", "in", "specific",
+    "all", "the", "any", "which", "what", "my", "this", "that", "a", "some", "in",
     "for", "of", "to", "is", "not", "are", "and", "or", "pvc", "pvcs", "pod", "pods", 
-    "node", "nodes", "deployment", "deployments", "status", "health", "check", "get", "individual",
+    "node", "nodes", "deployment", "deployments", "status", "health", "check", "get",
     "show", "has", "have", "had", "with", "without", "using", "uses", "does", "do"
 }
 
@@ -633,6 +633,13 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
         _hb_stop.set(); _hb_task.cancel()
         
         _final_cleaned = _clean_response(final_answer, user_message)
+ 
+        if not _final_cleaned.strip():
+            config.logger.warning(f"[REQ:{req_id}] LLM returned blank response. Falling back to raw tool output.")
+            tool_msgs = [m for m in all_messages + output.get("messages", []) if isinstance(m, ToolMessage)]
+            if tool_msgs:
+                _final_cleaned = "⚠️ The AI could not synthesize a summary, but here is the raw data:\n\n" + tool_msgs[-1].content
+
         config.logger.info(f"[REQ:{req_id}] stream_done elapsed={elapsed}s tools={list(set(tools_called))}\n[FINAL ANSWER]\n{_final_cleaned}\n[END FINAL ANSWER]")
         
         yield _sse({"type": "status", "text": f"✅ Done in {elapsed}s"})

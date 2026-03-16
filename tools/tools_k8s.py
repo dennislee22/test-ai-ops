@@ -763,28 +763,26 @@ def get_node_capacity() -> str:
 
 def get_node_labels(node_name: str = None) -> str:
     try:
-        nodes = _core.list_node()
-        if not nodes.items:
+        nodes = _core.list_node().items
+        if not nodes:
             return "No nodes found."
 
         results = []
-        for node in nodes.items:
-            if node_name and node.metadata.name != node_name:
+        for node in nodes:
+            # If node_name is given and not "all", skip non-matching nodes
+            if node_name and node_name != "all" and node.metadata.name != node_name:
                 continue
 
             labels = node.metadata.labels or {}
             roles = [
-                k.split("/")[-1]
-                for k, v in labels.items()
+                k.split("/")[-1] 
+                for k, v in labels.items() 
                 if k.startswith("node-role.kubernetes.io/")
             ]
             results.append(f"{node.metadata.name}: roles={roles}, labels={labels}")
 
         if not results:
-            if node_name:
-                return f"Node '{node_name}' not found."
-            return "No nodes matched the query."
-
+            return f"No matching node(s) found for '{node_name}'."
         return "\n".join(results)
 
     except ApiException as e:
@@ -792,23 +790,21 @@ def get_node_labels(node_name: str = None) -> str:
 
 def get_node_taints(node_name: str = None) -> str:
     try:
-        nodes = _core.list_node()
-        if not nodes.items:
+        nodes = _core.list_node().items
+        if not nodes:
             return "No nodes found."
 
         results = []
-        for node in nodes.items:
-            if node_name and node.metadata.name != node_name:
+        for node in nodes:
+            # If node_name is given and not "all", skip non-matching nodes
+            if node_name and node_name != "all" and node.metadata.name != node_name:
                 continue
             node_taints = node.spec.taints or []
             taints_str = ", ".join([f"{t.key}={t.value}:{t.effect}" for t in node_taints]) or "None"
             results.append(f"{node.metadata.name}: {taints_str}")
 
         if not results:
-            if node_name:
-                return f"Node '{node_name}' not found."
-            return "No taints found on any nodes."
-
+            return f"No matching node(s) found for '{node_name}'."
         return "\n".join(results)
 
     except ApiException as e:
