@@ -8,7 +8,7 @@ from tools.tools_k8s import (
     get_service_accounts, get_cluster_role_bindings, get_namespace_status,
     get_pod_tolerations, get_pod_resource_requests, run_cluster_health,
     get_namespace_resource_summary, get_pod_images, get_unhealthy_pods_detail,
-    get_coredns_health, get_pv_usage, get_node_resource_requests,
+    get_coredns_health, get_pv_usage, get_node_resource_requests, find_resource,
     query_prometheus_metrics, kubectl_exec, exec_db_query, get_pod_storage,
 )
 
@@ -155,6 +155,23 @@ K8S_TOOL_METADATA: dict = {
         ),
         "parameters":  {
             "search": {"type": "string", "description": "Optional keyword to filter taints (e.g., 'cde')."},
+        },
+    },
+
+    "find_resource": {
+        "fn":          find_resource,
+        "description": (
+            "Search for Kubernetes resources by name substring. "
+            "Supports pods, services, ingresses, and persistent volume claims (PVCs). "
+            "Optionally filter by resource type and namespace. "
+            "Returns a tab-delimited table with Resource Type, Namespace, Name, and relevant details "
+            "(e.g., pod status and node, service type and cluster IP, ingress hosts, PVC status and size). "
+            "If no matches are found, falls back to listing all resources of the specified type."
+        ),
+        "parameters":  {
+            "name_substring": {"type": "string", "description": "Partial name of the resource to search for. Required."},
+            "resource_type":  {"type": "string", "default": None, "description": "Optional resource type to filter (pod, svc/service, ingress, pvc). Defaults to all supported types."},
+            "namespace":      {"type": "string", "default": None, "description": "Optional namespace to restrict the search. Defaults to all namespaces if not provided."},
         },
     },
 

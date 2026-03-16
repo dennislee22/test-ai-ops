@@ -991,7 +991,53 @@ def get_node_info(node_name: str = None) -> str:
 
     except Exception as e:
         return f"Unexpected error: {str(e)}"
-        
+
+def find_resource(name_substring: str, resource_type: str = None, namespace: str = None) -> str:
+    try:
+        resource_type = resource_type.lower() if resource_type else None
+        lines = ["Resource Type\tNamespace\tName\tStatus/Details"]
+        results = []
+
+        def add_resources(kind: str, items, get_details_fn):
+            for item in items:
+                if not name_substring or name_substring.lower() in item.metadata.name.lower():
+                    details = get_details_fn(item)
+                    results.append(f"{kind}\t{item.metadata.namespace}\t{item.metadata.name}\t{details}")
+
+        # Define each resource type with a lambda to extract details
+        resources = []
+
+        if not resource_type or resource_type == "pod":
+            pods = _core.list_namespaced_pod(namespace).items if namespace else _core.list_pod_for_all_namespaces().items
+            resources.append(("Pod", pods, lambda p: f"{p.status.phase or 'Unknown'} on {p.spec.node_name or 'n/a'}"))
+
+        if not resource_type or resource_type in ("svc", "service"):
+            svcs = _core.list_namespaced_service(namespace).items if namespace else _core.list_service_for_all_namespaces().items
+            resources.append(("Service", svcs, lambda s: f"{s.spec.type} {s.spec.cluster_ip}"))
+
+        if not resource_type or resource_type == "ingress":
+            ingresses = _networking.list_namespaced_ingress(namespace).items if namespace else _networking.list_ingress_for_all_namespaces().items
+            resources.append(("Ingress", ingresses, lambda i: ", ".join([h.host for h in i.spec.rules or []])))
+
+        if not resource_type or resource_type == "pvc":
+            pvcs = _core.list_namespaced_persistent_volume_claim(namespace).items if namespace else _core.list_persistent_volume_claim_for_all_namespaces().items
+            resources.append(("PVC", pvcs, lambda pvc: f"{pvc.status.phase or 'Unknown'} {pvc.spec.resources.requests.get('storage', 'n/a') if pvc.spec.resources and pvc.spec.resources.requests else 'n/a'}"))
+
+        # Add matching resources
+        for kind, items, fn in resources:
+            add_resources(kind, items, fn)
+
+        if not results:
+            # fallback: show all resources of the type with a warning
+            results.append(f"No matches for '{name_substring}'. Showing all resources.")
+            for kind, items, fn in resources:
+                add_resources(kind, items, fn)
+
+        return "\n".join(lines + results)
+
+    except Exception as e:
+        return f"Unexpected error: {str(e)}"
+
 def get_gpu_info() -> str:
     try:
         nodes = _core.list_node()
