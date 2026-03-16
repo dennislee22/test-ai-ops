@@ -761,77 +761,68 @@ def get_node_capacity() -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_node_labels(node_name: str = None, search: str = None) -> str:
+def get_node_labels(search: str = None) -> str:
     try:
         nodes = _core.list_node().items
         if not nodes:
             return "No nodes found."
 
         results = []
-        for node in sorted(nodes, key=lambda n: n.metadata.name):
-            if node_name and node.metadata.name != node_name:
-                continue
 
+        for node in nodes:
             labels = node.metadata.labels or {}
-            roles = [k.split("/")[-1] for k, v in labels.items()
-                     if k.startswith("node-role.kubernetes.io/")] or ["worker"]
+            node_name = node.metadata.name
 
-            filtered_labels = {}
-            for k, v in labels.items():
-                if search is None or search.lower() in k.lower() or search.lower() in str(v).lower():
-                    filtered_labels[k] = v
+            # Build a list of label strings: key=value
+            label_lines = [f"{k}={v}" for k, v in labels.items()]
 
-            if not filtered_labels:
-                if search:
-                    continue  # skip this node if no label matches search
-                else:
-                    filtered_labels = labels  # show all if no search
+            # If search is provided, filter labels containing the substring
+            if search:
+                label_lines = [l for l in label_lines if search in l]
 
-            results.append(f"{node.metadata.name}: roles={roles}")
-            for k in sorted(filtered_labels.keys()):
-                results.append(f"  {k} = {filtered_labels[k]}")
+            if label_lines:
+                results.append(
+                    f"{node_name}:\n  " + "\n  ".join(label_lines)
+                )
 
         if not results:
-            return f"No matching node(s) found for '{search or node_name}'."
+            return f"No matching node(s) found for '{search}'."
 
         return "\n".join(results)
 
     except ApiException as e:
         return f"K8s API error: {e.reason}"
-    except Exception as ex:
-        return f"Unexpected error listing node labels: {ex}"
 
-def get_node_taints(node_name: str = None, search: str = None) -> str:
+def get_node_taints(search: str = None) -> str:
     try:
         nodes = _core.list_node().items
-    except ApiException as e:
-        return f"K8s API error: {e.reason}"
+        if not nodes:
+            return "No nodes found."
 
-    results = []
-
-    for node in nodes:
-        if node_name and node.metadata.name != node_name:
-            continue
-
-        taints = node.spec.taints or []
-        if taints:
-            taint_str = ", ".join(
-                f"{t.key}={t.value}:{t.effect}" if t.value else f"{t.key}:{t.effect}"
-                for t in taints
-            )
-        else:
-            taint_str = "None"
-
-        if search:
-            if search not in taint_str:
+        results = []
+        for node in nodes:
+            node_taints = node.spec.taints or []
+            if not node_taints:
                 continue
 
-        results.append(f"{node.metadata.name}: {taint_str}")
+            for t in node_taints:
+                taint_str = f"{t.key}={t.value}:{t.effect}" if t.value else f"{t.key}:{t.effect}"
 
-    if not results:
-        return f"No tainted nodes found{' for ' + repr(search) if search else ''}."
+                # If a search string is provided, filter
+                if search and search.lower() not in taint_str.lower():
+                    continue
 
-    return "\n".join(results)
+                results.append(f"{node.metadata.name}: {taint_str}")
+
+        if not results:
+            if search:
+                return f"No tainted nodes found matching '{search}'."
+            return "No tainted nodes found."
+
+        return "\n".join(results)
+
+    except ApiException as e:
+        return f"K8s API error: {e.reason}"
     
 def get_node_resource_requests() -> str:
     """Aggregate CPU/memory requests and limits per node from all running pods."""

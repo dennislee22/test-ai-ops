@@ -116,28 +116,30 @@ K8S_TOOL_METADATA: dict = {
     "get_node_labels": {
         "fn":          get_node_labels,
         "description": (
-            "Show all labels for a specific Kubernetes node. "
+            "Show all labels for Kubernetes nodes. "
             "Returns key/value pairs representing node metadata and scheduling hints. "
+            "Supports optional substring search to filter labels (e.g., search='cde'). "
             "Use for questions like: 'show labels for node X', 'which nodes have label Y', "
             "'find nodes with a specific label'. "
             "Do NOT use for node health, taints, or pod-level queries — use get_node_health or pod tools instead."
         ),
         "parameters":  {
-            "node_name": {"type": "string", "description": "Name of the node to query labels for. Required."},
+            "search": {"type": "string", "default": None, "description": "Optional substring to filter labels."},
         },
     },
 
     "get_node_taints": {
         "fn":          get_node_taints,
         "description": (
-            "Show all taints for a specific Kubernetes node. "
+            "Show all taints for Kubernetes nodes. "
             "Returns key/value/effect describing node taints that restrict pod scheduling. "
+            "Supports optional substring search to filter taints (e.g., search='cde'). "
             "Use for questions like: 'which nodes have taints', 'why pods cannot schedule on X', "
             "'get taint info for node Y'. "
             "Do NOT use for labels or pod-level tolerations — use get_node_labels or pod tools instead."
         ),
         "parameters":  {
-            "node_name": {"type": "string", "description": "Name of the node to query taints for. Required."},
+            "search": {"type": "string", "default": None, "description": "Optional substring to filter taints."},
         },
     },
 
