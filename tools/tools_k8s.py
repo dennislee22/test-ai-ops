@@ -1191,6 +1191,26 @@ def get_daemonset_status(namespace: str = "all") -> str:
         return "\n".join(lines)
     except ApiException as e:
         return f"K8s API error: {e.reason}"
+    
+def get_replicaset_status(namespace: str = "all") -> str:
+    try:
+        rs = (_apps.list_replica_set_for_all_namespaces()
+              if namespace == "all"
+              else _apps.list_namespaced_replica_set(namespace=namespace))
+        if not rs.items:
+            return f"No ReplicaSets in '{namespace}'."
+        lines = [f"ReplicaSets in '{namespace}':"]
+        for r in rs.items:
+            desired   = r.status.replicas or 0
+            ready     = r.status.ready_replicas or 0
+            available = r.status.available_replicas or 0
+            status    = "✓ Healthy" if ready == desired and desired > 0 else "⚠ Degraded"
+            lines.append(
+                f"  {r.metadata.namespace}/{r.metadata.name}: {status} "
+                f"| Desired:{desired} Ready:{ready} Available:{available}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Unexpected error: {str(e)}"
 
 def get_statefulset_status(namespace: str = "all") -> str:
     try:

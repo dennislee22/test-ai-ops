@@ -6,7 +6,7 @@ from tools.tools_k8s import (
     get_node_capacity, get_persistent_volumes, get_service_status, get_ingress_status,
     get_configmap_list, get_secrets, get_resource_quotas, get_limit_ranges,
     get_service_accounts, get_cluster_role_bindings, get_namespace_status,
-    get_pod_tolerations, get_pod_resource_requests, run_cluster_health,
+    get_pod_tolerations, get_pod_resource_requests, run_cluster_health, get_replicaset_status,
     get_namespace_resource_summary, get_pod_images, get_unhealthy_pods_detail,
     get_coredns_health, get_pv_usage, get_node_resource_requests, find_resource,
     query_prometheus_metrics, kubectl_exec, exec_db_query, get_pod_storage,
@@ -199,6 +199,12 @@ K8S_TOOL_METADATA: dict = {
     "get_daemonset_status": {
         "fn":          get_daemonset_status,
         "description": "Check DaemonSet scheduling health — useful for node-level agents (e.g. Longhorn, CNI).",
+        "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
+    },
+
+    "get_replicaset_status": {
+        "fn":          get_replicaset_status,
+        "description": "Check ReplicaSet health — shows desired, ready, and available replicas, and indicates if ReplicaSets are healthy or degraded.",
         "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
     },
     
