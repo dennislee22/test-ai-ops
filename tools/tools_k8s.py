@@ -2648,7 +2648,7 @@ def run_cluster_health(namespace: str = "all", show_all: bool = False, raw_outpu
     except ApiException as e:
         return f"[ERROR] K8s API error: {e.reason}"
 
-def get_namespace_status(namespace: str = "all", show_all: bool = False, phase_only: bool = False, max_unhealthy: int = 3) -> str:
+def get_namespace_status(namespace: str = "all", show_all: bool = False) -> str:
     try:
         if namespace != "all":
             try:
@@ -2659,52 +2659,54 @@ def get_namespace_status(namespace: str = "all", show_all: bool = False, phase_o
                 raise
 
         ns_items = _core.list_namespace().items if namespace == "all" else [_core.read_namespace(namespace)]
-        ns_pod_info = {}
+        ns_pod_counts = {}
 
         for ns in ns_items:
             ns_name = ns.metadata.name
             pods = _core.list_namespaced_pod(ns_name, limit=1000).items
-            pod_counts = {"Running": 0, "Pending": 0, "Failed": 0, "Unknown": 0, "Unhealthy": 0}
-            unhealthy_pods = []
+            counts = {"Running": 0, "Pending": 0, "Failed": 0, "Unknown": 0}
+            unhealthy = 0
 
             for pod in pods:
                 phase = pod.status.phase or "Unknown"
-                pod_counts[phase] = pod_counts.get(phase, 0) + 1
+                counts[phase] = counts.get(phase, 0) + 1
+
                 ready = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
                 total = len(pod.spec.containers)
                 restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
                 if ready < total or restarts > 5:
-                    pod_counts["Unhealthy"] += 1
-                    unhealthy_pods.append(f"{pod.metadata.name}: {phase} | Ready {ready}/{total} | Restarts:{restarts}")
+                    unhealthy += 1
 
-            ns_pod_info[ns_name] = {
+            ns_pod_counts[ns_name] = {
                 "phase": ns.status.phase or "Active",
-                "pod_counts": pod_counts,
-                "unhealthy_pods": unhealthy_pods
+                "counts": counts,
+                "unhealthy": unhealthy,
+                "total": sum(counts.values())
             }
 
-        lines = [f"{'NAMESPACE':<30} {'STATUS':<10} {'TOTAL':>5} {'Running':>7} {'Pending':>7} {'Failed':>7} {'Unknown':>7} {'Unhealthy':>9}"]
-        for ns_name, info in sorted(ns_pod_info.items()):
-            counts = info["pod_counts"]
-            total = sum(counts.values())
+        # Compact summary for “least pods” queries
+        if not show_all:
+            summary_lines = [
+                f"{'NAMESPACE':<30} {'STATUS':<10} {'TOTAL':>5} {'Unhealthy':>9}"
+            ]
+            for ns_name, info in sorted(ns_pod_counts.items(), key=lambda x: x[1]["total"]):
+                summary_lines.append(
+                    f"{ns_name:<30} {info['phase']:<10} {info['total']:>5} {info['unhealthy']:>9}"
+                )
+            return "\n".join(summary_lines)
+
+        # Full detail if show_all=True
+        lines = [
+            f"{'NAMESPACE':<30} {'STATUS':<10} {'TOTAL':>5} {'Running':>7} {'Pending':>7} "
+            f"{'Failed':>7} {'Unknown':>7} {'Unhealthy':>9}"
+        ]
+        for ns_name, info in sorted(ns_pod_counts.items()):
+            counts = info["counts"]
             lines.append(
-                f"{ns_name:<30} {info['phase']:<10} {total:>5} "
-                f"{counts['Running']:>7} {counts['Pending']:>7} {counts['Failed']:>7} {counts['Unknown']:>7} {counts['Unhealthy']:>9}"
+                f"{ns_name:<30} {info['phase']:<10} {info['total']:>5} "
+                f"{counts['Running']:>7} {counts['Pending']:>7} {counts['Failed']:>7} "
+                f"{counts['Unknown']:>7} {info['unhealthy']:>9}"
             )
-
-        # Concise unhealthy pod summary
-        detail_lines = []
-        for ns_name, info in sorted(ns_pod_info.items()):
-            unhealthy = info["unhealthy_pods"]
-            if unhealthy:
-                count = len(unhealthy)
-                displayed = unhealthy if show_all else unhealthy[:max_unhealthy]
-                detail_lines.append(f"\nNamespace '{ns_name}' has {count} unhealthy pods (showing {len(displayed)}):")
-                detail_lines.extend(f"  {u}" for u in displayed)
-                if not show_all and count > max_unhealthy:
-                    detail_lines.append(f"  ...and {count - max_unhealthy} more")
-
-        lines.extend(detail_lines)
         return "\n".join(lines)
 
     except ApiException as e:

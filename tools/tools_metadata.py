@@ -354,17 +354,31 @@ K8S_TOOL_METADATA: dict = {
     "get_namespace_status": {
         "fn":          get_namespace_status,
         "description": (
-            "Summarize Kubernetes namespaces with pod counts by phase. "
-            "Shows totals of pods in Running, Pending, Failed, Unknown, and Unhealthy states. "
-            "Optionally lists unhealthy pods with ready counts and restart info. "
-            "Use for: 'which namespace has the least pods', 'list namespaces with pod counts', "
-            "'namespaces with unhealthy pods', 'namespace pod status summary'. "
-            "Always include the 'namespace' parameter when the user explicitly asks about a specific namespace."
+            "List all namespaces with their status and pod counts. "
+            "Provides totals of pods in Running, Pending, Failed, Unknown, and Unhealthy states. "
+            "By default, shows a compact summary: NAMESPACE | STATUS | TOTAL | Unhealthy, "
+            "sorted by total pods, which is perfect for queries like 'which namespace has the least pods?'. "
+            "If show_all=True, returns a full breakdown including all pod phases per namespace. "
+            "ALWAYS use this when the user asks 'how many namespaces', 'list namespaces', "
+            "'namespaces with number of pods', or wants a namespace count."
         ),
         "parameters":  {
-            "namespace":  {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "show_all":   {"type": "boolean", "default": False, "description": "Include all pods in the output, including healthy pods."},
-            "phase_only": {"type": "boolean", "default": False, "description": "Report only pod phases (non-Running pods), without extra details."}
+            "namespace": {
+                "type": "string",
+                "default": "all",
+                "description": (
+                    "Namespace to query. Defaults to 'all' namespaces — only override when "
+                    "the user explicitly names a namespace."
+                )
+            },
+            "show_all": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "Include all pods in counts and show the full breakdown per namespace. "
+                    "If False, only show a compact summary with total and unhealthy pods."
+                )
+            }
         },
     },
 
