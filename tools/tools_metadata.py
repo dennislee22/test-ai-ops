@@ -9,7 +9,7 @@ from tools.tools_k8s import (
     get_pod_tolerations, get_pod_resource_requests, run_cluster_health,
     get_namespace_resource_summary, get_pod_images, get_unhealthy_pods_detail,
     get_coredns_health, get_pv_usage, get_node_resource_requests,
-    query_prometheus_metrics, kubectl_exec, exec_db_query
+    query_prometheus_metrics, kubectl_exec, exec_db_query, get_pod_storage,
 )
 
 K8S_TOOL_METADATA: dict = {
@@ -30,6 +30,25 @@ K8S_TOOL_METADATA: dict = {
             "show_all":    {"type": "boolean", "default": False, "description": "Set true to include healthy/running pods."},
             "raw_output":  {"type": "boolean", "default": False, "description": "Return kubectl-style tabular output."},
             "phase_only":  {"type": "boolean", "default": False, "description": "Return only pods whose phase is Pending/Failed/Unknown."},
+        },
+    },
+    
+    "get_pod_storage": {
+        "fn":          get_pod_storage,
+        "description": (
+            "Show which PersistentVolumeClaims (PVCs) are used by pods in a namespace, "
+            "including their phase (Bound/Unbound), access mode, storage class, and capacity. "
+            "Supports concise summaries or full details depending on the flags. "
+            "Use for: 'which PVCs are used by pods in namespace X', "
+            "'which pods have unbound storage', or 'storage usage by pod'."
+        ),
+        "parameters":  {
+            "namespace": {"type": "string", "default": "all",
+                          "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
+            "show_all":  {"type": "boolean", "default": False,
+                          "description": "Include all pods in the output, even if all their PVCs are Bound."},
+            "phase_only":{"type": "boolean", "default": False,
+                          "description": "Show only a brief summary per pod (e.g., #Bound vs #Unbound PVCs) without full details."},
         },
     },
     

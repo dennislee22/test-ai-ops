@@ -2648,6 +2648,99 @@ def run_cluster_health(namespace: str = "all", show_all: bool = False, raw_outpu
     except ApiException as e:
         return f"[ERROR] K8s API error: {e.reason}"
 
+def get_pod_storage(namespace: str = "all", show_all: bool = False, phase_only: bool = False) -> str:
+    _AM = {
+        "ReadWriteOnce": "RWO",
+        "ReadWriteMany": "RWX",
+    }
+
+    def _access(pvc):
+        modes = pvc.spec.access_modes or []
+        filtered = [_AM[m] for m in modes if m in _AM]
+        return ",".join(filtered) if filtered else "?"
+
+    try:
+        pods = (
+            _core.list_pod_for_all_namespaces().items
+            if namespace == "all"
+            else _core.list_namespaced_pod(namespace)
+        )
+        if not pods:
+            return f"No pods found in namespace '{namespace}'."
+
+        # Get PVC info for all pods
+        pod_pvc_info = {}
+        for pod in pods:
+            pod_ns = pod.metadata.namespace
+            pod_name = pod.metadata.name
+            pod_vols = []
+
+            for vol in pod.spec.volumes or []:
+                if getattr(vol, "persistent_volume_claim", None):
+                    pvc_name = vol.persistent_volume_claim.claim_name
+                    try:
+                        pvc = _core.read_namespaced_persistent_volume_claim(pvc_name, pod_ns)
+                        phase = pvc.status.phase or "Unknown"
+                        sc = pvc.spec.storage_class_name or "default"
+                        cap = (pvc.status.capacity or {}).get("storage", "?")
+                        am = _access(pvc)
+                        pod_vols.append({
+                            "name": pvc_name,
+                            "phase": phase,
+                            "access": am,
+                            "class": sc,
+                            "capacity": cap
+                        })
+                    except ApiException:
+                        pod_vols.append({
+                            "name": pvc_name,
+                            "phase": "Missing",
+                            "access": "?",
+                            "class": "?",
+                            "capacity": "?"
+                        })
+
+            pod_pvc_info[f"{pod_ns}/{pod_name}"] = pod_vols
+
+        # Prepare output
+        lines = []
+        if phase_only:
+            # Summary per pod: #Bound / #Unbound PVCs
+            for pod_key, vols in sorted(pod_pvc_info.items()):
+                bound = sum(1 for v in vols if v["phase"] == "Bound")
+                unbound = sum(1 for v in vols if v["phase"] != "Bound")
+                lines.append(f"{pod_key}: {bound} Bound, {unbound} Unbound PVC(s)")
+        else:
+            # Full details
+            for pod_key, vols in sorted(pod_pvc_info.items()):
+                if not vols:
+                    lines.append(f"{pod_key}: No PVCs")
+                else:
+                    lines.append(f"{pod_key}:")
+                    for v in vols:
+                        lines.append(
+                            f"  {v['name']}: phase={v['phase']}, access={v['access']}, "
+                            f"class={v['class']}, capacity={v['capacity']}"
+                        )
+            if not show_all:
+                # Optional: Only show pods with unbound/missing PVCs
+                filtered_lines = []
+                for pod_key, vols in sorted(pod_pvc_info.items()):
+                    if any(v["phase"] != "Bound" for v in vols):
+                        filtered_lines.append(f"{pod_key}:")
+                        for v in vols:
+                            filtered_lines.append(
+                                f"  {v['name']}: phase={v['phase']}, access={v['access']}, "
+                                f"class={v['class']}, capacity={v['capacity']}"
+                            )
+                if filtered_lines:
+                    lines = filtered_lines
+
+        return "\n".join(lines)
+
+    except ApiException as e:
+        return f"K8s API error (PVC listing): {e.reason}"
+    
 def get_namespace_status(namespace: str = "all", show_all: bool = False) -> str:
     try:
         if namespace != "all":
