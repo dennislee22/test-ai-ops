@@ -764,68 +764,75 @@ def get_node_capacity() -> str:
 def get_node_labels(node_name: str = None, label_search: str = None) -> str:
     try:
         nodes = _core.list_node().items
+        if not nodes:
+            return "No nodes found."
+
         results = []
 
-        for node in nodes:
+        for node in sorted(nodes, key=lambda n: n.metadata.name):
+            if node_name and node_name != "all" and node.metadata.name != node_name:
+                continue
+
             labels = node.metadata.labels or {}
-            roles = sorted([
-                k.split("/")[-1]
-                for k, v in labels.items()
-                if k.startswith("node-role.kubernetes.io/")
-            ])
-            clean_labels = {k: v for k, v in labels.items() if not k.startswith("node-role.kubernetes.io/")}
+            roles = [k.split("/")[-1] for k, v in labels.items() if k.startswith("node-role.kubernetes.io/")]
 
-            # filter by node_name if given
-            if node_name and node.metadata.name != node_name:
-                continue
+            if label_search:
+                matches = {k: v for k, v in labels.items() if label_search in k or label_search in str(v)}
+                if not matches:
+                    continue
+                labels_str = str(matches)
+            else:
+                labels_str = str(labels)
 
-            # filter by label value search if given
-            if label_search and not any(label_search in str(v) for v in clean_labels.values()):
-                continue
-
-            results.append(
-                f"{node.metadata.name}:\n"
-                f"  Roles : {roles if roles else 'None'}\n"
-                f"  Labels: {dict(sorted(clean_labels.items())) if clean_labels else 'None'}"
-            )
+            results.append(f"{node.metadata.name}: roles={roles}, labels={labels_str}")
 
         if not results:
-            return "No matching node(s) found."
-        return "\n\n".join(sorted(results))
+            if label_search:
+                return f"No matching node(s) found for '{label_search}'."
+            return "No nodes found with labels."
+
+        return "\n".join(results)
 
     except ApiException as e:
-        return f"K8s API error: {e.reason}"
+        return f"K8s API error listing nodes: {e.reason}"
 
 def get_node_taints(node_name: str = None, taint_search: str = None) -> str:
     try:
         nodes = _core.list_node().items
+        if not nodes:
+            return "No nodes found."
+
         results = []
 
-        for node in nodes:
-            if node_name and node.metadata.name != node_name:
+        for node in sorted(nodes, key=lambda n: n.metadata.name):
+            if node_name and node_name != "all" and node.metadata.name != node_name:
                 continue
 
-            taints = node.spec.taints or []
-            taints_str_list = [
-                f"{t.key}={t.value}:{t.effect}" for t in taints
-            ]
+            node_taints = node.spec.taints or []
+            if not node_taints:
+                taints_str = "None"
+            else:
+                taints_list = []
+                for t in node_taints:
+                    entry = f"{t.key}={t.value}:{t.effect}"
+                    if taint_search and taint_search not in entry:
+                        continue
+                    taints_list.append(entry)
+                taints_str = ", ".join(taints_list) if taints_list else "None"
 
-            # filter by taint_search if provided
-            if taint_search and not any(
-                taint_search in f"{t.key}={t.value}:{t.effect}" for t in taints
-            ):
-                continue
-
-            taints_str = ", ".join(taints_str_list) if taints_str_list else "None"
-            results.append(f"{node.metadata.name}: {taints_str}")
+            if taints_str != "None":
+                results.append(f"{node.metadata.name}: {taints_str}")
 
         if not results:
-            return f"No matching node(s) found for '{taint_search or node_name}'."
-        return "\n".join(sorted(results))
+            if taint_search:
+                return f"No matching taint(s) found for '{taint_search}'."
+            return "No tainted nodes found."
+
+        return "\n".join(results)
 
     except ApiException as e:
-        return f"K8s API error: {e.reason}"
-
+        return f"K8s API error listing nodes: {e.reason}"
+    
 def get_node_resource_requests() -> str:
     """Aggregate CPU/memory requests and limits per node from all running pods."""
     def _parse_cpu(s: str) -> float:
