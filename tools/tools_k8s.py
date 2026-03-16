@@ -761,51 +761,67 @@ def get_node_capacity() -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_node_labels(node_name: str = None) -> str:
+def get_node_labels(node_name: str = None, label_search: str = None) -> str:
     try:
         nodes = _core.list_node().items
-        if not nodes:
-            return "No nodes found."
-
         results = []
+
         for node in nodes:
-            # If node_name is given and not "all", skip non-matching nodes
-            if node_name and node_name != "all" and node.metadata.name != node_name:
+            labels = node.metadata.labels or {}
+            roles = sorted([
+                k.split("/")[-1]
+                for k, v in labels.items()
+                if k.startswith("node-role.kubernetes.io/")
+            ])
+            clean_labels = {k: v for k, v in labels.items() if not k.startswith("node-role.kubernetes.io/")}
+
+            # filter by node_name if given
+            if node_name and node.metadata.name != node_name:
                 continue
 
-            labels = node.metadata.labels or {}
-            roles = [
-                k.split("/")[-1] 
-                for k, v in labels.items() 
-                if k.startswith("node-role.kubernetes.io/")
-            ]
-            results.append(f"{node.metadata.name}: roles={roles}, labels={labels}")
+            # filter by label value search if given
+            if label_search and not any(label_search in str(v) for v in clean_labels.values()):
+                continue
+
+            results.append(
+                f"{node.metadata.name}:\n"
+                f"  Roles : {roles if roles else 'None'}\n"
+                f"  Labels: {dict(sorted(clean_labels.items())) if clean_labels else 'None'}"
+            )
 
         if not results:
-            return f"No matching node(s) found for '{node_name}'."
-        return "\n".join(results)
+            return "No matching node(s) found."
+        return "\n\n".join(sorted(results))
 
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_node_taints(node_name: str = None) -> str:
+def get_node_taints(node_name: str = None, taint_search: str = None) -> str:
     try:
         nodes = _core.list_node().items
-        if not nodes:
-            return "No nodes found."
-
         results = []
+
         for node in nodes:
-            # If node_name is given and not "all", skip non-matching nodes
-            if node_name and node_name != "all" and node.metadata.name != node_name:
+            if node_name and node.metadata.name != node_name:
                 continue
-            node_taints = node.spec.taints or []
-            taints_str = ", ".join([f"{t.key}={t.value}:{t.effect}" for t in node_taints]) or "None"
+
+            taints = node.spec.taints or []
+            taints_str_list = [
+                f"{t.key}={t.value}:{t.effect}" for t in taints
+            ]
+
+            # filter by taint_search if provided
+            if taint_search and not any(
+                taint_search in f"{t.key}={t.value}:{t.effect}" for t in taints
+            ):
+                continue
+
+            taints_str = ", ".join(taints_str_list) if taints_str_list else "None"
             results.append(f"{node.metadata.name}: {taints_str}")
 
         if not results:
-            return f"No matching node(s) found for '{node_name}'."
-        return "\n".join(results)
+            return f"No matching node(s) found for '{taint_search or node_name}'."
+        return "\n".join(sorted(results))
 
     except ApiException as e:
         return f"K8s API error: {e.reason}"
