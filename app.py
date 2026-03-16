@@ -1033,12 +1033,32 @@ async def api_kb_ask(req: KbAskRequest):
 
 @app.post("/api/kb/stream")
 async def api_kb_stream(req: KbAskRequest):
-    import asyncio as _asyncio, time as _time
+    import asyncio as _asyncio, time as _time, re
+    
     async def _generate():
         def _sse(obj): return f"data: {json.dumps(obj)}\n\n"
+        
         start, q = _time.time(), req.q.strip()
-        if not q: yield _sse({"type": "error", "text": "Empty query"}); return
+        
+        if not q: 
+            yield _sse({"type": "error", "text": "Empty query"})
+            return
+            
+        # --- SANITY CHECK: ENFORCE COMPLETE SENTENCES/QUESTIONS ---
+        word_count = len(q.split())
+        if word_count < 3:
+            yield _sse({
+                "type": "result", 
+                "answer": "Please ask a complete question or provide a more detailed statement (e.g., 'Why my vault pod is not running?' or 'List all known issues with Longhorn in 1.5.5 SP1').", 
+                "query": q, 
+                "elapsed": 0.0, 
+                "top_k": req.top_k
+            })
+            return
+        # ----------------------------------------------------------
+
         top_k, sheet = max(10, min(req.top_k, 500)), req.sheet
+        
         if not sheet:
             ql = q.lower()
             if any(k in ql for k in ["past learning", "incident"]): sheet = "Past Learnings"
@@ -1053,7 +1073,6 @@ async def api_kb_stream(req: KbAskRequest):
             context = await _asyncio.get_event_loop().run_in_executor(None, lambda: rag_retrieve(query=q, top_k=top_k, sheet=sheet))
             no_rag = not context.strip() or context == "No relevant documentation found." or (isinstance(context, str) and context.startswith("KB_EMPTY:"))
             
-            # --- STRICT RAG GUARDRAIL ---
             if no_rag:
                 ans = _MSG_NO_INGEST if "KB_EMPTY" in str(context) else "No relevant documentation found in the Knowledge Base."
                 yield _sse({"type": "result", "answer": ans, "query": q, "elapsed": round(_time.time() - start, 1), "top_k": top_k})
@@ -1061,8 +1080,12 @@ async def api_kb_stream(req: KbAskRequest):
                 
             yield _sse({"type": "status", "text": f"Found match(es) — synthesising answer…"})
             answer = await _asyncio.get_event_loop().run_in_executor(None, lambda: _llm_synthesise(context, q, top_k, req.max_tokens))
+            
             yield _sse({"type": "result", "answer": answer or "I'm sorry, I was unable to generate a response.", "query": q, "elapsed": round(_time.time() - start, 1), "top_k": top_k})
-        except Exception as exc: yield _sse({"type": "error", "text": str(exc)})
+            
+        except Exception as exc: 
+            yield _sse({"type": "error", "text": str(exc)})
+            
     return StreamingResponse(_generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 @app.get("/api/prompt")
