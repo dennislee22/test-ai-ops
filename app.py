@@ -52,10 +52,10 @@ def _load_system_prompt() -> str:
         return text
     logger.warning("[Prompt] system_prompt.txt not found — using built-in fallback prompt")
     return (
-        "You are an expert Kubernetes operations assistant.\n"
+        "You are an ECS Operations Assistant curated by dennislee for a Cloudera ECS cluster running in an air-gapped environment.\n"
+        "You have access to tools that query the live cluster.\n"
         "ALWAYS call tools first. NEVER fabricate data.\n"
         "ALWAYS search documentation before finalising a diagnosis.\n"
-        "SITE-SPECIFIC RULES:\n{custom_rules}\n"
     )
 
 SYSTEM_PROMPT = _load_system_prompt()
