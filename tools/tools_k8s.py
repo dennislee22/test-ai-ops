@@ -685,6 +685,38 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
 
     return "\n".join(out)
 
+def get_node_labels(node_name: str) -> str:
+    try:
+        node = _core.read_node(name=node_name)
+        labels = node.metadata.labels or {}
+        if not labels:
+            return f"Node '{node_name}' has no labels."
+        lines = [f"Labels for node '{node_name}':"]
+        for k, v in sorted(labels.items()):
+            lines.append(f"  {k}={v}")
+        return "\n".join(lines)
+    except ApiException as e:
+        if e.status == 404:
+            return f"Node '{node_name}' not found."
+        return f"K8s API error: {e.reason}"
+
+def get_node_taints(node_name: str) -> str:
+    try:
+        node = _core.read_node(name=node_name)
+        taints = node.spec.taints or []
+        if not taints:
+            return f"Node '{node_name}' has no taints."
+        lines = [f"Taints for node '{node_name}':"]
+        for t in taints:
+            if t.value:
+                lines.append(f"  {t.key}={t.value}:{t.effect}")
+            else:
+                lines.append(f"  {t.key}:{t.effect}")
+        return "\n".join(lines)
+    except ApiException as e:
+        if e.status == 404:
+            return f"Node '{node_name}' not found."
+        return f"K8s API error: {e.reason}"
 
 def get_node_resource_requests() -> str:
     """Aggregate CPU/memory requests and limits per node from all running pods."""
@@ -3160,6 +3192,10 @@ def _handle_version() -> str:
         return f"[ERROR] version: {e.reason}"
 
 def kubectl_exec(command: str) -> str:
+    import json
+    import re
+    from kubernetes.client.rest import ApiException
+
     command = command.strip()
     _log.info(f"[kubectl_exec] {command!r}")
 
@@ -3171,24 +3207,30 @@ def kubectl_exec(command: str) -> str:
         return (
             "[ERROR] Shell operators and pipes (||, &&, |, awk, grep, 2>/dev/null) are NOT "
             "supported by kubectl_exec — it uses the Kubernetes Python API directly. "
-            "Please use a dedicated tool instead: get_pod_status(namespace=..., show_all=True), "
-            "get_pvc_status(namespace=...), get_events(namespace=...), etc."
+            "Please use a dedicated tool instead: get_pod_status(), get_pvc_status(), get_node_labels(), etc."
         )
 
     p = _parse_kubectl(command)
     verb = p["verb"]
-
-    if verb in _BLOCKED_VERBS:
-        return f"[ERROR] {_BLOCKED_VERBS[verb]}"
-
-    if verb in _KUBECTL_WRITE_VERBS and not _ALLOW_WRITES:
-        return (
-            f"[ERROR] Write operation '{verb}' is disabled. "
-            "Set KUBECTL_ALLOW_WRITES=true in your env file to enable writes."
-        )
+    resource = p.get("resource")
+    name = p.get("name")
+    namespace = p.get("namespace")
+    output = p.get("output")
 
     try:
         if verb == "get":
+            if output and output.startswith("json"):
+                obj = _handle_get(p, raw=True)
+                if output.startswith("jsonpath="):
+                    try:
+                        from jsonpath_ng import parse
+                        expr = parse(output[len("jsonpath="):])
+                        matches = [match.value for match in expr.find(obj)]
+                        return json.dumps(matches)
+                    except Exception as e:
+                        return f"[ERROR] Invalid jsonpath expression: {e}"
+                else:
+                    return json.dumps(obj, indent=2)
             out = _handle_get(p)
         elif verb == "describe":
             out = _handle_describe(p)
@@ -3205,15 +3247,19 @@ def kubectl_exec(command: str) -> str:
         elif verb == "version":
             out = _handle_version()
         elif verb in _KUBECTL_READ_VERBS:
-            out = f"[ERROR] kubectl {verb} is not yet implemented in API mode. Use a specific tool instead."
+            out = f"[ERROR] kubectl {verb} not implemented in API mode. Use a specific tool."
         else:
             out = f"[ERROR] Unknown kubectl verb: {verb!r}"
+
+    except ApiException as e:
+        out = f"K8s API error: {e.reason}"
     except Exception as exc:
         _log.exception(f"[kubectl_exec] Unexpected error: {exc}")
         out = f"[ERROR] Unexpected error: {exc}"
 
     if len(out) > _KUBECTL_MAX_OUT:
         out = out[:_KUBECTL_MAX_OUT] + f"\n...[output truncated at {_KUBECTL_MAX_OUT} chars]"
+
     return out
 
 def _parse_cpu_to_millicores(cpu_str: str) -> int:
@@ -3904,6 +3950,40 @@ K8S_TOOLS: dict = {
             "Do NOT use for node health or GPU usage — use get_node_health instead."
         ),
         "parameters":  {},
+    },
+
+    "get_node_labels": {
+        "fn":          get_node_labels,
+        "description": (
+            "Show all labels for a specific Kubernetes node. "
+            "Returns key/value pairs representing node metadata and scheduling hints. "
+            "Use for questions like: 'show labels for node X', 'which nodes have label Y', "
+            "'find nodes with a specific label'. "
+            "Do NOT use for node health, taints, or pod-level queries — use get_node_health or pod tools instead."
+        ),
+        "parameters":  {
+            "node_name": {
+                "type": "string",
+                "description": "Name of the node to query labels for. Required."
+            },
+        },
+    },
+
+    "get_node_taints": {
+        "fn":          get_node_taints,
+        "description": (
+            "Show all taints for a specific Kubernetes node. "
+            "Returns key/value/effect describing node taints that restrict pod scheduling. "
+            "Use for questions like: 'which nodes have taints', 'why pods cannot schedule on X', "
+            "'get taint info for node Y'. "
+            "Do NOT use for labels or pod-level tolerations — use get_node_labels or pod tools instead."
+        ),
+        "parameters":  {
+            "node_name": {
+                "type": "string",
+                "description": "Name of the node to query taints for. Required."
+            },
+        },
     },
 
     "get_events": {
