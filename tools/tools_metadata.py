@@ -116,30 +116,34 @@ K8S_TOOL_METADATA: dict = {
     "get_node_labels": {
         "fn":          get_node_labels,
         "description": (
-            "Show all labels for Kubernetes nodes. "
+            "Show all labels for a specific Kubernetes node. "
             "Returns key/value pairs representing node metadata and scheduling hints. "
-            "Supports optional substring search to filter labels (e.g., search='cde'). "
-            "Use for questions like: 'show labels for node X', 'which nodes have label Y', "
-            "'find nodes with a specific label'. "
+            "By default (no search string), returns all labels for the node(s). "
+            "If a search string is provided, performs substring matching on both the label keys and values. "
+            "Use for questions like: 'show labels for node X', 'which nodes have label cde', "
+            "'find nodes with a specific label', or 'list nodes with gpu-related labels'. "
             "Do NOT use for node health, taints, or pod-level queries — use get_node_health or pod tools instead."
         ),
         "parameters":  {
-            "search": {"type": "string", "default": None, "description": "Optional substring to filter labels."},
+            "node_name": {"type": "string", "description": "Name of the node to query labels for. Optional — leave blank to query all nodes."},
+            "search":    {"type": "string", "description": "Substring to search in label keys/values. Optional — leave blank to return all labels."},
         },
     },
 
     "get_node_taints": {
         "fn":          get_node_taints,
         "description": (
-            "Show all taints for Kubernetes nodes. "
-            "Returns key/value/effect describing node taints that restrict pod scheduling. "
-            "Supports optional substring search to filter taints (e.g., search='cde'). "
-            "Use for questions like: 'which nodes have taints', 'why pods cannot schedule on X', "
-            "'get taint info for node Y'. "
+            "Show all taints for a specific Kubernetes node. "
+            "Returns key/value/effect pairs describing node taints that restrict pod scheduling. "
+            "By default (no search string), returns all nodes with taints. "
+            "If a search string is provided, performs substring matching on both the taint keys and values. "
+            "Use for questions like: 'which nodes have taints', 'which node is tainted with cde', "
+            "'why pods cannot schedule on node X', or 'show taints containing gpu'. "
             "Do NOT use for labels or pod-level tolerations — use get_node_labels or pod tools instead."
         ),
         "parameters":  {
-            "search": {"type": "string", "default": None, "description": "Optional substring to filter taints."},
+            "node_name": {"type": "string", "description": "Name of the node to query taints for. Optional — leave blank to check all nodes."},
+            "search":    {"type": "string", "description": "Substring to search in taint keys/values. Optional — leave blank to return all taints."},
         },
     },
 
