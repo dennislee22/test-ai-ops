@@ -26,7 +26,7 @@ def _load_k8s():
 
 _load_k8s()
 
-_version_api = _k8s.VersionApi()
+_version_api = k8s_client.VersionApi()
 _storage = _k8s.StorageV1Api()
 _core   = _k8s.CoreV1Api()
 _apps   = _k8s.AppsV1Api()
@@ -2547,77 +2547,55 @@ def get_pod_images(namespace: str = "all") -> str:
     header = f"Pod images in '{namespace}' ({len(pods.items)} pods):"
     return header + "\n" + "\n".join(rows)
 
-def get_namespace_status(detailed: bool = False) -> str:
+def get_namespace_status(namespace: str = "all", show_all: bool = False, phase_only: bool = False) -> str:
     try:
-        items, _cont = [], None
-        while True:
-            kw = {"limit": 500}
-            if _cont:
-                kw["_continue"] = _cont
-            page = _core.list_namespace(**kw)
-            items.extend(page.items)
-            _cont = (page.metadata._continue if page.metadata and page.metadata._continue else None)
-            if not _cont:
-                break
-        if not items:
-            return "No namespaces found."
-
-        ns_info = {}
-        for ns in items:
-            ns_name = ns.metadata.name
-            ns_phase = ns.status.phase or "Active"
+        if namespace != "all":
             try:
-                pods = _core.list_namespaced_pod(namespace=ns_name, limit=1000)
-            except ApiException:
-                pods = None
+                _core.read_namespace(name=namespace)
+            except ApiException as e:
+                if e.status == 404:
+                    return f"Namespace '{namespace}' does not exist."
+                raise
 
+        ns_items = _core.list_namespace().items if namespace == "all" else [_core.read_namespace(namespace)]
+        ns_pod_info = {}
+
+        for ns in ns_items:
+            ns_name = ns.metadata.name
+            pods = _core.list_namespaced_pod(ns_name, limit=1000).items
             pod_counts = {"Running": 0, "Pending": 0, "Failed": 0, "Unknown": 0, "Unhealthy": 0}
             unhealthy_pods = []
 
-            if pods and pods.items:
-                for pod in pods.items:
-                    phase = pod.status.phase or "Unknown"
-                    pod_counts[phase] = pod_counts.get(phase, 0) + 1
+            for pod in pods:
+                phase = pod.status.phase or "Unknown"
+                pod_counts[phase] = pod_counts.get(phase, 0) + 1
+                ready = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
+                total = len(pod.spec.containers)
+                restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
+                if ready < total or restarts > 5:
+                    pod_counts["Unhealthy"] += 1
+                    unhealthy_pods.append(f"{pod.metadata.name}: {phase} | Ready {ready}/{total} | Restarts:{restarts}")
 
-                    ready = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
-                    total = len(pod.spec.containers)
-                    restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
-                    bad_conditions = [f"{c.type}={c.status}" for c in (pod.status.conditions or []) if c.status != "True"]
+            ns_pod_info[ns_name] = {"phase": ns.status.phase or "Active", "pod_counts": pod_counts, "unhealthy_pods": unhealthy_pods}
 
-                    if ready < total or restarts > 5 or bad_conditions:
-                        pod_counts["Unhealthy"] += 1
-                        unhealthy_pods.append(
-                            f"  {pod.metadata.name}: {phase} | Ready {ready}/{total} | Restarts:{restarts}"
-                            + (f" [{', '.join(bad_conditions)}]" if bad_conditions else "")
-                        )
-
-            ns_info[ns_name] = {
-                "phase": ns_phase,
-                "pod_counts": pod_counts,
-                "unhealthy_pods": unhealthy_pods,
-                "total_pods": sum(pod_counts.values()) - pod_counts["Unhealthy"]
-            }
-
-        lines = [f"Total namespaces: {len(items)} ({sum(1 for ns in items if (ns.status.phase or 'Active') == 'Active')} Active).",
-                 f"{'NAMESPACE':<30} {'STATUS':<10} {'TOTAL':>5} {'Running':>7} {'Pending':>7} {'Failed':>7} {'Unknown':>7} {'Unhealthy':>9}"]
-        for ns_name in sorted(ns_info.keys()):
-            info = ns_info[ns_name]
+        lines = [f"{'NAMESPACE':<30} {'STATUS':<10} {'TOTAL':>5} {'Running':>7} {'Pending':>7} {'Failed':>7} {'Unknown':>7} {'Unhealthy':>9}"]
+        for ns_name, info in sorted(ns_pod_info.items()):
             counts = info["pod_counts"]
-            total = info["total_pods"] + counts["Unhealthy"]
+            total = sum(counts.values())
             lines.append(
                 f"{ns_name:<30} {info['phase']:<10} {total:>5} "
                 f"{counts['Running']:>7} {counts['Pending']:>7} {counts['Failed']:>7} {counts['Unknown']:>7} {counts['Unhealthy']:>9}"
             )
 
-        if not detailed:
-            return "\n".join(lines)
+        if show_all:
+            detail_lines = []
+            for ns_name, info in sorted(ns_pod_info.items()):
+                if info["unhealthy_pods"]:
+                    detail_lines.append(f"\nNamespace '{ns_name}' has {len(info['unhealthy_pods'])} unhealthy pods:")
+                    detail_lines.extend(info["unhealthy_pods"])
+            lines.extend(detail_lines)
 
-        detail_lines = []
-        for ns_name, info in sorted(ns_info.items()):
-            if info["unhealthy_pods"]:
-                detail_lines.append(f"\nNamespace '{ns_name}' has {len(info['unhealthy_pods'])} unhealthy pods:")
-                detail_lines.extend(info["unhealthy_pods"])
-        return "\n".join(lines + detail_lines)
+        return "\n".join(lines)
 
     except ApiException as e:
         return f"[ERROR] K8s API error listing namespaces: {e.reason}"
@@ -4463,38 +4441,19 @@ K8S_TOOLS: dict = {
     "get_namespace_status": {
         "fn":          get_namespace_status,
         "description": (
-            "List all namespaces with their status and pod count. "
-            "Provides totals of pods in Running, Pending, Failed, Unknown, and Unhealthy states. "
-            "When details=True, also lists the unhealthy pods per namespace with ready counts, restarts, "
-            "and failing conditions. ALWAYS use this when the user asks 'how many namespaces', "
-            "'list namespaces', 'namespaces with number of pods', or wants a namespace count."
+            "List all namespaces with their status and pod counts. "
+            "Shows totals for pods in Running, Pending, Failed, Unknown, and Unhealthy states. "
+            "Use for: 'how many namespaces', 'list namespaces', 'namespaces with number of pods', "
+            "'which namespace has least pods', or 'namespace pod count'. "
+            "Set 'show_all=True' to include details of unhealthy pods per namespace."
         ),
         "parameters":  {
-            "namespace": {
-                "type": "string",
-                "default": "default",
-                "description": "Namespace to query. Defaults to 'default' — only override when the user explicitly names a namespace."
-            },
-            "details": {
-                "type": "boolean",
-                "default": False,
-                "description": "Include per-namespace pod breakdowns and unhealthy pod details if True."
-            },
-            "phase_only": {
-                "type": "boolean",
-                "default": False,
-                "description": "Only report pods by phase, e.g., non-Running pods, without extra details."
-            },
-            "show_all": {
-                "type": "boolean",
-                "default": False,
-                "description": "Include all pods in counts, even those that are healthy and Running."
-            },
-            "failed_only": {
-                "type": "boolean",
-                "default": False,
-                "description": "Include only namespaces that have pods in Failed, Pending, or Unknown phases."
-            }
+            "namespace": {"type": "string", "default": "all",
+                          "description": "Namespace to query. Defaults to 'all' namespaces."},
+            "show_all":  {"type": "boolean", "default": False,
+                          "description": "Include per-namespace pod breakdowns and unhealthy pod details if True."},
+            "phase_only": {"type": "boolean", "default": False,
+                           "description": "Only report pods by phase, e.g., non-Running pods, without extra details."},
         },
     },
 
