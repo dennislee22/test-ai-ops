@@ -308,10 +308,10 @@ def build_agent():
           #      "Report the node health from the tool results. "
           #      "For GPU nodes include the EXACT GPU count and status string as returned."
           #  ),
-            "get_gpu_info": (
-                "Report GPU details from the tool results. "
-                "State the exact GPU model, total allocatable count, and how many are in use vs free."
-            ),
+          #  "get_gpu_info": (
+          #      "Report GPU details from the tool results. "
+          #      "State the exact GPU model, total allocatable count, and how many are in use vs free."
+          #  ),
         }
 
         _ENUMERATION_TOOLS = {
