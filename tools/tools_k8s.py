@@ -336,18 +336,24 @@ def get_pod_status(namespace: str = "all", show_all: bool = False, raw_output: b
                 return f"{msg} in namespace '{namespace}'."
 
             label = "Non-Running pods" if phase_only else "Unhealthy/non-Running pods"
-            out_lines = [f"{label} in '{namespace}':"]
+            out_lines = [f"### {label} in '{namespace}'\n"]
+            if namespace == "all":
+                out_lines.extend(["| NAMESPACE | NAME | STATUS | READY | RESTARTS | CONDITIONS |", "|---|---|---|---|---|---|"])
+            else:
+                out_lines.extend(["| NAME | STATUS | READY | RESTARTS | CONDITIONS |", "|---|---|---|---|---|"])
+            
             for pod in non_running_phases:
                 phase    = pod.status.phase or "Unknown"
                 restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
                 ready    = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
                 tot      = len(pod.spec.containers)
-                bad      = [f"{c.type}={c.status}"
-                            for c in (pod.status.conditions or []) if c.status != "True"]
-                out_lines.append(
-                    f"  {pod.metadata.namespace}/{pod.metadata.name}: {phase} "
-                    f"| Ready {ready}/{tot} | Restarts:{restarts}"
-                    + (f" [{', '.join(bad)}]" if bad else ""))
+                bad      = [f"{c.type}={c.status}" for c in (pod.status.conditions or []) if c.status != "True"]
+                bad_str  = ", ".join(bad) if bad else "-"
+                
+                if namespace == "all":
+                    out_lines.append(f"| {pod.metadata.namespace} | {pod.metadata.name} | {phase} | {ready}/{tot} | {restarts} | {bad_str} |")
+                else:
+                    out_lines.append(f"| {pod.metadata.name} | {phase} | {ready}/{tot} | {restarts} | {bad_str} |")
             return "\n".join(out_lines)
 
         if show_all and not raw_output and namespace == "all":
@@ -356,18 +362,14 @@ def get_pod_status(namespace: str = "all", show_all: bool = False, raw_output: b
 
             for phase in ("Pending", "Failed", "Unknown"):
                 try:
-                    result = _core.list_pod_for_all_namespaces(
-                        field_selector=f"status.phase={phase}")
+                    result = _core.list_pod_for_all_namespaces(field_selector=f"status.phase={phase}")
                     for pod in result.items:
                         restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
                         ready    = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
                         tot      = len(pod.spec.containers)
-                        bad      = [f"{c.type}={c.status}"
-                                    for c in (pod.status.conditions or []) if c.status != "True"]
-                        unhealthy.append(
-                            f"  {pod.metadata.namespace}/{pod.metadata.name}: {phase} "
-                            f"| Ready {ready}/{tot} | Restarts:{restarts}"
-                            + (f" [{', '.join(bad)}]" if bad else ""))
+                        bad      = [f"{c.type}={c.status}" for c in (pod.status.conditions or []) if c.status != "True"]
+                        bad_str  = ", ".join(bad) if bad else "-"
+                        unhealthy.append(f"| {pod.metadata.namespace} | {pod.metadata.name} | {phase} | {ready}/{tot} | {restarts} | {bad_str} |")
                 except ApiException:
                     pass
 
@@ -384,16 +386,12 @@ def get_pod_status(namespace: str = "all", show_all: bool = False, raw_output: b
                         tot      = len(pod.spec.containers)
                         ns_k     = pod.metadata.namespace
                         if ready < tot or _is_high_restart(pod, restarts):
-                            bad = [f"{c.type}={c.status}"
-                                   for c in (pod.status.conditions or []) if c.status != "True"]
-                            unhealthy.append(
-                                f"  {ns_k}/{pod.metadata.name}: Running "
-                                f"| Ready {ready}/{tot} | Restarts:{restarts}"
-                                + (f" [{', '.join(bad)}]" if bad else ""))
+                            bad = [f"{c.type}={c.status}" for c in (pod.status.conditions or []) if c.status != "True"]
+                            bad_str = ", ".join(bad) if bad else "-"
+                            unhealthy.append(f"| {ns_k} | {pod.metadata.name} | Running | {ready}/{tot} | {restarts} | {bad_str} |")
                         else:
                             healthy_by_ns[ns_k] = healthy_by_ns.get(ns_k, 0) + 1
-                    _cont = (page.metadata._continue
-                             if page.metadata and page.metadata._continue else None)
+                    _cont = (page.metadata._continue if page.metadata and page.metadata._continue else None)
                     if not _cont:
                         break
                 except ApiException:
@@ -401,14 +399,16 @@ def get_pod_status(namespace: str = "all", show_all: bool = False, raw_output: b
 
             healthy_total = sum(healthy_by_ns.values())
             total = healthy_total + len(unhealthy)
-            lines = [f"Pods across all namespaces: {total} total "
-                     f"({healthy_total} healthy, {len(unhealthy)} unhealthy)."]
+            lines = [f"### Pods across all namespaces: {total} total ({healthy_total} healthy, {len(unhealthy)} unhealthy)\n"]
             if unhealthy:
-                lines.append(f"\nUnhealthy pods ({len(unhealthy)}):")
+                lines.append(f"**Unhealthy pods ({len(unhealthy)}):**\n")
+                lines.extend(["| NAMESPACE | NAME | STATUS | READY | RESTARTS | CONDITIONS |", "|---|---|---|---|---|---|"])
                 lines.extend(unhealthy)
-            lines.append(f"\nHealthy Running pods by namespace ({healthy_total} total):")
+                lines.append("\n")
+            lines.append(f"**Healthy Running pods by namespace ({healthy_total} total):**\n")
+            lines.extend(["| NAMESPACE | HEALTHY PODS |", "|---|---|"])
             for ns_key, count in sorted(healthy_by_ns.items()):
-                lines.append(f"  {ns_key}: {count} pod(s)")
+                lines.append(f"| {ns_key} | {count} |")
             return "\n".join(lines)
 
         pods = (_core.list_pod_for_all_namespaces() if namespace == "all"
@@ -419,7 +419,6 @@ def get_pod_status(namespace: str = "all", show_all: bool = False, raw_output: b
 
         total = len(pods.items)
 
-        # Updated block: Generates a Markdown Table when raw_output is True
         if raw_output:
             if namespace == "all":
                 hdr = "| NAMESPACE | NAME | READY | STATUS | RESTARTS | AGE |"
@@ -454,18 +453,25 @@ def get_pod_status(namespace: str = "all", show_all: bool = False, raw_output: b
             rows.append(f"\n**Total: {total} pod(s) in namespace '{namespace}'.**")
             return "\n".join(rows)
 
-        lines = [f"Pods in '{namespace}': {total} total."]
+        # Updated block: Standard output now consistently outputs as a Markdown table
+        lines = [f"### Pods in '{namespace}' ({total} total)\n"]
+        if namespace == "all":
+            lines.extend(["| NAMESPACE | NAME | STATUS | READY | RESTARTS | CONDITIONS |", "|---|---|---|---|---|---|"])
+        else:
+            lines.extend(["| NAME | STATUS | READY | RESTARTS | CONDITIONS |", "|---|---|---|---|---|"])
+
         for pod in pods.items:
             phase    = pod.status.phase or "Unknown"
             restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
             ready    = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
             tot      = len(pod.spec.containers)
-            bad      = [f"{c.type}={c.status}"
-                        for c in (pod.status.conditions or []) if c.status != "True"]
-            lines.append(
-                f"  {pod.metadata.namespace}/{pod.metadata.name}: {phase} "
-                f"| Ready {ready}/{tot} | Restarts:{restarts}"
-                + (f" [{', '.join(bad)}]" if bad else ""))
+            bad      = [f"{c.type}={c.status}" for c in (pod.status.conditions or []) if c.status != "True"]
+            bad_str  = ", ".join(bad) if bad else "-"
+            
+            if namespace == "all":
+                lines.append(f"| {pod.metadata.namespace} | {pod.metadata.name} | {phase} | {ready}/{tot} | {restarts} | {bad_str} |")
+            else:
+                lines.append(f"| {pod.metadata.name} | {phase} | {ready}/{tot} | {restarts} | {bad_str} |")
         return "\n".join(lines)
 
     except ApiException as e:
@@ -1309,19 +1315,33 @@ def get_daemonset_status(namespace: str = "all") -> str:
               else _apps.list_namespaced_daemon_set(namespace=namespace))
         if not ds.items:
             return f"No DaemonSets in '{namespace}'."
-        lines = [f"DaemonSets in '{namespace}':"]
+        
+        lines = [f"### DaemonSets in '{namespace}'\n"]
+        if namespace == "all":
+            lines.extend(["| NAMESPACE | NAME | STATUS | DESIRED | READY | AVAILABLE |", "|---|---|---|---|---|---|"])
+        else:
+            lines.extend(["| NAME | STATUS | DESIRED | READY | AVAILABLE |", "|---|---|---|---|---|"])
+
         for d in ds.items:
             desired   = d.status.desired_number_scheduled or 0
             ready     = d.status.number_ready or 0
             available = d.status.number_available or 0
-            status    = "✓ Healthy" if ready == desired and desired > 0 else "⚠ Degraded"
-            lines.append(
-                f"  {d.metadata.namespace}/{d.metadata.name}: {status} "
-                f"| Desired:{desired} Ready:{ready} Available:{available}")
+            
+            if desired == 0 and ready == 0:
+                status = "✓ Scaled to 0"
+            else:
+                status = "✓ Healthy" if ready == desired else "⚠ Degraded"
+
+            if namespace == "all":
+                lines.append(f"| {d.metadata.namespace} | {d.metadata.name} | {status} | {desired} | {ready} | {available} |")
+            else:
+                lines.append(f"| {d.metadata.name} | {status} | {desired} | {ready} | {available} |")
+                
         return "\n".join(lines)
     except ApiException as e:
         return f"K8s API error: {e.reason}"
     
+
 def get_replicaset_status(namespace: str = "all") -> str:
     try:
         rs = (_apps.list_replica_set_for_all_namespaces()
@@ -1329,18 +1349,32 @@ def get_replicaset_status(namespace: str = "all") -> str:
               else _apps.list_namespaced_replica_set(namespace=namespace))
         if not rs.items:
             return f"No ReplicaSets in '{namespace}'."
-        lines = [f"ReplicaSets in '{namespace}':"]
+        
+        lines = [f"### ReplicaSets in '{namespace}'\n"]
+        if namespace == "all":
+            lines.extend(["| NAMESPACE | NAME | STATUS | DESIRED | READY | AVAILABLE |", "|---|---|---|---|---|---|"])
+        else:
+            lines.extend(["| NAME | STATUS | DESIRED | READY | AVAILABLE |", "|---|---|---|---|---|"])
+
         for r in rs.items:
             desired   = r.status.replicas or 0
             ready     = r.status.ready_replicas or 0
             available = r.status.available_replicas or 0
-            status    = "✓ Healthy" if ready == desired and desired > 0 else "⚠ Degraded"
-            lines.append(
-                f"  {r.metadata.namespace}/{r.metadata.name}: {status} "
-                f"| Desired:{desired} Ready:{ready} Available:{available}")
+            
+            if desired == 0 and ready == 0:
+                status = "✓ Scaled to 0"
+            else:
+                status = "✓ Healthy" if ready == desired else "⚠ Degraded"
+
+            if namespace == "all":
+                lines.append(f"| {r.metadata.namespace} | {r.metadata.name} | {status} | {desired} | {ready} | {available} |")
+            else:
+                lines.append(f"| {r.metadata.name} | {status} | {desired} | {ready} | {available} |")
+                
         return "\n".join(lines)
     except Exception as e:
         return f"Unexpected error: {str(e)}"
+
 
 def get_statefulset_status(namespace: str = "all") -> str:
     try:
@@ -1349,14 +1383,27 @@ def get_statefulset_status(namespace: str = "all") -> str:
                else _apps.list_namespaced_stateful_set(namespace=namespace))
         if not sts.items:
             return f"No StatefulSets in '{namespace}'."
-        lines = [f"StatefulSets in '{namespace}':"]
+        
+        lines = [f"### StatefulSets in '{namespace}'\n"]
+        if namespace == "all":
+            lines.extend(["| NAMESPACE | NAME | STATUS | DESIRED | READY |", "|---|---|---|---|---|"])
+        else:
+            lines.extend(["| NAME | STATUS | DESIRED | READY |", "|---|---|---|---|"])
+
         for s in sts.items:
             desired = s.spec.replicas or 0
             ready   = s.status.ready_replicas or 0
-            status  = "✓ Healthy" if ready == desired and desired > 0 else "⚠ Degraded"
-            lines.append(
-                f"  {s.metadata.namespace}/{s.metadata.name}: {status} "
-                f"| Desired:{desired} Ready:{ready}")
+            
+            if desired == 0 and ready == 0:
+                status = "✓ Scaled to 0"
+            else:
+                status = "✓ Healthy" if ready == desired else "⚠ Degraded"
+
+            if namespace == "all":
+                lines.append(f"| {s.metadata.namespace} | {s.metadata.name} | {status} | {desired} | {ready} |")
+            else:
+                lines.append(f"| {s.metadata.name} | {status} | {desired} | {ready} |")
+                
         return "\n".join(lines)
     except ApiException as e:
         return f"K8s API error: {e.reason}"
@@ -1366,14 +1413,6 @@ def get_job_status(namespace: str = "all",
                    raw_output: bool = False,
                    failed_only: bool = False,
                    running_only: bool = False) -> str:
-    """
-    List Kubernetes Jobs (and CronJobs if desired) in a namespace or across all namespaces.
-
-    By default, only FAILED jobs are returned.
-    Set show_all=True to include all jobs including complete ones.
-    Set running_only=True to return only currently active (running) jobs.
-    Raw output produces kubectl-style table format.
-    """
     try:
         jobs = (_batch.list_job_for_all_namespaces()
                 if namespace == "all"
