@@ -891,21 +891,28 @@ def get_node_labels(search: str = None) -> str:
 
             label_lines = [f"- {k}={v}" for k, v in labels.items()] or ["- <none>"]
 
-            if search:
-                search_lower = search.lower()  
-                if search_lower in node_name.lower():
-                    pass 
-                else:
-                    filtered = [l for l in label_lines if search_lower in l.lower()]
-                    if not filtered:
-                        continue 
-                    label_lines = filtered
+            # ✅ Handle wildcard / empty search
+            if search in (None, "", "*"):
+                results.append(f"**{node_name}:**\n" + "\n".join(label_lines) + "\n")
+                continue
 
-            results.append(f"**{node_name}:**\n" + "\n".join(label_lines) + "\n")
+            search_lower = search.lower()
+
+            # Match node name → show all labels
+            if search_lower in node_name.lower():
+                results.append(f"**{node_name}:**\n" + "\n".join(label_lines) + "\n")
+                continue
+
+            # Match label content
+            filtered = [l for l in label_lines if search_lower in l.lower()]
+            if filtered:
+                results.append(f"**{node_name}:**\n" + "\n".join(filtered) + "\n")
 
         if not results:
             return f"No nodes or labels found matching '{search}'."
+
         return "\n".join(results).rstrip()
+
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 

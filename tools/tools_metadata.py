@@ -13,22 +13,89 @@ from tools.tools_k8s import (
 )
 
 K8S_TOOL_METADATA: dict = {
+    "find_resource": {
+        "fn":          find_resource,
+        "description": (
+            "Find and locate Kubernetes resources by NAME (partial match). "
+            "This is the PRIMARY tool for searching resources when the user mentions a specific name. "
+            "Especially useful for locating pods and answering WHERE they are running. "
+
+            "Use this tool when the query includes a resource name, such as: "
+            "'where is grafana pod', "
+            "'find pod nginx', "
+            "'search for redis', "
+            "'which node is pod X running on', "
+            "'show me grafana', "
+            "'locate service Y'. "
+
+            "Returns matching resources with namespace, name, node (for pods), and status. "
+            "Supports pods, services, ingresses, and PVCs. "
+
+            "If a name or partial name is provided, ALWAYS use this tool instead of get_pod_status. "
+            "If no matches are found, falls back to listing all resources of the specified type."
+        ),
+        "parameters":  {
+            "name_substring": {
+                "type": "string",
+                "description": "Partial name of the resource to search for (e.g., 'grafana', 'nginx')."
+            },
+            "resource_type":  {
+                "type": "string",
+                "default": None,
+                "description": "Optional resource type to filter (pod, svc/service, ingress, pvc). Defaults to all supported types."
+            },
+            "namespace":      {
+                "type": "string",
+                "default": None,
+                "description": "Optional namespace to restrict the search. Defaults to all namespaces."
+            },
+        },
+    },
+
     "get_pod_status": {
         "fn":          get_pod_status,
         "description": (
-            "Check runtime STATUS and health of Kubernetes pods. Shows pod phase (Running/Pending/Failed/Unknown), "
-            "container readiness, restart counts, and unhealthy conditions. By default only UNHEALTHY pods are returned "
-            "(non-Running, not ready, or high restarts). Set show_all=true to list ALL pods including healthy ones. "
-            "Supports namespace filtering to list pods in a specific namespace. "
-            "Use for questions like: 'list pods', 'which pods are unhealthy', 'which pods are not running', "
-            "'how many pods are running', or pod health troubleshooting. "
-            "Do NOT use for CPU or memory resource requests/limits — use get_pod_resource_requests instead."
+            "List and check runtime STATUS of Kubernetes pods. "
+            "This is the PRIMARY tool for listing pods in a namespace or across the cluster. "
+
+            "Use this tool for queries like: "
+            "'list pods', "
+            "'list all pods in namespace X', "
+            "'show pods in longhorn-system', "
+            "'how many pods are running', "
+            "'which pods are unhealthy'. "
+
+            "Supports namespace filtering and can return either only unhealthy pods (default) "
+            "or ALL pods when show_all=true. "
+
+            "Shows pod phase (Running/Pending/Failed/Unknown), container readiness, restart counts, "
+            "and unhealthy conditions. "
+
+            "Do NOT use this tool when the user is searching for a specific pod by name "
+            "(e.g., 'where is grafana pod', 'find nginx pod'). "
+            "Use find_resource for name-based lookup instead."
         ),
         "parameters":  {
-            "namespace":   {"type": "string",  "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "show_all":    {"type": "boolean", "default": False, "description": "Set true to include healthy/running pods."},
-            "raw_output":  {"type": "boolean", "default": False, "description": "Return kubectl-style tabular output."},
-            "phase_only":  {"type": "boolean", "default": False, "description": "Return only pods whose phase is Pending/Failed/Unknown."},
+            "namespace":   {
+                "type": "string",
+                "default": "all",
+                "description": "Namespace to query. Defaults to 'all' namespaces — set when user specifies a namespace."
+            },
+            "show_all":    {
+                "type": "boolean",
+                "default": False,
+                "description": "Set true to include ALL pods (healthy + unhealthy)."
+            },
+            "raw_output":  {
+                "type": "boolean",
+                "default": False,
+                "description": "Return kubectl-style tabular output."
+            },
+            "phase_only":  {
+                "type": "boolean",
+                "default": False,
+                "description": "Return only pods whose phase is Pending/Failed/Unknown."
+            },
         },
     },
     
@@ -151,27 +218,6 @@ K8S_TOOL_METADATA: dict = {
         ),
         "parameters":  {
             "search": {"type": "string", "description": "Optional keyword to filter taints (e.g., 'cde')."},
-        },
-    },
-
-    "find_resource": {
-        "fn":          find_resource,
-        "description": (
-            "Locate Kubernetes resources by name substring or type. Primarily used for pods: "
-            "find pods by partial name, showing namespace, node, and status. "
-            "Also supports services, ingresses, and persistent volume claims (PVCs). "
-            "Optional namespace filter restricts results to a specific namespace. "
-            "Returns a tab-delimited table with Resource Type, Namespace, Name, and relevant details "
-            "(e.g., pod status and node, service type and cluster IP, ingress hosts, PVC status and size). "
-            "Example usage: "
-            "'find_resource(name_substring=\"grafana\")' → shows pods with 'grafana' in their name. "
-            "'find_resource(resource_type=\"pod\", namespace=\"longhorn-system\")' → lists all pods in that namespace. "
-            "If no matches are found for the name substring, falls back to listing all resources of the specified type."
-        ),
-        "parameters":  {
-            "name_substring": {"type": "string", "description": "Partial name of the resource to search for. Optional."},
-            "resource_type":  {"type": "string", "default": None, "description": "Optional resource type to filter (pod, svc/service, ingress, pvc). Defaults to all supported types."},
-            "namespace":      {"type": "string", "default": None, "description": "Optional namespace to restrict the search. Defaults to all namespaces if not provided."},
         },
     },
 
