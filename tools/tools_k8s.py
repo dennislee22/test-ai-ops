@@ -546,6 +546,7 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
 
     def _collect_unhealthy():
         found = []
+        # Collect pods in non-Running phases
         for phase in ("Pending", "Failed", "Unknown"):
             try:
                 result = (_core.list_pod_for_all_namespaces(field_selector=f"status.phase={phase}")
@@ -554,6 +555,8 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
                 found.extend(result.items)
             except ApiException:
                 pass
+
+        # Check Running pods for high restarts or not-ready containers
         _cont = None
         while True:
             try:
@@ -586,6 +589,7 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
         tot      = len(pod.spec.containers)
         lines.append(f"  Phase: {phase} | Ready: {ready}/{tot} | Total restarts: {restarts}")
 
+        # Conditions
         bad_conds = [(c.type, c.reason or "", c.message or "")
                      for c in (pod.status.conditions or []) if c.status != "True"]
         if bad_conds:
@@ -593,6 +597,7 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
             for ctype, reason, msg in bad_conds:
                 lines.append(f"    {ctype}: {reason} — {msg}" if reason or msg else f"    {ctype}: False")
 
+        # Container statuses
         lines.append("  Containers:")
         for cs in (pod.status.container_statuses or []):
             state_dict = cs.state.to_dict() if cs.state else {}
@@ -612,6 +617,7 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
                 lines.append(f"      Last exit: code={lt.exit_code} reason={lt.reason}"
                               + (f" message={lt.message.strip()[:200]}" if lt.message else ""))
 
+        # Container resources
         for c in (pod.spec.containers or []):
             req = (c.resources.requests or {}) if c.resources else {}
             lim = (c.resources.limits   or {}) if c.resources else {}
@@ -620,6 +626,7 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
                               f"requests=cpu:{req.get('cpu','none')}/mem:{req.get('memory','none')} "
                               f"limits=cpu:{lim.get('cpu','none')}/mem:{lim.get('memory','none')}")
 
+        # Events
         events = []
         try:
             ev = _core.list_namespaced_event(
@@ -641,25 +648,20 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
 
     def _get_logs(pod_name: str, ns: str) -> str:
         try:
-            logs = _core.read_namespaced_pod_log(
-                name=pod_name, namespace=ns,
-                tail_lines=20, timestamps=False,
-                previous=False)
+            logs = _core.read_namespaced_pod_log(name=pod_name, namespace=ns, tail_lines=20, timestamps=False)
             if logs and logs.strip():
                 return logs.strip()
         except ApiException:
             pass
         try:
-            logs = _core.read_namespaced_pod_log(
-                name=pod_name, namespace=ns,
-                tail_lines=20, timestamps=False,
-                previous=True)
+            logs = _core.read_namespaced_pod_log(name=pod_name, namespace=ns, tail_lines=20, timestamps=False, previous=True)
             if logs and logs.strip():
                 return "(previous container)\n" + logs.strip()
         except ApiException:
             pass
         return ""
 
+    # --- Main ---
     try:
         unhealthy = _collect_unhealthy()
     except Exception as e:
@@ -669,12 +671,29 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
         scope = f"namespace '{namespace}'" if namespace != "all" else "all namespaces"
         return f"No unhealthy pods found in {scope}."
 
-    out = [f"Unhealthy pods ({len(unhealthy)}) — detailed diagnosis:\n"]
+    # --- Summary table header ---
+    out = [
+        f"Unhealthy pods ({len(unhealthy)}) — summary and detailed diagnosis:\n",
+        f"{'Namespace':<15} {'Pod':<30} {'Phase':<10} {'Ready':<7} {'Restarts':<8}",
+        "-"*75
+    ]
 
+    # --- Summary rows ---
     for pod in unhealthy:
         ns_name  = pod.metadata.namespace
         pod_name = pod.metadata.name
-        out.append(f"{'='*70}")
+        phase    = pod.status.phase or "Unknown"
+        restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
+        ready    = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
+        tot      = len(pod.spec.containers)
+
+        out.append(f"{ns_name:<15} {pod_name:<30} {phase:<10} {ready}/{tot:<7} {restarts:<8}")
+
+    # --- Detailed diagnostics ---
+    for pod in unhealthy:
+        ns_name  = pod.metadata.namespace
+        pod_name = pod.metadata.name
+        out.append("\n" + "="*70)
         out.append(f"POD: {ns_name}/{pod_name}")
         out.extend(_describe_detail(pod))
 
@@ -706,7 +725,10 @@ def get_storage_classes() -> str:
         if not scs.items:
             return "No StorageClasses found in the cluster."
 
-        lines = ["Storage Classes in cluster:"]
+        lines = [
+            "Name\tProvisioner\tReclaimPolicy\tVolumeExpansion"
+        ]
+
         for sc in scs.items:
             name = sc.metadata.name
             provisioner = getattr(sc, "provisioner", "unknown")
@@ -715,7 +737,7 @@ def get_storage_classes() -> str:
             expand_str = "Yes" if allow_expand else "No"
 
             lines.append(
-                f"  {name} | Provisioner: {provisioner} | ReclaimPolicy: {reclaim} | Volume Expansion: {expand_str}"
+                f"{name}\t{provisioner}\t{reclaim}\t{expand_str}"
             )
 
         return "\n".join(lines)
@@ -725,7 +747,7 @@ def get_storage_classes() -> str:
 
 def get_endpoints(namespace: str = None) -> str:
     try:
-        lines = ["Namespace\tName\tService"]
+        lines = ["Namespace\tName\tAddress"]
         results = []
 
         if namespace:
@@ -739,9 +761,24 @@ def get_endpoints(namespace: str = None) -> str:
             return "No Endpoints found in any namespace."
 
         for ep in eps_list:
-            svc_name = ep.metadata.name
             ns_name = ep.metadata.namespace
-            results.append(f"{ns_name}\t{svc_name}\t{svc_name}")
+            name = ep.metadata.name
+
+            # Extract IP:Port
+            if not ep.subsets:
+                continue
+
+            for subset in ep.subsets:
+                ports = subset.ports or []
+                addresses = subset.addresses or []
+
+                for addr in addresses:
+                    ip = addr.ip
+                    for port in ports:
+                        results.append(f"{ns_name}\t{name}\t{ip}:{port.port}")
+
+        if not results:
+            return "No active Endpoints (no addresses) found."
 
         return "\n".join(lines + results)
 
@@ -784,7 +821,7 @@ def get_node_labels(search: str = None) -> str:
             node_name = node.metadata.name
 
             # Build a list of label strings: key=value
-            label_lines = [f"{k}={v}" for k, v in labels.items()]
+            label_lines = [f"- {k}={v}" for k, v in labels.items()]
 
             # If search is provided, filter labels containing the substring
             if search:
@@ -793,15 +830,14 @@ def get_node_labels(search: str = None) -> str:
                     label_lines = filtered_labels
                 else:
                     # fallback: show all labels if none matched
-                    label_lines = label_lines
                     results.append(
-                        f"No labels matched '{search}' for node '{node_name}'. Showing all labels:\n  " + "\n  ".join(label_lines)
+                        f"**{node_name}:**\n" + "\n".join(label_lines) + "\n"
                     )
                     continue  # skip normal append below
 
             if label_lines:
                 results.append(
-                    f"{node_name}:\n  " + "\n  ".join(label_lines)
+                    f"**{node_name}:**\n" + "\n".join(label_lines) + "\n"
                 )
 
         if not results:
@@ -809,7 +845,7 @@ def get_node_labels(search: str = None) -> str:
                 return f"No matching node(s) found for '{search}'."
             return "No labels found on any nodes."
 
-        return "\n".join(results)
+        return "\n".join(results).rstrip()
 
     except ApiException as e:
         return f"K8s API error: {e.reason}"
@@ -821,37 +857,43 @@ def get_node_taints(search: str = None) -> str:
             return "No nodes found."
 
         results = []
+
         for node in nodes:
             node_taints = node.spec.taints or []
             if not node_taints:
                 continue
 
+            taint_lines = []
             for t in node_taints:
                 taint_str = f"{t.key}={t.value}:{t.effect}" if t.value else f"{t.key}:{t.effect}"
-
-                # If a search string is provided, filter
                 if search and search.lower() not in taint_str.lower():
                     continue
+                taint_lines.append(f"- {taint_str}")
 
-                results.append(f"{node.metadata.name}: {taint_str}")
+            if taint_lines:
+                results.append(f"**{node.metadata.name}:**\n" + "\n".join(taint_lines) + "\n")
 
-        # If a search was applied and no matches, show all tainted nodes
+        # If search was applied and no matches, show all tainted nodes
         if search and not results:
+            fallback_results = []
             for node in nodes:
                 node_taints = node.spec.taints or []
                 if not node_taints:
                     continue
+                taint_lines = []
                 for t in node_taints:
                     taint_str = f"{t.key}={t.value}:{t.effect}" if t.value else f"{t.key}:{t.effect}"
-                    results.append(f"{node.metadata.name}: {taint_str}")
-            if results:
-                return f"No matches for '{search}'. Showing all tainted nodes:\n" + "\n".join(results)
-            return f"No tainted nodes found at all."
+                    taint_lines.append(f"- {taint_str}")
+                if taint_lines:
+                    fallback_results.append(f"**{node.metadata.name}:**\n" + "\n".join(taint_lines) + "\n")
+            if fallback_results:
+                return f"No matches for '{search}'. Showing all tainted nodes:\n" + "\n".join(fallback_results).rstrip()
+            return "No tainted nodes found at all."
 
         if not results:
             return "No tainted nodes found."
 
-        return "\n".join(results)
+        return "\n".join(results).rstrip()
 
     except ApiException as e:
         return f"K8s API error: {e.reason}"
@@ -1354,21 +1396,28 @@ def get_hpa_status(namespace: str = "all") -> str:
     try:
         hpas = (_autoscaling.list_horizontal_pod_autoscaler_for_all_namespaces()
                 if namespace == "all"
-                else _autoscaling.list_namespaced_horizontal_pod_autoscaler(
-                    namespace=namespace))
+                else _autoscaling.list_namespaced_horizontal_pod_autoscaler(namespace=namespace))
         if not hpas.items:
             return f"No HPAs in '{namespace}'."
-        lines = [f"HPAs in '{namespace}':"]
+
+        # --- Table header ---
+        lines = [
+            f"HPAs in '{namespace}':\n",
+            f"{'Namespace':<15} {'HPA Name':<30} {'Current':<8} {'Desired':<8} {'Min':<5} {'Max':<5} {'Status':<10}",
+            "-"*85
+        ]
+
         for h in hpas.items:
             cur = h.status.current_replicas or 0
             des = h.status.desired_replicas or 0
             mn  = h.spec.min_replicas or 1
             mx  = h.spec.max_replicas or "?"
             at_max = cur >= h.spec.max_replicas if h.spec.max_replicas else False
-            flag = " ⚠ AT MAX" if at_max else ""
+            flag = "AT MAX" if at_max else "OK"
             lines.append(
-                f"  {h.metadata.namespace}/{h.metadata.name}: "
-                f"current={cur} desired={des} min={mn} max={mx}{flag}")
+                f"{h.metadata.namespace:<15} {h.metadata.name:<30} {cur:<8} {des:<8} {mn:<5} {mx:<5} {flag:<10}"
+            )
+
         return "\n".join(lines)
     except ApiException as e:
         return f"K8s API error: {e.reason}"
@@ -1456,6 +1505,9 @@ def get_persistent_volumes() -> str:
 
 def get_pv_usage(threshold: int = 80) -> str:
     from kubernetes.stream import stream as _k8s_stream
+    from kubernetes.client.rest import ApiException
+    from kubernetes import client as _k8s
+    _core = _k8s.CoreV1Api()
 
     def _parse_storage_to_gib(s: str) -> float:
         s = s.strip()
@@ -1490,9 +1542,6 @@ def get_pv_usage(threshold: int = 80) -> str:
             return ""
 
     def _longhorn_crd_usage(vol_name: str, ns: str, pvc_name: str, sc: str, threshold: int):
-        """Try Longhorn CRD for usage. Returns (entry_str, is_error) tuple.
-        entry_str is the formatted result or error message.
-        is_error=True means it should go to errors list, False means results list."""
         try:
             custom = _k8s.CustomObjectsApi()
             lh_vol = custom.get_namespaced_custom_object(
@@ -1500,34 +1549,43 @@ def get_pv_usage(threshold: int = 80) -> str:
             )
             actual_raw = lh_vol.get("status", {}).get("actualSize")
             total_raw  = lh_vol.get("spec", {}).get("size")
+            
             if actual_raw is None or total_raw is None:
-                return (f"  {ns}/{pvc_name}: Longhorn CRD found but actualSize/spec.size fields missing — skipped", True)
+                return (f"{ns}/{pvc_name}: Longhorn CRD found but actualSize/spec.size missing", True)
+            
             actual = int(actual_raw or 0)
             total  = int(total_raw  or 0)
+            
             if total == 0:
-                return (f"  {ns}/{pvc_name}: Longhorn CRD found but spec.size=0 (volume not provisioned yet) — skipped", True)
+                return (f"{ns}/{pvc_name}: Longhorn CRD found but spec.size=0 (not provisioned)", True)
             if actual == 0:
                 total_gib = round(total / (1024**3), 2)
-                return (f"  {ns}/{pvc_name}: Longhorn CRD spec.size={total_gib}Gi but actualSize=0 (usage unverified) — skipped", True)
+                return (f"{ns}/{pvc_name}: Longhorn CRD spec.size={total_gib}Gi but actualSize=0", True)
+                
             pct = round((actual / total) * 100, 1)
             used_gib  = round(actual / (1024**3), 2)
             total_gib = round(total  / (1024**3), 2)
             avail_gib = round(max(0, total - actual) / (1024**3), 2)
-            # actualSize can exceed spec.size due to Longhorn replica overhead —
-            # cap display pct at 100% but preserve real value in label for visibility
+            
             display_pct = min(pct, 100.0)
-            pct_label = f"{pct}% used (Longhorn replica overhead)" if pct > 100 else f"{pct}% used"
+            pct_label = f"{pct}% (replica overhead)" if pct > 100 else f"{pct}%"
             flag = "🔴" if display_pct >= 90 else ("🟠" if display_pct >= threshold else "🟢")
-            entry = (
-                f"  {flag} {ns}/{pvc_name}  {pct_label}  "
-                f"({used_gib}Gi used / {total_gib}Gi total, {avail_gib}Gi free)  "
-                f"class:{sc}  source:longhorn-crd"
-            )
-            return (entry, False)
+            
+            # Return dictionary of row data instead of a formatted string
+            entry_data = {
+                "pct_val": display_pct,
+                "flag": flag,
+                "ns_pvc": f"{ns}/{pvc_name}",
+                "pct_str": pct_label,
+                "used": used_gib,
+                "total": total_gib,
+                "free": avail_gib,
+                "sc": sc,
+                "details": "source: longhorn-crd"
+            }
+            return (entry_data, False)
         except Exception as e:
-            return (f"  {ns}/{pvc_name}: CRD Error - {str(e)}", True)
-        #except Exception:
-        #    return (None, True)
+            return (f"{ns}/{pvc_name}: CRD Error - {str(e)}", True)
 
     try:
         pvcs = _core.list_persistent_volume_claim_for_all_namespaces()
@@ -1559,6 +1617,7 @@ def get_pv_usage(threshold: int = 80) -> str:
         pod_hit       = None
         pod_container = None
         mount_path    = None
+        
         for pod in pods.items:
             if pod.status.phase != "Running":
                 continue
@@ -1571,49 +1630,43 @@ def get_pv_usage(threshold: int = 80) -> str:
                                 pod_container = container.name
                                 mount_path    = vm.mount_path
                                 break
-                        if pod_hit:
-                            break
-                if pod_hit:
-                    break
+                        if pod_hit: break
+                if pod_hit: break
 
         if not pod_hit or not mount_path:
-            # Fallback: try Longhorn CRD when no running pod found
+            # Fallback to Longhorn CRD
             entry, is_error = _longhorn_crd_usage(vol_name, ns, pvc_name, sc, threshold)
-            if entry and not is_error:
-                pct_val = float(entry.split("%")[0].split()[-1])
-                results.append((pct_val, entry + "  (no running pod)"))
-            elif entry:
-                errors.append(entry)
+            if not is_error:
+                entry["details"] += " (no running pod)"
+                results.append(entry)
             else:
-                errors.append(f"  {ns}/{pvc_name}: no running pod found and Longhorn CRD unavailable — skipped")
+                errors.append(entry if is_error else f"{ns}/{pvc_name}: no running pod found and Longhorn CRD unavailable")
             continue
 
         df_out = _exec_df(pod_hit, ns, mount_path, container=pod_container)
+        
         if not df_out:
-            # df failed — try Longhorn CRD as fallback before giving up
+            # Fallback to Longhorn CRD if df fails
             entry, is_error = _longhorn_crd_usage(vol_name, ns, pvc_name, sc, threshold)
-            if entry and not is_error:
-                pct_val = float(entry.split("%")[0].split()[-1])
-                results.append((pct_val, entry + f"  (df failed on pod {pod_hit})"))
-            elif entry:
-                errors.append(entry)
+            if not is_error:
+                entry["details"] += f" (df failed on pod {pod_hit})"
+                results.append(entry)
             else:
-                errors.append(f"  {ns}/{pvc_name}: df exec failed on pod {pod_hit} container {pod_container} and Longhorn CRD unavailable — skipped")
+                errors.append(entry if is_error else f"{ns}/{pvc_name}: df exec failed on pod {pod_hit} and Longhorn CRD unavailable")
             continue
 
         parts = df_out.split()
         if len(parts) < 2:
-            errors.append(f"  {ns}/{pvc_name}: unexpected df output: {df_out!r} — skipped")
+            errors.append(f"{ns}/{pvc_name}: unexpected df output: {df_out!r}")
             continue
 
         try:
-            # df --output=used,avail gives exactly: used_kb avail_kb
             used_kb  = int(parts[0])
             avail_kb = int(parts[1])
             total_kb = used_kb + avail_kb
             pct      = round((used_kb / total_kb) * 100, 1) if total_kb > 0 else 0.0
         except (ValueError, ZeroDivisionError):
-            errors.append(f"  {ns}/{pvc_name}: could not parse df numbers from: {df_out!r}")
+            errors.append(f"{ns}/{pvc_name}: could not parse df numbers from: {df_out!r}")
             continue
 
         used_gib  = round(used_kb  / (1024 * 1024), 2)
@@ -1622,34 +1675,55 @@ def get_pv_usage(threshold: int = 80) -> str:
 
         flag = "🔴" if pct >= 90 else ("🟠" if pct >= threshold else "🟢")
 
-        results.append((pct, (
-            f"  {flag} {ns}/{pvc_name}  {pct}% used  "
-            f"({used_gib}Gi used / {total_gib}Gi total, {avail_gib}Gi free)  "
-            f"class:{sc}  pod:{pod_hit}  mount:{mount_path}"
-        )))
+        results.append({
+            "pct_val": pct,
+            "flag": flag,
+            "ns_pvc": f"{ns}/{pvc_name}",
+            "pct_str": f"{pct}%",
+            "used": used_gib,
+            "total": total_gib,
+            "free": avail_gib,
+            "sc": sc,
+            "details": f"pod: {pod_hit}, mount: {mount_path}"
+        })
 
-    results.sort(key=lambda x: x[0], reverse=True)
+    # Sort results highest usage first
+    results.sort(key=lambda x: x["pct_val"], reverse=True)
 
-    lines = [f"PV Storage Usage (threshold: {threshold}%):"]
+    nearing = [r for r in results if r["pct_val"] >= threshold]
+    ok      = [r for r in results if r["pct_val"] < threshold]
 
-    nearing = [r for r in results if r[0] >= threshold]
-    ok      = [r for r in results if r[0] < threshold]
+    # Helper function to generate Markdown tables
+    def build_md_table(title, data):
+        if not data:
+            return ""
+        lines = [f"### {title}", ""]
+        lines.append("| Status | Namespace / PVC | Usage | Used (GiB) | Total (GiB) | Free (GiB) | Class | Details |")
+        lines.append("|---|---|---|---|---|---|---|---|")
+        for d in data:
+            lines.append(f"| {d['flag']} | `{d['ns_pvc']}` | **{d['pct_str']}** | {d['used']} | {d['total']} | {d['free']} | {d['sc']} | {d['details']} |")
+        return "\n".join(lines)
 
+    # Assemble final markdown response
+    output = []
+    
     if nearing:
-        lines.append(f"\nNearing or exceeding {threshold}% capacity ({len(nearing)} PVC(s)):")
-        lines.extend(r[1] for r in nearing)
+        output.append(build_md_table(f"⚠️ Nearing or exceeding {threshold}% capacity ({len(nearing)} PVCs)", nearing))
     else:
-        lines.append(f"\nNo PVCs are at or above {threshold}% capacity.")
+        output.append(f"✅ **No PVCs are at or above {threshold}% capacity.**")
 
     if ok:
-        lines.append(f"\nWithin capacity ({len(ok)} PVC(s)):")
-        lines.extend(r[1] for r in ok)
+        output.append("")
+        output.append(build_md_table(f"✅ Within capacity ({len(ok)} PVCs)", ok))
 
     if errors:
-        lines.append(f"\nSkipped ({len(errors)} PVC(s) — no mounted pod or df unavailable):")
-        lines.extend(errors)
+        output.append("")
+        output.append(f"### ⏭️ Skipped ({len(errors)} PVCs)")
+        output.append("No mounted pod or `df` unavailable:")
+        for err in errors:
+            output.append(f"- {err}")
 
-    return "\n".join(lines)
+    return "\n".join(output)
 
 # ── Prometheus metrics tool ──────────────────────────────────────────────────
 

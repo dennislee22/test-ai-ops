@@ -447,6 +447,36 @@ button{cursor:pointer;font-family:inherit}
   font-size:14px;color:var(--bodyText);line-height:1.75;
   word-break:break-word;
 }
+/* Style bold text (e.g., **ecs-w-01...**) */
+.ai-bubble strong {
+  color: var(--accent); /* Uses your theme's primary accent color */
+  font-weight: 700;
+}
+/* Style inline code (e.g., `dedicated-to=cde:NoSchedule`) */
+.ai-bubble code {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  background: var(--inputBg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 5px;
+  color: var(--accent2); /* Uses your theme's secondary accent color */
+}
+/* Optional but highly recommended: Style multi-line code blocks just in case */
+.ai-bubble pre {
+  background: var(--inputBg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  overflow-x: auto;
+  margin: 10px 0 12px;
+}
+.ai-bubble pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--bodyText);
+}
 .ai-bubble.clarification{
   border-color:var(--accent)66;
   background:var(--statusBg);

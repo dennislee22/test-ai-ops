@@ -287,9 +287,21 @@ K8S_TOOL_METADATA: dict = {
     
     "get_endpoints": {
         "fn":          get_endpoints,
-        "description": "List Kubernetes Endpoints, optionally filtered by namespace. Shows all namespaces if none specified. Falls back to all namespaces if the specified namespace is empty or does not exist.",
+        "description": (
+            "List Kubernetes Endpoints showing which services are backed by pods. "
+            "Returns namespace, service name, and endpoint IP:port mappings. "
+            "Useful for: 'which services are exposed via endpoints', "
+            "'what endpoints does service X have', or endpoint-level troubleshooting."
+        ),
         "parameters":  {
-            "namespace": {"type": "string", "default": None, "description": "Optional namespace to filter Endpoints. Defaults to all namespaces — if the namespace is empty or missing, shows all Endpoints in other namespaces."},
+            "namespace": {
+                "type": "string",
+                "default": None,
+                "description": (
+                    "Namespace to query. Defaults to all namespaces if not specified. "
+                    "If the namespace is not found or empty, falls back to all namespaces."
+                )
+            }
         },
     },
     
