@@ -609,13 +609,13 @@ button{cursor:pointer;font-family:inherit}
   animation:inferPulse 2s ease-in-out infinite;
 }
 
-/* Shiny Gold Toggle - Inactive (Off) is Light Gold */
+/* Shiny Gold Toggle - Inactive (Off) is a muted, antique gold */
 .gold-toggle-track {
   position: absolute; inset: 0; 
-  /* Light gold gradient */
-  background: linear-gradient(135deg, #FDE047 0%, #D4AF37 100%);
+  /* Antique gold gradient */
+  background: linear-gradient(135deg, #C5A059 0%, #8B6508 100%);
   border-radius: 20px; transition: all 0.25s ease;
-  box-shadow: inset 0 0 2px rgba(255,255,255,0.4), 0 0 4px rgba(212, 175, 55, 0.3);
+  box-shadow: inset 0 0 2px rgba(255,255,255,0.3), 0 0 4px rgba(139, 101, 8, 0.4);
 }
 
 .gold-toggle-thumb {
@@ -624,11 +624,11 @@ button{cursor:pointer;font-family:inherit}
   box-shadow: 0 1px 3px rgba(0,0,0,0.5);
 }
 
-/* Shiny Gold Toggle - Active (On) is Dark Gold */
+/* Shiny Gold Toggle - Active (On) is a very deep, dark bronze-gold */
 #skip-synth-toggle:checked ~ .gold-toggle-track {
-  /* Dark gold gradient */
-  background: linear-gradient(135deg, #D4AF37 0%, #8B6508 100%);
-  box-shadow: inset 0 0 2px rgba(255,255,255,0.3), 0 0 6px rgba(139, 101, 8, 0.6);
+  /* Deep dark gold gradient */
+  background: linear-gradient(135deg, #8B6508 0%, #4A3500 100%);
+  box-shadow: inset 0 0 2px rgba(255,255,255,0.2), 0 0 6px rgba(74, 53, 0, 0.8);
 }
 
 #skip-synth-toggle:checked ~ .gold-toggle-thumb {
