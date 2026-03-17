@@ -266,10 +266,10 @@ def build_agent():
                 "Reproduce the log output EXACTLY as returned by the tool. "
                 "Include every log line with its full timestamp. Do NOT summarise."
             ),
-            "get_unhealthy_pods_detail": (
-                "List EVERY pod from the tool results. One bullet per pod. "
-                "Format: `namespace/pod-name`: <phase> | Restarts: <N> | Cause: <reason>. Do NOT skip any pod."
-            ),
+        #    "get_unhealthy_pods_detail": (
+        #        "List EVERY pod from the tool results. One bullet per pod. "
+        #        "Format: `namespace/pod-name`: <phase> | Restarts: <N> | Cause: <reason>. Do NOT skip any pod."
+        #    ),
             "get_pv_usage": (
                 "Reproduce the storage usage report in full — do NOT summarise. "
                 "Include every PVC entry: those nearing capacity, within capacity, AND skipped."
@@ -287,10 +287,6 @@ def build_agent():
                 "List every pod from the results. "
                 "Format: 'namespace/pod-name' [container]: registry/image:tag."
             ),
-      #      "get_node_resource_requests": (
-      #          "Reproduce the node resource table exactly. "
-      #          "Include every node with its CPU and memory figures."
-      #      ),
             "kubectl_exec": (
                 "Reproduce the command output VERBATIM. "
                 "Do NOT reformat, summarise, or omit any rows."
@@ -305,10 +301,6 @@ def build_agent():
                 "Only after providing the totals should you list the per-pod breakdown. "
                 "Do NOT just list the pods—the total is the answer to a calculate question."
             ),
-          #  "get_node_info": (
-          #      "Report the node health from the tool results. "
-          #      "For GPU nodes include the EXACT GPU count and status string as returned."
-          #  ),
           #  "get_gpu_info": (
           #      "Report GPU details from the tool results. "
           #      "State the exact GPU model, total allocatable count, and how many are in use vs free."
