@@ -888,7 +888,7 @@ def get_node_labels(search: str = None) -> str:
         # ✅ Normalize "non-filter" keywords
         if search:
             search_lower = search.lower().strip()
-            if search_lower in ("*", "all", "labels", "node", "nodes"):
+            if search_lower in ("*", "all", "label", "labels", "node", "nodes"):
                 search = None
 
         for node in nodes:
