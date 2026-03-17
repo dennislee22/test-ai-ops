@@ -951,7 +951,7 @@ def get_node_taints(search: str = None) -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
     
-def get_node_resource_requests_md() -> str:
+def get_node_resource_requests() -> str:
     """Aggregate CPU/memory requests and limits per node from all running pods, in a Markdown table."""
     def _parse_cpu(s: str) -> float:
         """Return millicores as float."""
