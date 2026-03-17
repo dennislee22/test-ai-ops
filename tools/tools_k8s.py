@@ -786,6 +786,7 @@ def get_endpoints(namespace: str = None) -> str:
         return f"[ERROR] Unexpected error: {str(e)}"
     
 def get_node_capacity() -> str:
+    # Helper to parse Kubernetes CPU strings (e.g., "100m", "0.5", "2")
     def _parse_cpu(val) -> float:
         if not val: return 0.0
         val_str = str(val)
@@ -793,6 +794,7 @@ def get_node_capacity() -> str:
             return float(val_str[:-1]) / 1000.0
         return float(val_str)
 
+    # Helper to parse Kubernetes Memory strings to GiB safely
     def _parse_mem_gib(val) -> float:
         if not val: return 0.0
         val_str = str(val)
@@ -810,7 +812,8 @@ def get_node_capacity() -> str:
 
         lines = ["### Node Capacity Overview\n"]
 
-        header1 = ["Node", "CPU", "", "", "Memory (Gi)", "", "", "GPU"]
+        # Header rows - Updated to RAM
+        header1 = ["Node", "CPU", "", "", "RAM (Gi)", "", "", "GPU"]
         header2 = ["", "Allocated", "Request", "Available", "Allocated", "Request", "Available", ""]
         lines.append("| " + " | ".join(header1) + " |")
         lines.append("| " + " | ".join(header2) + " |")
@@ -822,6 +825,7 @@ def get_node_capacity() -> str:
             cpu_alloc = _parse_cpu(alloc.get("cpu", 0))
             mem_alloc_gib = _parse_mem_gib(alloc.get("memory", "0Ki"))
 
+            # Count GPU
             gpu = 0
             for key in alloc:
                 if "nvidia.com/gpu" in key or "amd.com/gpu" in key:
@@ -830,10 +834,13 @@ def get_node_capacity() -> str:
                     except (ValueError, TypeError):
                         pass
 
+            # Calculate requested resources from pods on this node
             cpu_req_total = 0.0
             mem_req_total_gib = 0.0
             pods = _core.list_pod_for_all_namespaces(field_selector=f"spec.nodeName={node.metadata.name}")
+            
             for pod in pods.items:
+                # Optionally: skip Succeeded/Failed pods here so they don't count against requests
                 for c in pod.spec.containers or []:
                     if c.resources and c.resources.requests:
                         cpu_req_total += _parse_cpu(c.resources.requests.get("cpu", 0))
@@ -842,9 +849,23 @@ def get_node_capacity() -> str:
             cpu_avail = round(cpu_alloc - cpu_req_total, 2)
             mem_avail = round(mem_alloc_gib - mem_req_total_gib, 2)
 
+            # Calculate percentages safely
+            cpu_req_pct = f"({round((cpu_req_total / cpu_alloc) * 100, 1)}%)" if cpu_alloc > 0 else "(0%)"
+            cpu_avail_pct = f"({round((cpu_avail / cpu_alloc) * 100, 1)}%)" if cpu_alloc > 0 else "(0%)"
+            
+            mem_req_pct = f"({round((mem_req_total_gib / mem_alloc_gib) * 100, 1)}%)" if mem_alloc_gib > 0 else "(0%)"
+            mem_avail_pct = f"({round((mem_avail / mem_alloc_gib) * 100, 1)}%)" if mem_alloc_gib > 0 else "(0%)"
+
+            # Format the output row
             lines.append(
-                f"| {node.metadata.name} | {round(cpu_alloc, 2)} | {round(cpu_req_total, 2)} | {cpu_avail} "
-                f"| {round(mem_alloc_gib, 2)} | {round(mem_req_total_gib, 2)} | {mem_avail} | {gpu} |"
+                f"| {node.metadata.name} "
+                f"| {round(cpu_alloc, 2)} "
+                f"| {round(cpu_req_total, 2)} {cpu_req_pct} "
+                f"| {cpu_avail} {cpu_avail_pct} "
+                f"| {round(mem_alloc_gib, 2)} "
+                f"| {round(mem_req_total_gib, 2)} {mem_req_pct} "
+                f"| {mem_avail} {mem_avail_pct} "
+                f"| {gpu} |"
             )
 
         return "\n".join(lines)
@@ -865,27 +886,16 @@ def get_node_labels(search: str = None) -> str:
             node_name = node.metadata.name
 
             # Build label lines
-            label_lines = [f"- {k}={v}" for k, v in labels.items()]
+            label_lines = [f"- {k}={v}" for k, v in labels.items()] or ["- <none>"]
 
             if search:
-                if search.lower() in node_name.lower():
-                    # Search matches node name → show all labels
-                    pass
-                else:
-                    # Search matches label keys/values
-                    label_lines = [l for l in label_lines if search.lower() in l.lower()]
-                    if not label_lines:
-                        # fallback: show all labels for the node if no match
-                        results.append(f"**{node_name}:**\n" + "\n".join(label_lines) + "\n")
-                        continue
+                # Keep only labels that match the search
+                filtered = [l for l in label_lines if search.lower() in l.lower()]
+                if filtered:
+                    label_lines = filtered
+                # else fallback: keep all labels
 
-            if label_lines:
-                results.append(f"**{node_name}:**\n" + "\n".join(label_lines) + "\n")
-
-        if not results:
-            if search:
-                return f"No matching node(s) found for '{search}'."
-            return "No labels found on any nodes."
+            results.append(f"**{node_name}:**\n" + "\n".join(label_lines) + "\n")
 
         return "\n".join(results).rstrip()
 
@@ -941,8 +951,8 @@ def get_node_taints(search: str = None) -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
     
-def get_node_resource_requests() -> str:
-    """Aggregate CPU/memory requests and limits per node from all running pods."""
+def get_node_resource_requests_md() -> str:
+    """Aggregate CPU/memory requests and limits per node from all running pods, in a Markdown table."""
     def _parse_cpu(s: str) -> float:
         """Return millicores as float."""
         s = s.strip()
@@ -957,8 +967,8 @@ def get_node_resource_requests() -> str:
         """Return MiB as float."""
         s = s.strip()
         for suffix, factor in [("Ti", 1024*1024), ("Gi", 1024), ("Mi", 1),
-                                ("Ki", 1/1024), ("T", 1000*1024), ("G", 1000),
-                                ("M", 1), ("K", 1/1024)]:
+                               ("Ki", 1/1024), ("T", 1000*1024), ("G", 1000),
+                               ("M", 1), ("K", 1/1024)]:
             if s.endswith(suffix):
                 try:
                     return float(s[:-len(suffix)]) * factor
@@ -1002,8 +1012,11 @@ def get_node_resource_requests() -> str:
             node_alloc[node_name]["mem_req_mi"] += _parse_mem(req.get("memory", "0"))
             node_alloc[node_name]["mem_lim_mi"] += _parse_mem(lim.get("memory", "0"))
 
-    lines = ["Node resource requests and limits (running pods):",
-             "The figures below are pod requests and limits, not real-time usage."]
+    # Build Markdown table
+    lines = ["### Node Resource Requests and Limits", ""]
+    lines.append("| Node | Pods | CPU Requests | CPU Limits | CPU Alloc | CPU Free | MEM Requests | MEM Limits | MEM Alloc | MEM Free |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+
     for node in nodes.items:
         name = node.metadata.name
         d = node_alloc.get(name)
@@ -1011,28 +1024,49 @@ def get_node_resource_requests() -> str:
             continue
         cpu_a  = d["cpu_alloc_m"]
         mem_a  = d["mem_alloc_mi"]
+        cpu_free  = max(0, cpu_a - d["cpu_req_m"])
+        mem_free  = max(0, mem_a - d["mem_req_mi"])
         cpu_rp = round(d["cpu_req_m"]  / cpu_a  * 100, 1) if cpu_a  else 0
         cpu_lp = round(d["cpu_lim_m"]  / cpu_a  * 100, 1) if cpu_a  else 0
+        cpu_fp = round(cpu_free / cpu_a * 100, 1) if cpu_a else 0
         mem_rp = round(d["mem_req_mi"] / mem_a  * 100, 1) if mem_a  else 0
         mem_lp = round(d["mem_lim_mi"] / mem_a  * 100, 1) if mem_a  else 0
+        mem_fp = round(mem_free / mem_a * 100, 1) if mem_a else 0
+
         lines.append(
-            f"  {name}  pods:{d['pod_count']}\n"
-            f"    CPU  requests:{d['cpu_req_m']:.0f}m ({cpu_rp}%)  "
-            f"limits:{d['cpu_lim_m']:.0f}m ({cpu_lp}%)  "
-            f"allocatable:{cpu_a:.0f}m\n"
-            f"    MEM  requests:{d['mem_req_mi']:.0f}Mi ({mem_rp}%)  "
-            f"limits:{d['mem_lim_mi']:.0f}Mi ({mem_lp}%)  "
-            f"allocatable:{mem_a:.0f}Mi"
+            f"| {name} | {d['pod_count']} | {d['cpu_req_m']:.0f}m ({cpu_rp}%) | {d['cpu_lim_m']:.0f}m ({cpu_lp}%) | {cpu_a:.0f}m | {cpu_free:.0f}m ({cpu_fp}%) "
+            f"| {d['mem_req_mi']:.0f}Mi ({mem_rp}%) | {d['mem_lim_mi']:.0f}Mi ({mem_lp}%) | {mem_a:.0f}Mi | {mem_free:.0f}Mi ({mem_fp}%) |"
         )
+
     return "\n".join(lines)
 
 def get_node_info(node_name: str = None) -> str:
+    """Show nodes with roles, readiness, CPU, memory (Gi), GPU."""
+    def _mem_to_gib(mem_str: str) -> str:
+        """Convert K8s memory string to GiB with 2 decimal precision."""
+        if not mem_str:
+            return "n/a"
+        try:
+            mem_str = mem_str.strip()
+            if mem_str.endswith("Ki"):
+                return f"{int(mem_str[:-2]) / (1024**2):.2f}Gi"
+            if mem_str.endswith("Mi"):
+                return f"{int(mem_str[:-2]) / 1024:.2f}Gi"
+            if mem_str.endswith("Gi"):
+                return f"{float(mem_str[:-2]):.2f}Gi"
+            if mem_str.endswith("Ti"):
+                return f"{float(mem_str[:-2]) * 1024:.2f}Gi"
+            # fallback: assume bytes
+            return f"{int(mem_str) / (1024**3):.2f}Gi"
+        except ValueError:
+            return mem_str
+
     try:
         nodes = _core.list_node().items
         if not nodes:
             return "No nodes found."
 
-        lines = ["Node Name\tRoles\tReady\tCPU\tMem\tGPU"]
+        lines = ["Node Name\tRoles\tReady\tCPU\tMem (Gi)\tGPU"]
         results = []
 
         for node in nodes:
@@ -1052,7 +1086,7 @@ def get_node_info(node_name: str = None) -> str:
                     break
 
             cpu = node.status.allocatable.get("cpu", "n/a")
-            mem = node.status.allocatable.get("memory", "n/a")
+            mem = _mem_to_gib(node.status.allocatable.get("memory", "n/a"))
             gpu = node.status.allocatable.get("nvidia.com/gpu", "0")
 
             results.append(f"{node.metadata.name}\t{roles_str}\t{ready_status}\t{cpu}\t{mem}\t{gpu}")
@@ -1074,7 +1108,7 @@ def get_node_info(node_name: str = None) -> str:
                         break
 
                 cpu = node.status.allocatable.get("cpu", "n/a")
-                mem = node.status.allocatable.get("memory", "n/a")
+                mem = _mem_to_gib(node.status.allocatable.get("memory", "n/a"))
                 gpu = node.status.allocatable.get("nvidia.com/gpu", "0")
 
                 results.append(f"{node.metadata.name}\t{roles_str}\t{ready_status}\t{cpu}\t{mem}\t{gpu}")
@@ -1728,12 +1762,15 @@ def get_pv_usage(threshold: int = 80) -> str:
     nearing = [r for r in results if r["pct_val"] >= threshold]
     ok      = [r for r in results if r["pct_val"] < threshold]
 
+    # --- THE FIXED MARKDOWN RENDERER ---
     def build_md_table(title, data):
         if not data:
             return ""
-        lines = [f"### {title}", ""]
+        # Added explicit newlines to ensure clean separation from the text above
+        lines = [f"\n### {title}\n"]
         lines.append("| Status | Namespace / PVC | Usage | Used (GiB) | Total (GiB) | Free (GiB) |")
-        lines.append("|---|---|---|---|---|")
+        # Fixed the mismatched columns (now exactly 6 separators)
+        lines.append("|---|---|---|---|---|---|")
         for d in data:
             lines.append(f"| {d['flag']} | `{d['ns_pvc']}` | **{d['pct_str']}** | {d['used']} | {d['total']} | {d['free']} |")
         return "\n".join(lines)
@@ -1743,15 +1780,13 @@ def get_pv_usage(threshold: int = 80) -> str:
     if nearing:
         output.append(build_md_table(f"⚠️ Nearing or exceeding {threshold}% capacity ({len(nearing)} PVCs)", nearing))
     else:
-        output.append(f"✅ **No PVCs are at or above {threshold}% capacity.**")
+        output.append(f"\n✅ **No PVCs are at or above {threshold}% capacity.**\n")
 
     if ok:
-        output.append("")
         output.append(build_md_table(f"✅ Within capacity ({len(ok)} PVCs)", ok))
 
     if errors:
-        output.append("")
-        output.append(f"### ⏭️ Skipped ({len(errors)} PVCs)")
+        output.append(f"\n### ⏭️ Skipped ({len(errors)} PVCs)")
         output.append("No mounted pod or `df` unavailable:")
         for err in errors:
             output.append(f"- {err}")
