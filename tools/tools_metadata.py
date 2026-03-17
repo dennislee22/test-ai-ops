@@ -2,7 +2,7 @@ from tools.tools_k8s import (
     get_pod_status, get_pod_logs, describe_pod, get_node_info, get_gpu_info,
     get_node_labels, get_node_taints, get_events, get_deployment_status,
     get_daemonset_status, get_statefulset_status, get_job_status, get_hpa_status,
-    get_pvc_status, get_cluster_version, get_storage_classes, get_endpoints_status,
+    get_pvc_status, get_cluster_version, get_storage_classes, get_endpoints,
     get_node_capacity, get_persistent_volumes, get_service_status, get_ingress_status,
     get_configmap_list, get_secrets, get_resource_quotas, get_limit_ranges,
     get_service_accounts, get_cluster_role_bindings, get_namespace_status,
@@ -245,21 +245,19 @@ K8S_TOOL_METADATA: dict = {
         "fn":          get_pvc_status,
         "description": (
             "Show the status of PersistentVolumeClaims (PVCs) in a namespace. "
-            "Provides a summary of Bound, Pending, Lost, and Unknown PVCs. "
-            "With show_all=True, lists all PVCs with access mode, storage class, capacity, and bound volume. "
-            "With phase_only=True, returns only a summary of counts per phase without extra details. "
-            "Use for questions like: 'what PVCs exist in namespace X', "
-            "'which PVCs are unbound', or 'PVC status summary'."
+            "Provides a detailed list of PVCs and a summary of counts per phase (Bound, Pending, Lost, Unknown). "
+            "Supports filtering by PVC status using phase_filter='bound' or 'non-bound'. "
+            "The LLM can semantically map user questions like 'which PVCs are attached?', "
+            "'which are not bound?', 'list all PVCs', or 'show unassigned volumes' to the appropriate filter. "
+            "Use show_all=True to include all PVC details."
         ),
         "parameters":  {
             "namespace":      {"type": "string", "default": "all",
                                "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
             "show_all":       {"type": "boolean", "default": False,
                                "description": "Include detailed info for all PVCs in the output."},
-            "phase_only":     {"type": "boolean", "default": False,
-                               "description": "Only show counts of PVCs per phase without listing details."},
-            "non_bound_only": {"type": "boolean", "default": False,
-                               "description": "Show only PVCs that are not Bound (Pending, Lost, Unknown)."}
+            "phase_filter":   {"type": "string", "default": None,
+                               "description": "Filter PVCs by phase: 'bound' or 'non-bound'. The LLM maps semantic queries like 'attached', 'not bound', etc. to this filter automatically."}
         },
     },
     
@@ -287,17 +285,11 @@ K8S_TOOL_METADATA: dict = {
         "parameters":  {},
     },
     
-    "get_endpoints_status": {
-        "fn":          get_endpoints_status,
-        "description": (
-            "List Kubernetes Endpoints in a namespace or across all namespaces. "
-            "Shows the number of addresses and ports for each Endpoint. "
-            "Use for questions like: 'which pods/services are reachable?', "
-            "'how many endpoints exist in namespace X?', or 'is service Y healthy?'. "
-            "Do NOT use for actual pod or service health — use get_pod_status or get_service_status instead."
-        ),
+    "get_endpoints": {
+        "fn":          get_endpoints,
+        "description": "List Kubernetes Endpoints, optionally filtered by namespace. Shows all namespaces if none specified. Falls back to all namespaces if the specified namespace is empty or does not exist.",
         "parameters":  {
-            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces."}
+            "namespace": {"type": "string", "default": None, "description": "Optional namespace to filter Endpoints. Defaults to all namespaces — if the namespace is empty or missing, shows all Endpoints in other namespaces."},
         },
     },
     
@@ -422,6 +414,7 @@ K8S_TOOL_METADATA: dict = {
             "By default, shows a compact summary: NAMESPACE | STATUS | TOTAL | Unhealthy, "
             "sorted by total pods, which is perfect for queries like 'which namespace has the least pods?'. "
             "If show_all=True, returns a full breakdown including all pod phases per namespace. "
+            "You can also sort by name or pod count, and limit the output with 'sort_by' and 'limit'. "
             "ALWAYS use this when the user asks 'how many namespaces', 'list namespaces', "
             "'namespaces with number of pods', or wants a namespace count."
         ),
@@ -440,6 +433,21 @@ K8S_TOOL_METADATA: dict = {
                 "description": (
                     "Include all pods in counts and show the full breakdown per namespace. "
                     "If False, only show a compact summary with total and unhealthy pods."
+                )
+            },
+            "sort_by": {
+                "type": "string",
+                "default": None,
+                "description": (
+                    "Sort namespaces by 'pods_asc', 'pods_desc', 'name_asc', or 'name_desc'. "
+                    "Defaults to alphabetical order if not specified."
+                )
+            },
+            "limit": {
+                "type": "integer",
+                "default": None,
+                "description": (
+                    "Limit the number of namespaces returned. Useful for top/bottom N queries."
                 )
             }
         },
@@ -605,14 +613,12 @@ K8S_TOOL_METADATA: dict = {
     "get_node_resource_requests": {
         "fn":          get_node_resource_requests,
         "description": (
-            "Returns CPU and memory REQUESTS and LIMITS aggregated per node from the Kubernetes API. "
-            "This is scheduling/allocation data — what pods have reserved — NOT real-time consumption. "
-            "Use for: 'what is requested per node', 'how much CPU/memory is allocated on each node', "
+            "Aggregate CPU and memory REQUESTS and LIMITS per node. "
+            "Shows scheduling/allocation data — what pods have reserved on each node — NOT real-time usage. "
+            "Use for questions like: 'what is requested per node', 'how much CPU/memory is allocated per node', "
             "'which node is most heavily scheduled', 'node capacity vs requests', 'node pressure', "
-            "'how many pods per node', 'node resource utilisation'. "
-            "Do NOT use for actual CPU/memory consumption, load, or trends — use query_prometheus_metrics. "
-            "Do NOT use for node health, conditions, or readiness — use kubectl_exec('kubectl get nodes') or "
-            "get_unhealthy_pods_detail for that."
+            "'how many pods per node', or 'node resource utilisation'. "
+            "Do NOT use this tool for actual CPU/memory consumption, load, trends, or node health. "
         ),
         "parameters": {},
     },

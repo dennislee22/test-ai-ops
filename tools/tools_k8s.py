@@ -723,22 +723,30 @@ def get_storage_classes() -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_endpoints_status(namespace: str = "all") -> str:
+def get_endpoints(namespace: str = None) -> str:
     try:
-        eps = (_core.list_endpoints_for_all_namespaces()
-               if namespace == "all"
-               else _core.list_namespaced_endpoints(namespace=namespace))
-        if not eps.items:
-            return f"No Endpoints found in namespace '{namespace}'."
-        lines = [f"Endpoints in '{namespace}':"]
-        for ep in sorted(eps.items, key=lambda e: (e.metadata.namespace, e.metadata.name)):
-            subsets = ep.subsets or []
-            addresses_count = sum(len(s.addresses or []) for s in subsets)
-            ports_count = sum(len(s.ports or []) for s in subsets)
-            lines.append(f"  {ep.metadata.namespace}/{ep.metadata.name}: {addresses_count} addresses, {ports_count} ports")
-        return "\n".join(lines)
-    except ApiException as e:
-        return f"K8s API error: {e.reason}"
+        lines = ["Namespace\tName\tService"]
+        results = []
+
+        if namespace:
+            eps_list = _core.list_namespaced_endpoints(namespace=namespace).items
+            if not eps_list:
+                eps_list = _core.list_endpoints_for_all_namespaces().items
+        else:
+            eps_list = _core.list_endpoints_for_all_namespaces().items
+
+        if not eps_list:
+            return "No Endpoints found in any namespace."
+
+        for ep in eps_list:
+            svc_name = ep.metadata.name
+            ns_name = ep.metadata.namespace
+            results.append(f"{ns_name}\t{svc_name}\t{svc_name}")
+
+        return "\n".join(lines + results)
+
+    except Exception as e:
+        return f"[ERROR] Unexpected error: {str(e)}"
     
 def get_node_capacity() -> str:
     try:
@@ -910,7 +918,6 @@ def get_node_resource_requests() -> str:
             node_alloc[node_name]["mem_lim_mi"] += _parse_mem(lim.get("memory", "0"))
 
     lines = ["Node resource requests and limits (running pods):",
-             "Note: actual CPU/memory consumption is unavailable — node-exporter is not installed.",
              "The figures below are pod requests and limits, not real-time usage."]
     for node in nodes.items:
         name = node.metadata.name
@@ -1366,7 +1373,7 @@ def get_hpa_status(namespace: str = "all") -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_pvc_status(namespace: str = "all", show_all: bool = False, phase_only: bool = False, non_bound_only: bool = False) -> str:
+ def get_pvc_status(namespace: str = "all", show_all: bool = False, phase_filter: str | None = None) -> str:
     _AM = {"ReadWriteOnce": "RWO", "ReadWriteMany": "RWX"}
 
     def _access(pvc):
@@ -1398,23 +1405,38 @@ def get_pvc_status(namespace: str = "all", show_all: bool = False, phase_only: b
 
             summary_counts[phase] = summary_counts.get(phase, 0) + 1
 
-            if show_all or phase_only or (non_bound_only and phase != "Bound"):
+            include = False
+            if phase_filter == "bound" and phase == "Bound":
+                include = True
+            elif phase_filter == "non-bound" and phase != "Bound":
+                include = True
+            elif phase_filter is None:
+                include = True
+
+            if include or show_all:
                 detail_lines.append(
                     f"{ns}/{name}: {phase} | access:{am} | class:{sc} | capacity:{cap} | volume:{vol}"
                 )
 
-        lines = [
-            f"PVC summary for namespace '{namespace}':",
-            f"  Total PVCs: {len(pvcs.items)} | "
+        lines = []
+
+        if detail_lines:
+            if phase_filter == "bound":
+                lines.append("Bound PVCs:")
+            elif phase_filter == "non-bound":
+                lines.append("Non-bound PVCs:")
+            elif show_all:
+                lines.append("All PVCs:")
+            lines.extend(detail_lines)
+
+        lines.append(
+            f"\nPVC summary for namespace '{namespace}': "
+            f"Total PVCs: {len(pvcs.items)} | "
             f"Bound: {summary_counts.get('Bound',0)} | "
             f"Pending: {summary_counts.get('Pending',0)} | "
             f"Lost: {summary_counts.get('Lost',0)} | "
             f"Unknown: {summary_counts.get('Unknown',0)}"
-        ]
-
-        if detail_lines:
-            lines.append("\nDetails:")
-            lines.extend(detail_lines)
+        )
 
         return "\n".join(lines)
 
@@ -2765,7 +2787,7 @@ def get_pod_storage(namespace: str = "all", show_all: bool = False) -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
     
-def get_namespace_status(namespace: str = "all", show_all: bool = False, phase_only: bool = False) -> str:
+def get_namespace_status(namespace: str = "all", show_all: bool = False, sort_by: str | None = None, limit: int | None = None) -> str:
     try:
         if namespace != "all":
             try:
@@ -2789,14 +2811,27 @@ def get_namespace_status(namespace: str = "all", show_all: bool = False, phase_o
 
             ns_pod_info[ns_name] = {"phase": ns.status.phase or "Active", "pod_counts": pod_counts}
 
+        # Apply sorting if requested
+        if sort_by == "pods_asc":
+            sorted_ns = sorted(ns_pod_info.items(), key=lambda x: sum(x[1]["pod_counts"].values()))
+        elif sort_by == "pods_desc":
+            sorted_ns = sorted(ns_pod_info.items(), key=lambda x: sum(x[1]["pod_counts"].values()), reverse=True)
+        elif sort_by == "name_asc":
+            sorted_ns = sorted(ns_pod_info.items(), key=lambda x: x[0])
+        elif sort_by == "name_desc":
+            sorted_ns = sorted(ns_pod_info.items(), key=lambda x: x[0], reverse=True)
+        else:
+            sorted_ns = sorted(ns_pod_info.items())
+
+        if limit is not None:
+            sorted_ns = sorted_ns[:limit]
+
         lines = [
             f"{'NAMESPACE':<30} {'STATUS':<10} {'TOTAL':>5} {'Running':>7} {'Pending':>7} {'Failed':>7} {'Unknown':>7}"
         ]
 
-        # Track least and most pods
         pod_totals = {}
-
-        for ns_name, info in sorted(ns_pod_info.items()):
+        for ns_name, info in sorted_ns:
             counts = info["pod_counts"]
             total = sum(counts.values())
             pod_totals[ns_name] = total
@@ -2809,7 +2844,6 @@ def get_namespace_status(namespace: str = "all", show_all: bool = False, phase_o
             lines.append("")
             lines.append("Namespaces pod summary (all details included above).")
 
-        # Add least and most pods summary
         if pod_totals:
             least_ns = min(pod_totals, key=pod_totals.get)
             most_ns = max(pod_totals, key=pod_totals.get)
