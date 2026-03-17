@@ -477,7 +477,7 @@ K8S_TOOL_METADATA: dict = {
             "pod_name":  {"type": "string", "description": "Name of the pod to inspect."}
         },
     },
-    
+
     "run_cluster_health": {
         "fn":          run_cluster_health,
         "description": (
@@ -493,7 +493,7 @@ K8S_TOOL_METADATA: dict = {
         "parameters":  {
             "namespace":  {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
             "show_all":   {"type": "boolean", "default": False, "description": "Include all pods, namespaces, PVCs, and system components in counts, even if healthy."},
-            "raw_output": {"type": "boolean", "default": False, "description": "Return detailed per-object output instead of a summarized report."}
+            "raw_output": {"type": "boolean", "default": False, "description": "Return detailed per-object output for PVCs, ingresses, and system components instead of a summarized report."}
         },
     },
 

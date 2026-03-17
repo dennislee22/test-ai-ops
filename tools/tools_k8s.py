@@ -2658,13 +2658,12 @@ def run_cluster_health(namespace: str = "all", show_all: bool = False, raw_outpu
             report.append(f"  Moderate (Pressure issues): {len(moderate_nodes)} — {', '.join(moderate_nodes)}")
 
         # --- Namespaces and Pods ---
-        ns_status = get_namespace_status(namespace=namespace, show_all=show_all, phase_only=False, raw_output=False)
+        ns_status = get_namespace_status(namespace=namespace, show_all=show_all, phase_only=False)
         report.append("\nNamespace/Pod summary:\n" + ns_status)
 
         # --- PVCs ---
         pvcs = _core.list_persistent_volume_claim_for_all_namespaces().items
-        unbound_pvcs = [f"{p.metadata.namespace}/{p.metadata.name}" 
-                        for p in pvcs if p.status.phase != "Bound"]
+        unbound_pvcs = [f"{p.metadata.namespace}/{p.metadata.name}" for p in pvcs if p.status.phase != "Bound"]
         if unbound_pvcs:
             report.append(f"\nPersistentVolumeClaims not bound: {len(unbound_pvcs)}")
             if raw_output or show_all:
@@ -2689,7 +2688,7 @@ def run_cluster_health(namespace: str = "all", show_all: bool = False, raw_outpu
                     total = len(pod.spec.containers)
                     if ready < total:
                         system_unhealthy.append(f"{ns}/{pod.metadata.name}")
-            except ApiException:
+            except Exception:
                 pass
 
         if system_unhealthy:
@@ -2708,7 +2707,7 @@ def run_cluster_health(namespace: str = "all", show_all: bool = False, raw_outpu
                         req = c.resources.requests or {}
                         cpu_total += int(req.get("cpu", 0))
                         mem_total += int(req.get("memory", 0))
-            except ApiException:
+            except Exception:
                 continue
 
         report.append(f"\nCluster resource requests:")
@@ -2717,8 +2716,8 @@ def run_cluster_health(namespace: str = "all", show_all: bool = False, raw_outpu
 
         return "\n".join(report)
 
-    except ApiException as e:
-        return f"[ERROR] K8s API error: {e.reason}"
+    except Exception as e:
+        return f"[ERROR] Unexpected error: {str(e)}"
 
 def get_pod_storage(namespace: str = "all", show_all: bool = False) -> str:
     try:
