@@ -461,12 +461,12 @@ def build_agent():
         # --- SKIP SYNTHESISE OVERRIDE LOGIC ---
         if forced_skip and direct_answer is None and results:
             updates.append("⚡ Skip Synthesise toggled: LLM synthesis bypassed")
-            config.logger.info(f"[REQ:{state.get('req_id', '')}] [tool_node] Skip Synthesise is ON. Overriding normal sequence: bypassing LLM synthesis and formatting raw output.")
+            config.logger.info(f"[REQ:{state.get('req_id', '')}] [tool_node] Skip Synthesise is ON for query: {user_q!r}. Overriding normal sequence...")
             
             parts = []
             for r in results:
                 #parts.append(f"**Raw output for `{r.name}`**:\n```text\n{r.content}\n```")
-                parts.append(f"**Raw output for `{r.name}`**:\n\n{r.content}")
+                parts.append(f"**Raw output from tool `{r.name}`**:\n\n{r.content}")
             direct_answer = "\n\n".join(parts)
 
         return {"messages": results, "tool_calls_made": tools_called, "iteration": state.get("iteration", 0), "status_updates": updates, "direct_answer": direct_answer}
@@ -532,8 +532,7 @@ async def run_agent(user_message: str, skip_synthesise: bool = False) -> dict:
     updates.append(f"✅ Done in {elapsed:.0f}s")
     
     _final_cleaned = _clean_response(raw, user_message)
-    config.logger.info(f"[REQ:{req_id}] done elapsed={elapsed:.1f}s tools={final.get('tool_calls_made', [])}\n[FINAL ANSWER]\n{_final_cleaned}\n[END FINAL ANSWER]")
-    
+    config.logger.info(f"[REQ:{req_id}] done elapsed={elapsed:.1f}s tools={final.get('tool_calls_made', [])}\n[QUESTION] {user_message}\n[FINAL ANSWER]\n{_final_cleaned}\n[END FINAL ANSWER]")
     return {"response": _final_cleaned, "tools_used": final.get("tool_calls_made", []), "iterations": final.get("iteration", 0), "status_updates": updates, "elapsed_seconds": round(elapsed, 1), "clarification_needed": False}
 
 #async def run_agent_streaming(user_message: str, history: list = None, max_new_tokens: int = 0):
@@ -644,8 +643,7 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
             else:
                 _final_cleaned = "⚠️ The AI encountered an error and returned a blank response without retrieving any data."
 
-        config.logger.info(f"[REQ:{req_id}] stream_done elapsed={elapsed}s tools={list(set(tools_called))}\n[FINAL ANSWER]\n{_final_cleaned}\n[END FINAL ANSWER]")
-        
+        config.logger.info(f"[REQ:{req_id}] stream_done elapsed={elapsed}s tools={list(set(tools_called))}\n[QUESTION] {user_message}\n[FINAL ANSWER]\n{_final_cleaned}\n[END FINAL ANSWER]")
         yield _sse({"type": "status", "text": f"✅ Done in {elapsed}s"})
         yield _sse({
             "type": "result", 

@@ -373,19 +373,19 @@ K8S_TOOL_METADATA: dict = {
     "get_endpoints": {
         "fn":          get_endpoints,
         "description": (
-            "List Kubernetes Endpoints showing which services are backed by pods. "
-            "Returns namespace, service name, and endpoint IP:port mappings. "
-            "Useful for: 'which services are exposed via endpoints', "
-            "'what endpoints does service X have', or endpoint-level troubleshooting."
+            "List Kubernetes Endpoints and show underlying pod IP:port mappings. "
+            "Supports filtering by partial name match. "
+            "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
         ),
-        "parameters":  {
+        "parameters": {
             "namespace": {
-                "type": "string",
-                "default": None,
-                "description": (
-                    "Namespace to query. Defaults to all namespaces if not specified. "
-                    "If the namespace is not found or empty, falls back to all namespaces."
-                )
+                "type": "string", 
+                "default": "all", 
+                "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."
+            },
+            "search": {
+                "type": "string", 
+                "description": "Optional keyword to filter endpoints by name (partial match)."
             }
         },
     },

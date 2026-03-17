@@ -753,26 +753,23 @@ def get_storage_classes() -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_endpoints(namespace: str = None) -> str:
+def get_endpoints(namespace: str = "all", search: str = None) -> str:
     try:
-        lines = ["Namespace\tName\tAddress"]
-        results = []
+        eps = (_core.list_endpoints_for_all_namespaces()
+               if namespace == "all"
+               else _core.list_namespaced_endpoints(namespace=namespace))
 
-        if namespace:
-            eps_list = _core.list_namespaced_endpoints(namespace=namespace).items
-            if not eps_list:
-                eps_list = _core.list_endpoints_for_all_namespaces().items
-        else:
-            eps_list = _core.list_endpoints_for_all_namespaces().items
+        if not eps.items:
+            return f"No endpoints found in '{namespace}'."
 
-        if not eps_list:
-            return "No Endpoints found in any namespace."
+        table_rows = []
+        for ep in eps.items:
+            if search and search.lower() not in ep.metadata.name.lower():
+                continue
 
-        for ep in eps_list:
             ns_name = ep.metadata.namespace
             name = ep.metadata.name
 
-            # Extract IP:Port
             if not ep.subsets:
                 continue
 
@@ -783,15 +780,47 @@ def get_endpoints(namespace: str = None) -> str:
                 for addr in addresses:
                     ip = addr.ip
                     for port in ports:
-                        results.append(f"{ns_name}\t{name}\t{ip}:{port.port}")
+                        table_rows.append((ns_name, name, f"{ip}:{port.port}"))
 
-        if not results:
+        fallback_msg = ""
+        if search and not table_rows:
+            fallback_msg = f"No matches for '{search}'. Showing all endpoints:\n"
+            for ep in eps.items:
+                ns_name = ep.metadata.namespace
+                name = ep.metadata.name
+
+                if not ep.subsets:
+                    continue
+
+                for subset in ep.subsets:
+                    ports = subset.ports or []
+                    addresses = subset.addresses or []
+
+                    for addr in addresses:
+                        ip = addr.ip
+                        for port in ports:
+                            table_rows.append((ns_name, name, f"{ip}:{port.port}"))
+
+        if not table_rows:
             return "No active Endpoints (no addresses) found."
 
-        return "\n".join(lines + results)
+        md_lines = [fallback_msg] if fallback_msg else []
 
-    except Exception as e:
-        return f"[ERROR] Unexpected error: {str(e)}"
+        if namespace == "all":
+            md_lines.append("| NAMESPACE | NAME | ADDRESS |")
+            md_lines.append("|---|---|---|")
+            for ns, name, addr in table_rows:
+                md_lines.append(f"| `{ns}` | `{name}` | `{addr}` |")
+        else:
+            md_lines.append("| NAME | ADDRESS |")
+            md_lines.append("|---|---|")
+            for _, name, addr in table_rows:
+                md_lines.append(f"| `{name}` | `{addr}` |")
+
+        return "\n".join(md_lines)
+
+    except ApiException as e:
+        return f"K8s API error: {e.reason}"
     
 def get_node_capacity() -> str:
     # Helper to parse Kubernetes CPU strings (e.g., "100m", "0.5", "2")
