@@ -189,12 +189,12 @@ K8S_TOOL_METADATA: dict = {
         "fn":          get_node_labels,
         "description": (
             "Show labels for Kubernetes nodes in the cluster. "
-            "Returns key/value pairs representing node metadata, roles, and scheduling hints. "
+            "Returns a structured Markdown list mapping nodes to their labels. "
             "The `search` parameter is highly flexible: you can pass a partial/full 'node_name' "
             "to get ALL labels for that specific node, OR pass a label keyword (e.g., 'gpu', 'cde') "
             "to find which nodes have that specific label. "
             "IMPORTANT: If the user asks for 'labels', 'label', 'all', or similar general terms, do NOT pass these words as the search term. Leave the search parameter empty (null). "
-            "CRITICAL: You must output the exact text/list returned by this tool. Do NOT modify the formatting, summarize the data, or omit ANY labels."
+            "CRITICAL: You must output the exact text returned by this tool. Do NOT try to convert this list into a table, modify the formatting, summarize the data, or omit ANY labels."
         ),
         "parameters":  {
             "search": {

@@ -883,41 +883,43 @@ def get_node_labels(search: str = None) -> str:
         if not nodes:
             return "No nodes found."
 
-        results = []
-
         # ✅ Normalize "non-filter" keywords
         if search:
             search_lower = search.lower().strip()
             if search_lower in ("*", "all", "label", "labels", "node", "nodes"):
                 search = None
 
+        results = []
+
         for node in nodes:
             labels = node.metadata.labels or {}
             node_name = node.metadata.name
 
-            label_lines = [f"- {k}={v}" for k, v in labels.items()] or ["- <none>"]
+            # Standard markdown bullets - clean in UI, clean in CLI
+            label_lines = [f"  - {k}={v}" for k, v in labels.items()] or ["  - <none>"]
 
             # ✅ No filtering → show all
             if not search:
-                results.append(f"**{node_name}:**\n" + "\n".join(label_lines) + "\n")
+                results.append(f"**Node: {node_name}**\n" + "\n".join(label_lines))
                 continue
 
             search_lower = search.lower()
 
             # Match node name → show all labels
             if search_lower in node_name.lower():
-                results.append(f"**{node_name}:**\n" + "\n".join(label_lines) + "\n")
+                results.append(f"**Node: {node_name}**\n" + "\n".join(label_lines))
                 continue
 
             # Match label content
             filtered = [l for l in label_lines if search_lower in l.lower()]
             if filtered:
-                results.append(f"**{node_name}:**\n" + "\n".join(filtered) + "\n")
+                results.append(f"**Node: {node_name}**\n" + "\n".join(filtered))
 
         if not results:
             return f"No nodes or labels found matching '{search}'."
 
-        return "\n".join(results).rstrip()
+        # Join nodes with a double newline so there is a blank line between each node block
+        return "\n\n".join(results)
 
     except ApiException as e:
         return f"K8s API error: {e.reason}"
