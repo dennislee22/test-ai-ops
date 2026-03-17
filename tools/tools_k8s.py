@@ -1194,68 +1194,53 @@ def find_resource(name_substring: str, resource_type: str = None, namespace: str
 
 def get_gpu_info() -> str:
     try:
-        nodes = _core.list_node()
-        if not nodes.items:
+        nodes = _core.list_node().items
+        if not nodes:
             return "No nodes found."
 
-        results = []
-        for node in nodes.items:
-            labels   = node.metadata.labels or {}
-            capacity = node.status.capacity or {}
-            alloc    = node.status.allocatable or {}
-
-            gpu_cap   = {}
-            gpu_alloc = {}
-            for key, val in capacity.items():
-                if "nvidia.com/gpu" in key or "amd.com/gpu" in key:
-                    gpu_cap[key] = val
+        lines = ["### GPU Node Overview\n"]
+        lines.extend(["| NODE | PRODUCT | COUNT | MEMORY | ALLOCATABLE | DETAILS |", "|---|---|---|---|---|---|"])
+        
+        has_gpu = False
+        for node in sorted(nodes, key=lambda n: n.metadata.name):
+            labels = node.metadata.labels or {}
+            alloc  = node.status.allocatable or {}
+            
+            # 1. Identify GPU Type & Count
+            product = labels.get("nvidia.com/gpu.product", labels.get("amd.com/gpu.product", "Unknown"))
+            count   = labels.get("nvidia.com/gpu.count", labels.get("amd.com/gpu.count", "0"))
+            memory  = labels.get("nvidia.com/gpu.memory", "n/a")
+            
+            # 2. Check Allocatable (Actual capacity K8s sees)
+            gpu_alloc_val = "0"
             for key, val in alloc.items():
-                if "nvidia.com/gpu" in key or "amd.com/gpu" in key:
-                    gpu_alloc[key] = val
-
-            if not gpu_cap and not any(
-                k.startswith("nvidia.com/") or k.startswith("amd.com/")
-                for k in labels
-            ):
+                if "gpu" in key.lower():
+                    gpu_alloc_val = val
+                    break
+            
+            # 3. Skip non-GPU nodes
+            if gpu_alloc_val == "0" and product == "Unknown" and "nvidia.com/gpu.present" not in labels:
                 continue
 
-            info = [f"Node: {node.metadata.name}"]
+            # 4. Collect interesting "extra" flags for the Details column
+            extra = []
+            if "nvidia.com/mig.strategy" in labels:
+                extra.append(f"MIG:{labels['nvidia.com/mig.strategy']}")
+            if "nvidia.com/cuda.driver.major" in labels:
+                extra.append(f"CUDA:{labels['nvidia.com/cuda.driver.major']}.x")
+            
+            details_str = ", ".join(extra) if extra else "-"
+            
+            lines.append(
+                f"| {node.metadata.name} | {product} | {count} | {memory}Mi | {gpu_alloc_val} | {details_str} |"
+            )
+            has_gpu = True
 
-            nvidia_label_prefixes = [
-                "nvidia.com/gpu.product",
-                "nvidia.com/gpu.memory",
-                "nvidia.com/gpu.count",
-                "nvidia.com/gpu.family",
-                "nvidia.com/gpu.machine",
-                "nvidia.com/cuda.driver.major",
-                "nvidia.com/cuda.runtime.major",
-                "feature.node.kubernetes.io/pci-10de",
-                "nvidia.com/mig.strategy",
-            ]
-            for prefix in nvidia_label_prefixes:
-                for k, v in labels.items():
-                    if k == prefix or k.startswith(prefix):
-                        info.append(f"  {k}: {v}")
-
-            for k, v in labels.items():
-                if k.startswith("amd.com/gpu"):
-                    info.append(f"  {k}: {v}")
-
-            for k, v in gpu_cap.items():
-                info.append(f"  capacity[{k}]: {v}")
-            for k, v in gpu_alloc.items():
-                if k not in gpu_cap or gpu_alloc[k] != gpu_cap[k]:
-                    info.append(f"  allocatable[{k}]: {v}")
-
-            if len(info) == 1:
-                info.append("  (No detailed GPU labels found — device plugin may not be running)")
-
-            results.append("\n".join(info))
-
-        if not results:
+        if not has_gpu:
             return "No GPU nodes detected in the cluster."
 
-        return "\n\n".join(results)
+        return "\n".join(lines)
+        
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
