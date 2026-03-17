@@ -401,7 +401,7 @@ K8S_TOOL_METADATA: dict = {
     },
 
     "get_service_accounts": {
-        "fn":          find_service_account,
+        "fn":          get_service_accounts,
         "description": "List Kubernetes ServiceAccounts, optionally filtered by namespace. Shows all namespaces if none specified, and always includes default ServiceAccounts. Falls back to all namespaces if the specified namespace is empty or does not exist.",
         "parameters":  {
             "namespace": {"type": "string", "default": None, "description": "Optional namespace to filter ServiceAccounts. Defaults to all namespaces — if the namespace is empty or missing, shows all ServiceAccounts in other namespaces."},

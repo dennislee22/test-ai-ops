@@ -14,20 +14,19 @@ _KUBECTL_READ_VERBS = {"get", "describe", "logs", "top", "rollout", "auth", "api
 logging.basicConfig(level=logging.INFO)
 _log = logging.getLogger("k8s")
 
-def _load_k8s():
-    kc = os.getenv("KUBECONFIG_PATH", "")
-    try:
-        if kc and Path(os.path.expanduser(kc)).exists():
+def _load_initial_k8s():
+    kc = os.getenv("KUBECONFIG_PATH", "").strip()
+    
+    if kc and Path(os.path.expanduser(kc)).exists():
+        try:
             _k8s_cfg.load_kube_config(config_file=os.path.expanduser(kc))
-            _log.info(f"Loaded kubeconfig: {kc}")
-        else:
-            _k8s_cfg.load_incluster_config()
-            _log.info("Loaded in-cluster config")
-    except Exception as e:
-        _log.error(f"K8s config failed: {e}")
-        raise RuntimeError(f"K8s config: {e}")
+            _log.info(f"Loaded initial kubeconfig from disk: {kc}")
+        except Exception as e:
+            _log.error(f"Failed to load disk kubeconfig: {e}")
+    else:
+        _log.warning("No valid KUBECONFIG_PATH found at startup. Awaiting dynamic reload_kubeconfig().")
 
-_load_k8s()
+_load_initial_k8s()
 
 _version_api = _k8s.VersionApi()
 _storage = _k8s.StorageV1Api()
