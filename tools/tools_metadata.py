@@ -4,7 +4,7 @@ from tools.tools_k8s import (
     get_daemonset, get_statefulset, get_job_status, get_hpa_status,
     get_pvc_status, get_cluster_version, get_storage_classes, get_endpoints,
     get_node_capacity, get_persistent_volumes, get_service, get_ingress,
-    get_configmap_list, get_secrets, get_resource_quotas, get_limit_ranges,
+    get_configmap_list, get_secret_list, get_resource_quotas, get_limit_ranges,
     get_service_accounts, get_cluster_role_bindings, get_namespace_status,
     get_pod_tolerations, get_pod_resource_requests, run_cluster_health, get_replicaset,
     get_namespace_resource_summary, get_pod_images, get_unhealthy_pods_detail,
@@ -175,10 +175,11 @@ K8S_TOOL_METADATA: dict = {
         "fn":          get_gpu_info,
         "description": (
             "List nodes with GPU hardware and their technical specifications. "
-            "Returns a Markdown table showing GPU product name, total count, memory per card, "
-            "and current allocatable capacity (from the device plugin). "
-            "Use this to answer: 'what kind of GPUs do we have', 'is the GPU driver working', "
-            "or 'how much VRAM is on ecs-w-03'. "
+            "Returns a Markdown table showing GPU product name, total count, memory per card (GRAM/VRAM), "
+            "current allocatable capacity (from the device plugin), which pods are attached to or using the GPU, "
+            "and whether the GPU is currently in use. "
+            "Use this to answer: 'what kind of GPUs do we have', 'how much VRAM is on ecs-w-03', "
+            "'which pod is attached to GPU', 'which pod is using GPU', or 'is the GPU in use'. "
             "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
         ),
         "parameters":  {},
@@ -475,8 +476,8 @@ K8S_TOOL_METADATA: dict = {
         },
     },
     
-    "get_secrets": {
-        "fn":          get_secrets,
+    "get_secret_list": {
+        "fn":          get_secret_list,
         "description": (
             "List or search secrets in a namespace. "
             "Use filter_keys=['username','password','user','pass'] to find secrets "
@@ -858,7 +859,7 @@ K8S_TOOL_METADATA: dict = {
             "or schema inspection. "
             "\n\n"
             "CREDENTIAL QUESTIONS — DO NOT use this tool first. "
-            "For any question about usernames or passwords, ALWAYS call get_secrets() first. "
+            "For any question about usernames or passwords, ALWAYS call get_secret_list() first. "
             "Only fall back to exec_db_query if secrets contain no useful credential information. "
             "\n\n"
             "ONLY read-only SQL is permitted (SELECT, SHOW, DESCRIBE, EXPLAIN). "

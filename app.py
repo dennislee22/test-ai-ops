@@ -438,7 +438,7 @@ def build_agent():
                 args["namespace"] = forced_ns
                 config.logger.info(f"[REQ:{state.get('req_id', '')}] Overriding LLM namespace -> forced to '{forced_ns}'")
             
-            if name == "get_secrets": args["decode"] = _decode_secrets_ctx.get()
+            if name == "get_secret_list": args["decode"] = _decode_secrets_ctx.get()
             tools_called.append(name)
             updates.append(f"$ {args['command']}" if name == "kubectl_exec" and "command" in args else f"⚙️ {name}")
             

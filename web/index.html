@@ -2397,7 +2397,7 @@ async function sendMessage(override){
 
   let _elapsedSec = 0;
   let _elapsedTimer = null;
-  let _toolChars = 0; // <--- Track the characters loaded from tools
+  let _toolChars = 0;
 
   function _startElapsedCounter(){
     _elapsedSec = 0;
@@ -2410,16 +2410,13 @@ async function sendMessage(override){
         
         // If > 20s, NOT skipping synth, and we actually have tool data
         if (_elapsedSec >= 20 && !isSkipping && _toolChars > 0) {
-          hdr.textContent = `AGENT STATUS — processing (${_elapsedSec}s). LLM is taking a longer time to digest ${_toolChars.toLocaleString()} chars for synthesis. You can opt to "Skip Synthesise" if you want to see the raw output from the tool.`;
-          hdr.style.color = '#f59e0b'; // Amber warning color
-          hdr.style.whiteSpace = 'normal'; // Allow text to wrap nicely
-          hdr.style.lineHeight = '1.4';
-          hdr.style.textTransform = 'none'; // Make it readable instead of all-caps
+          hdr.innerHTML = `AGENT STATUS — processing (${_elapsedSec}s)<br>` +
+                          `<span style="color: #ef4444; text-transform: none; letter-spacing: normal; font-size: 11px; display: inline-block; margin-top: 5px; line-height: 1.4;">` +
+                          `LLM is taking a longer time to digest <strong>${_toolChars.toLocaleString()}</strong> chars for synthesis. You can opt to "Skip Synthesise" if you want to see the raw output from the tool.</span>`;
+          hdr.style.color = ''; 
         } else {
-          hdr.textContent = `AGENT STATUS — processing (${_elapsedSec}s)`;
+          hdr.innerHTML = `AGENT STATUS — processing (${_elapsedSec}s)`;
           hdr.style.color = _elapsedSec >= 60 ? '#f59e0b' : '';
-          hdr.style.whiteSpace = 'nowrap';
-          hdr.style.textTransform = 'uppercase';
         }
       }
     }, 1000);

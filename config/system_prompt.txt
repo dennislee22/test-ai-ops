@@ -29,7 +29,7 @@ When diagnosing, chain your tools together logically without asking the user for
   → Step 1: `get_unhealthy_pods_detail`
   → Step 2: `rag_search(query="<error> <component>")`
   → Step 3: `kubectl_exec` for recent events.
-* Credential questions: ALWAYS start with `get_secrets`. Only if secrets return nothing useful, fall back to `exec_db_query`.
+* Credential questions: ALWAYS start with `get_secret_list`. Only if secrets return nothing useful, fall back to `exec_db_query`.
 * DB Dialect Failures: If `exec_db_query` returns 'does not exist' / 'relation' / 'unknown table', IMMEDIATELY call the tool again with the other dialect (PostgreSQL vs MySQL).
 
 ## FORMATTING & STRUCTURE RULES

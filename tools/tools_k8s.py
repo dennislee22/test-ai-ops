@@ -1228,41 +1228,53 @@ def get_gpu_info() -> str:
         if not nodes:
             return "No nodes found."
 
+        pods = _core.list_pod_for_all_namespaces().items
+
         lines = ["### GPU Node Overview\n"]
-        lines.extend(["| NODE | PRODUCT | COUNT | MEMORY | ALLOCATABLE | DETAILS |", "|---|---|---|---|---|---|"])
-        
+        lines.extend(["| NODE | PRODUCT | COUNT | VRAM/GRAM | ALLOCATABLE | ATTACHED PODS |", "|---|---|---|---|---|---|"])
+
         has_gpu = False
         for node in sorted(nodes, key=lambda n: n.metadata.name):
             labels = node.metadata.labels or {}
             alloc  = node.status.allocatable or {}
-            
-            # 1. Identify GPU Type & Count
-            product = labels.get("nvidia.com/gpu.product", labels.get("amd.com/gpu.product", "Unknown"))
-            count   = labels.get("nvidia.com/gpu.count", labels.get("amd.com/gpu.count", "0"))
-            memory  = labels.get("nvidia.com/gpu.memory", "n/a")
-            
-            # 2. Check Allocatable (Actual capacity K8s sees)
-            gpu_alloc_val = "0"
-            for key, val in alloc.items():
-                if "gpu" in key.lower():
-                    gpu_alloc_val = val
-                    break
-            
-            # 3. Skip non-GPU nodes
-            if gpu_alloc_val == "0" and product == "Unknown" and "nvidia.com/gpu.present" not in labels:
+
+            gpu_keys = [k for k in alloc.keys() if "gpu" in k.lower()]
+            if not gpu_keys:
                 continue
 
-            # 4. Collect interesting "extra" flags for the Details column
-            extra = []
-            if "nvidia.com/mig.strategy" in labels:
-                extra.append(f"MIG:{labels['nvidia.com/mig.strategy']}")
-            if "nvidia.com/cuda.driver.major" in labels:
-                extra.append(f"CUDA:{labels['nvidia.com/cuda.driver.major']}.x")
-            
-            details_str = ", ".join(extra) if extra else "-"
-            
+            gpu_key = gpu_keys[0]
+            gpu_alloc_val = alloc.get(gpu_key, "0")
+
+            product = (
+                labels.get(f"{gpu_key}.product") or
+                labels.get("gpu.product") or
+                "Unknown"
+            )
+
+            count = labels.get(f"{gpu_key}.count") or labels.get("gpu.count") or gpu_alloc_val
+            memory = labels.get(f"{gpu_key}.memory") or labels.get("gpu.memory") or "n/a"
+
+            if gpu_alloc_val == "0" and product == "Unknown":
+                continue
+
+            pod_list = []
+            for pod in pods:
+                if pod.status.phase not in ("Running", "Pending"):
+                    continue
+                if pod.spec.node_name != node.metadata.name:
+                    continue
+                for container in pod.spec.containers or []:
+                    resources = container.resources or {}
+                    limits = resources.limits or {}
+                    requests = resources.requests or {}
+                    if any("gpu" in k.lower() and int(v) > 0 for k, v in {**limits, **requests}.items()):
+                        pod_list.append(f"{pod.metadata.namespace}/{pod.metadata.name}")
+                        break
+
+            pods_str = ", ".join(pod_list) if pod_list else "-"
+
             lines.append(
-                f"| {node.metadata.name} | {product} | {count} | {memory}Mi | {gpu_alloc_val} | {details_str} |"
+                f"| {node.metadata.name} | {product} | {count} | {memory}Mi | {gpu_alloc_val} | {pods_str} |"
             )
             has_gpu = True
 
@@ -1270,7 +1282,7 @@ def get_gpu_info() -> str:
             return "No GPU nodes detected in the cluster."
 
         return "\n".join(lines)
-        
+
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
@@ -2718,7 +2730,7 @@ def get_configmap_list(namespace: str = "all", filter_keys: list = None) -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_secrets(namespace: str = "all", name: str = "",
+def get_secret_list(namespace: str = "all", name: str = "",
                 decode: bool = False, filter_keys: list = None) -> str:
     import base64 as _b64
 
@@ -2758,7 +2770,7 @@ def get_secrets(namespace: str = "all", name: str = "",
         if filter_keys:
             import logging as _flog
             _flog.getLogger("tools.k8s").debug(
-                f"[get_secrets] ENTRY filter_keys={filter_keys}  decode={decode}  namespace={namespace}")
+                f"[get_secret_list] ENTRY filter_keys={filter_keys}  decode={decode}  namespace={namespace}")
             _fk_lower = [f.lower() for f in filter_keys]
             secrets = _core.list_namespaced_secret(namespace=namespace)
 
