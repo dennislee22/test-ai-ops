@@ -609,6 +609,24 @@ button{cursor:pointer;font-family:inherit}
   animation:inferPulse 2s ease-in-out infinite;
 }
 
+/* Shiny Gold Toggle */
+.gold-toggle-track {
+  position: absolute; inset: 0; background: var(--border);
+  border-radius: 20px; transition: all 0.25s ease;
+}
+.gold-toggle-thumb {
+  position: absolute; left: 2px; top: 2px; width: 16px; height: 16px;
+  background: #fff; border-radius: 50%; transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+}
+#skip-synth-toggle:checked ~ .gold-toggle-track {
+  background: linear-gradient(135deg, #FDE047 0%, #F59E0B 100%);
+  box-shadow: inset 0 0 2px rgba(255,255,255,0.5), 0 0 6px rgba(245, 158, 11, 0.4);
+}
+#skip-synth-toggle:checked ~ .gold-toggle-thumb {
+  transform: translateX(16px);
+}
+
 /* Sparkline */
 .spark-wrap{
   background:var(--headerBg);border:1px solid var(--panelBorder);
@@ -735,12 +753,19 @@ button{cursor:pointer;font-family:inherit}
       <!-- ── Chat pane ─────────────────────────────────────────────────── -->
       <div id="chat-pane">
         <div id="chat-token-row">
-          <div style="display:flex;align-items:center;justify-content:space-between;font-family:'IBM Plex Mono',monospace">
-            <label style="font-size:11px;color:var(--dimText);white-space:nowrap;display:flex;align-items:center;gap:6px;cursor:pointer">
-              <input type="checkbox" id="skip-synth-toggle" style="accent-color:var(--accent);cursor:pointer"/>
-              <span title="Skip LLM synthesis and show raw tool output directly">Skip Synthesise</span>
-            </label>
+          <div style="display:flex;align-items:center;justify-content:flex-end;gap:16px;font-family:'IBM Plex Mono',monospace">
             
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer" title="Skip LLM synthesis and show raw tool output directly">
+              <span style="font-size:11px;color:var(--dimText);white-space:nowrap;font-weight:600;letter-spacing:0.02em">Skip Synthesise</span>
+              <div style="position:relative;width:36px;height:20px;flex-shrink:0">
+                <input type="checkbox" id="skip-synth-toggle" style="opacity:0;width:0;height:0;position:absolute">
+                <span class="gold-toggle-track"></span>
+                <span class="gold-toggle-thumb"></span>
+              </div>
+            </label>
+
+            <div style="width:1px;height:12px;background:var(--border)"></div>
+
             <div style="display:flex;align-items:center;gap:10px">
               <label style="font-size:11px;color:var(--dimText);white-space:nowrap">
                 Max output tokens: <strong id="chat-max-tokens-val" style="color:var(--accent2)">4096</strong>
@@ -752,6 +777,7 @@ button{cursor:pointer;font-family:inherit}
             </div>
           </div>
         </div>
+        
         <div id="messages">
           <div id="examples">
             <div id="ex-label">EXAMPLE QUERIES</div>
@@ -1873,7 +1899,7 @@ async function loadIngestedFiles() {
 const EXAMPLES = [
   'What can you do?',
   'Is the Vault doing ok?',
-  'Is the cluster doing ok?',
+  'show the last 10 lines of log for cdp-embedded-db-0',
   'Show me all the nodes\' status',
   'Any pod is currently not Running?',
   'What storage class is Vault using?',
