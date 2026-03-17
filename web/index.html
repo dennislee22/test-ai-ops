@@ -2308,7 +2308,7 @@ function renderGraphBlock(payload, container) {
     + `<div class="graph-legend">${legend}</div>`;
 }
 
-function appendAi(text, tools, iters, elapsed, statusUpdates, isClarification){
+function appendAi(text, tools, iters, elapsed, statusUpdates, isClarification, skipSynth){
   // ── Extract §GRAPH§ payload before any cleaning ─────────────────────────
   let graphPayload = null;
   const GRAPH_RE = /§GRAPH§([\s\S]*?)§GRAPH§/;
@@ -2322,10 +2322,15 @@ function appendAi(text, tools, iters, elapsed, statusUpdates, isClarification){
   const badges = unique.map(t=>
     '<span class="tbadge">'+(t==='rag_search'?'📚':'\u2699\uFE0F')+' '+esc(t)+'</span>'
   ).join('');
-  const toolRow = unique.length
-    ? '<div class="ai-tools"><span class="tmeta">called:</span>'+badges
-      +'<span class="tmeta">&middot; '+iters+' iter'+(iters!==1?'s':'')+'</span></div>'
-    : '';
+  
+  // Create the Synthesis badge using the same 'tbadge' class
+  const synthBadge = '<span class="tbadge">' + (skipSynth ? '⚡ Synthesise: OFF' : '🧠 Synthesise: ON') + '</span>';
+
+  // Always show the row, putting the synthBadge next to tools/iters if they exist
+  const toolRow = '<div class="ai-tools">'
+    + (unique.length ? '<span class="tmeta">called:</span>'+badges+'<span class="tmeta">&middot; '+iters+' iter'+(iters!==1?'s':'')+' &middot; </span>' : '')
+    + synthBadge
+    + '</div>';
   const cmds = (statusUpdates||[]).filter(s=>s.startsWith('$ '));
   const cmdLog = cmds.length
     ? '<div class="kubectl-log">'
@@ -2488,14 +2493,15 @@ async function sendMessage(override){
             payload.iterations,
             payload.elapsed_seconds,
             payload.status_updates,
-            payload.clarification_needed
+            payload.clarification_needed,
+            skipSynth
           );
           // (history not stored — each request is stateless)
 
         } else if(payload.type === 'error'){
           _stopElapsedCounter();
           removeThinking();
-          appendAi('⚠ Agent error: '+payload.text, [], 0, null, [], false);
+          appendAi('⚠ Agent error: '+payload.text, [], 0, null, [], false,skipSynth);
         }
       }
     }
@@ -2508,7 +2514,7 @@ async function sendMessage(override){
     const hint = isTimeout
       ? '⏱ The request timed out — the cluster data may be very large.\n\nTry narrowing the query to a specific namespace (e.g. "list pods in cdp") or increase LLM_TIMEOUT in Settings → LLM Input/Output.'
       : '⚠ Error: '+msg+'\n\nMake sure the backend is running:\n  python3 app.py';
-    appendAi(hint, [], 0, null, [], false);
+    appendAi(hint, [], 0, null, [], false, skipSynth);
   } finally {
     _stopElapsedCounter();
     setLoading(false);
