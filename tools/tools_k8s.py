@@ -2670,7 +2670,8 @@ def run_cluster_health(namespace: str = "all", show_all: bool = False, raw_outpu
                 report.extend(f"  {p}" for p in unbound_pvcs)
 
         # --- Ingresses ---
-        ingresses = _ext.list_ingress_for_all_namespaces().items
+        _net = _k8s.NetworkingV1Api()
+        ingresses = _net.list_ingress_for_all_namespaces().items
         failed_ing = [f"{i.metadata.namespace}/{i.metadata.name}" for i in ingresses if not i.status.load_balancer.ingress]
         if failed_ing:
             report.append(f"\nIngresses without active load balancer: {len(failed_ing)}")
