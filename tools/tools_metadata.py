@@ -16,12 +16,11 @@ K8S_TOOL_METADATA: dict = {
     "get_pod_status": {
         "fn":          get_pod_status,
         "description": (
-            "Check runtime STATUS and health of Kubernetes pods. "
-            "Shows pod phase (Running/Pending/Failed/Unknown), container readiness, restart counts, "
-            "and unhealthy conditions. "
-            "By default only UNHEALTHY pods are returned (non-Running, not ready, or high restarts). "
-            "Set show_all=true to list ALL pods including healthy ones. "
-            "Use for: 'list pods', 'which pods are unhealthy', 'which pods are not running', "
+            "Check runtime STATUS and health of Kubernetes pods. Shows pod phase (Running/Pending/Failed/Unknown), "
+            "container readiness, restart counts, and unhealthy conditions. By default only UNHEALTHY pods are returned "
+            "(non-Running, not ready, or high restarts). Set show_all=true to list ALL pods including healthy ones. "
+            "Supports namespace filtering to list pods in a specific namespace. "
+            "Use for questions like: 'list pods', 'which pods are unhealthy', 'which pods are not running', "
             "'how many pods are running', or pod health troubleshooting. "
             "Do NOT use for CPU or memory resource requests/limits — use get_pod_resource_requests instead."
         ),
@@ -161,17 +160,19 @@ K8S_TOOL_METADATA: dict = {
     "find_resource": {
         "fn":          find_resource,
         "description": (
-            "Locate Kubernetes resources by name substring. Primarily used for pods: "
+            "Locate Kubernetes resources by name substring or type. Primarily used for pods: "
             "find pods by partial name, showing namespace, node, and status. "
             "Also supports services, ingresses, and persistent volume claims (PVCs). "
-            "Optionally filter by resource type and namespace. "
+            "Optional namespace filter restricts results to a specific namespace. "
             "Returns a tab-delimited table with Resource Type, Namespace, Name, and relevant details "
             "(e.g., pod status and node, service type and cluster IP, ingress hosts, PVC status and size). "
-            "Example: 'where is grafana pod?' → shows pod name, namespace, node, and status. "
-            "If no matches are found, falls back to listing all resources of the specified type."
+            "Example usage: "
+            "'find_resource(name_substring=\"grafana\")' → shows pods with 'grafana' in their name. "
+            "'find_resource(resource_type=\"pod\", namespace=\"longhorn-system\")' → lists all pods in that namespace. "
+            "If no matches are found for the name substring, falls back to listing all resources of the specified type."
         ),
         "parameters":  {
-            "name_substring": {"type": "string", "description": "Partial name of the resource to search for. Required."},
+            "name_substring": {"type": "string", "description": "Partial name of the resource to search for. Optional."},
             "resource_type":  {"type": "string", "default": None, "description": "Optional resource type to filter (pod, svc/service, ingress, pvc). Defaults to all supported types."},
             "namespace":      {"type": "string", "default": None, "description": "Optional namespace to restrict the search. Defaults to all namespaces if not provided."},
         },
@@ -308,7 +309,8 @@ K8S_TOOL_METADATA: dict = {
     "get_node_capacity": {
         "fn":          get_node_capacity,
         "description": (
-            "Show the CPU, memory, and GPU allocatable capacity of each Kubernetes node. "
+            "Show the CPU, memory, and GPU allocatable capacity of each Kubernetes node, "
+            "and how much CPU/memory has been requested by pods, with the remaining available. "
             "Use for questions like: 'how many CPUs/memory are available per node?', "
             "'which nodes have GPUs?', or 'node capacity details'. "
             "Do NOT use for real-time usage — use get_node_health or query_prometheus_metrics instead."

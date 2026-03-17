@@ -790,11 +790,23 @@ def get_node_capacity() -> str:
         nodes = _core.list_node()
         if not nodes.items:
             return "No nodes found."
-        lines = ["Node capacity:"]
+
+        lines = ["### Node Capacity Overview\n"]
+
+        # Header rows
+        header1 = ["Node", "CPU", "", "", "Memory (Gi)", "", "", "GPU"]
+        header2 = ["", "Allocated", "Request", "Available", "Allocated", "Request", "Available", ""]
+        lines.append("| " + " | ".join(header1) + " |")
+        lines.append("| " + " | ".join(header2) + " |")
+        lines.append("|" + "|".join(["---"] * len(header1)) + "|")
+
         for node in sorted(nodes.items, key=lambda n: n.metadata.name):
             alloc = node.status.allocatable or {}
-            cpu = alloc.get("cpu", "n/a")
-            mem = alloc.get("memory", "n/a")
+            cpu_alloc = float(alloc.get("cpu", 0))
+            mem_alloc = alloc.get("memory", "0Ki")
+            mem_alloc_gib = round(int(mem_alloc.rstrip("Ki")) / 1024 / 1024, 2) if mem_alloc.endswith("Ki") else 0
+
+            # Count GPU
             gpu = 0
             for key in alloc:
                 if "nvidia.com/gpu" in key or "amd.com/gpu" in key:
@@ -802,9 +814,33 @@ def get_node_capacity() -> str:
                         gpu += int(alloc[key])
                     except (ValueError, TypeError):
                         pass
-            gpu_str = f", GPU: {gpu}" if gpu else ""
-            lines.append(f"  {node.metadata.name}: CPU={cpu}, Mem={mem}{gpu_str}")
+
+            # Calculate requested resources from pods on this node
+            cpu_req_total = 0.0
+            mem_req_total_gib = 0.0
+            pods = _core.list_pod_for_all_namespaces(field_selector=f"spec.nodeName={node.metadata.name}")
+            for pod in pods.items:
+                for c in pod.spec.containers or []:
+                    if c.resources and c.resources.requests:
+                        cpu_req_total += float(c.resources.requests.get("cpu", 0))
+                        mem_req = c.resources.requests.get("memory", "0")
+                        if mem_req.endswith("Ki"):
+                            mem_req_total_gib += int(mem_req.rstrip("Ki")) / 1024 / 1024
+                        elif mem_req.endswith("Mi"):
+                            mem_req_total_gib += int(mem_req.rstrip("Mi")) / 1024
+                        elif mem_req.endswith("Gi"):
+                            mem_req_total_gib += int(mem_req.rstrip("Gi"))
+
+            cpu_avail = round(cpu_alloc - cpu_req_total, 2)
+            mem_avail = round(mem_alloc_gib - mem_req_total_gib, 2)
+
+            lines.append(
+                f"| {node.metadata.name} | {cpu_alloc} | {cpu_req_total} | {cpu_avail} "
+                f"| {mem_alloc_gib} | {round(mem_req_total_gib, 2)} | {mem_avail} | {gpu} |"
+            )
+
         return "\n".join(lines)
+
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
@@ -820,25 +856,23 @@ def get_node_labels(search: str = None) -> str:
             labels = node.metadata.labels or {}
             node_name = node.metadata.name
 
-            # Build a list of label strings: key=value
+            # Build label lines
             label_lines = [f"- {k}={v}" for k, v in labels.items()]
 
-            # If search is provided, filter labels containing the substring
             if search:
-                filtered_labels = [l for l in label_lines if search.lower() in l.lower()]
-                if filtered_labels:
-                    label_lines = filtered_labels
+                if search.lower() in node_name.lower():
+                    # Search matches node name → show all labels
+                    pass
                 else:
-                    # fallback: show all labels if none matched
-                    results.append(
-                        f"**{node_name}:**\n" + "\n".join(label_lines) + "\n"
-                    )
-                    continue  # skip normal append below
+                    # Search matches label keys/values
+                    label_lines = [l for l in label_lines if search.lower() in l.lower()]
+                    if not label_lines:
+                        # fallback: show all labels for the node if no match
+                        results.append(f"**{node_name}:**\n" + "\n".join(label_lines) + "\n")
+                        continue
 
             if label_lines:
-                results.append(
-                    f"**{node_name}:**\n" + "\n".join(label_lines) + "\n"
-                )
+                results.append(f"**{node_name}:**\n" + "\n".join(label_lines) + "\n")
 
         if not results:
             if search:
@@ -1400,25 +1434,26 @@ def get_hpa_status(namespace: str = "all") -> str:
         if not hpas.items:
             return f"No HPAs in '{namespace}'."
 
-        # --- Table header ---
+        # Table header
         lines = [
-            f"HPAs in '{namespace}':\n",
-            f"{'Namespace':<15} {'HPA Name':<30} {'Current':<8} {'Desired':<8} {'Min':<5} {'Max':<5} {'Status':<10}",
-            "-"*85
+            f"| Namespace | HPA Name | Current | Desired | Min | Max | Status |",
+            f"|-----------|----------|---------|---------|-----|-----|--------|"
         ]
 
+        # Table rows
         for h in hpas.items:
             cur = h.status.current_replicas or 0
             des = h.status.desired_replicas or 0
             mn  = h.spec.min_replicas or 1
             mx  = h.spec.max_replicas or "?"
             at_max = cur >= h.spec.max_replicas if h.spec.max_replicas else False
-            flag = "AT MAX" if at_max else "OK"
+            flag = "⚠ AT MAX" if at_max else "OK"
             lines.append(
-                f"{h.metadata.namespace:<15} {h.metadata.name:<30} {cur:<8} {des:<8} {mn:<5} {mx:<5} {flag:<10}"
+                f"| {h.metadata.namespace} | {h.metadata.name} | {cur} | {des} | {mn} | {mx} | {flag} |"
             )
 
         return "\n".join(lines)
+
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
@@ -1571,7 +1606,6 @@ def get_pv_usage(threshold: int = 80) -> str:
             pct_label = f"{pct}% (replica overhead)" if pct > 100 else f"{pct}%"
             flag = "🔴" if display_pct >= 90 else ("🟠" if display_pct >= threshold else "🟢")
             
-            # Return dictionary of row data instead of a formatted string
             entry_data = {
                 "pct_val": display_pct,
                 "flag": flag,
@@ -1580,8 +1614,7 @@ def get_pv_usage(threshold: int = 80) -> str:
                 "used": used_gib,
                 "total": total_gib,
                 "free": avail_gib,
-                "sc": sc,
-                "details": "source: longhorn-crd"
+                "sc": sc
             }
             return (entry_data, False)
         except Exception as e:
@@ -1634,10 +1667,8 @@ def get_pv_usage(threshold: int = 80) -> str:
                 if pod_hit: break
 
         if not pod_hit or not mount_path:
-            # Fallback to Longhorn CRD
             entry, is_error = _longhorn_crd_usage(vol_name, ns, pvc_name, sc, threshold)
             if not is_error:
-                entry["details"] += " (no running pod)"
                 results.append(entry)
             else:
                 errors.append(entry if is_error else f"{ns}/{pvc_name}: no running pod found and Longhorn CRD unavailable")
@@ -1646,10 +1677,8 @@ def get_pv_usage(threshold: int = 80) -> str:
         df_out = _exec_df(pod_hit, ns, mount_path, container=pod_container)
         
         if not df_out:
-            # Fallback to Longhorn CRD if df fails
             entry, is_error = _longhorn_crd_usage(vol_name, ns, pvc_name, sc, threshold)
             if not is_error:
-                entry["details"] += f" (df failed on pod {pod_hit})"
                 results.append(entry)
             else:
                 errors.append(entry if is_error else f"{ns}/{pvc_name}: df exec failed on pod {pod_hit} and Longhorn CRD unavailable")
@@ -1683,28 +1712,23 @@ def get_pv_usage(threshold: int = 80) -> str:
             "used": used_gib,
             "total": total_gib,
             "free": avail_gib,
-            "sc": sc,
-            "details": f"pod: {pod_hit}, mount: {mount_path}"
+            "sc": sc
         })
 
-    # Sort results highest usage first
     results.sort(key=lambda x: x["pct_val"], reverse=True)
-
     nearing = [r for r in results if r["pct_val"] >= threshold]
     ok      = [r for r in results if r["pct_val"] < threshold]
 
-    # Helper function to generate Markdown tables
     def build_md_table(title, data):
         if not data:
             return ""
         lines = [f"### {title}", ""]
-        lines.append("| Status | Namespace / PVC | Usage | Used (GiB) | Total (GiB) | Free (GiB) | Class | Details |")
-        lines.append("|---|---|---|---|---|---|---|---|")
+        lines.append("| Status | Namespace / PVC | Usage | Used (GiB) | Total (GiB) | Free (GiB) | Class |")
+        lines.append("|---|---|---|---|---|---|---|")
         for d in data:
-            lines.append(f"| {d['flag']} | `{d['ns_pvc']}` | **{d['pct_str']}** | {d['used']} | {d['total']} | {d['free']} | {d['sc']} | {d['details']} |")
+            lines.append(f"| {d['flag']} | `{d['ns_pvc']}` | **{d['pct_str']}** | {d['used']} | {d['total']} | {d['free']} | {d['sc']} |")
         return "\n".join(lines)
 
-    # Assemble final markdown response
     output = []
     
     if nearing:
@@ -2887,8 +2911,10 @@ def get_namespace_status(namespace: str = "all", show_all: bool = False, sort_by
         if limit is not None:
             sorted_ns = sorted_ns[:limit]
 
+        # Markdown table header
         lines = [
-            f"{'NAMESPACE':<30} {'STATUS':<10} {'TOTAL':>5} {'Running':>7} {'Pending':>7} {'Failed':>7} {'Unknown':>7}"
+            "| Namespace | Status | Total | Running | Pending | Failed | Unknown |",
+            "|-----------|--------|-------|---------|---------|--------|---------|"
         ]
 
         pod_totals = {}
@@ -2897,20 +2923,19 @@ def get_namespace_status(namespace: str = "all", show_all: bool = False, sort_by
             total = sum(counts.values())
             pod_totals[ns_name] = total
             lines.append(
-                f"{ns_name:<30} {info['phase']:<10} {total:>5} "
-                f"{counts['Running']:>7} {counts['Pending']:>7} {counts['Failed']:>7} {counts['Unknown']:>7}"
+                f"| {ns_name} | {info['phase']} | {total} | {counts['Running']} | {counts['Pending']} | {counts['Failed']} | {counts['Unknown']} |"
             )
 
         if show_all:
             lines.append("")
-            lines.append("Namespaces pod summary (all details included above).")
+            lines.append("_Namespaces pod summary (all details included above)._")
 
         if pod_totals:
             least_ns = min(pod_totals, key=pod_totals.get)
             most_ns = max(pod_totals, key=pod_totals.get)
             lines.append("")
-            lines.append(f"Namespace with the least pods: {least_ns} ({pod_totals[least_ns]} pods)")
-            lines.append(f"Namespace with the most pods: {most_ns} ({pod_totals[most_ns]} pods)")
+            lines.append(f"_Namespace with the least pods: {least_ns} ({pod_totals[least_ns]} pods)_")
+            lines.append(f"_Namespace with the most pods: {most_ns} ({pod_totals[most_ns]} pods)_")
 
         return "\n".join(lines)
 
