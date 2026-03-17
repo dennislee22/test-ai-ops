@@ -3,7 +3,7 @@ from tools.tools_k8s import (
     get_node_labels, get_node_taints, get_events, get_deployment,
     get_daemonset, get_statefulset, get_job_status, get_hpa_status,
     get_pvc_status, get_cluster_version, get_storage_classes, get_endpoints,
-    get_node_capacity, get_persistent_volumes, get_service, get_ingress_status,
+    get_node_capacity, get_persistent_volumes, get_service, get_ingress,
     get_configmap_list, get_secrets, get_resource_quotas, get_limit_ranges,
     get_service_accounts, get_cluster_role_bindings, get_namespace_status,
     get_pod_tolerations, get_pod_resource_requests, run_cluster_health, get_replicaset,
@@ -387,8 +387,8 @@ K8S_TOOL_METADATA: dict = {
         },
     },
     
-    "get_ingress_status": {
-        "fn":          get_ingress_status,
+    "get_ingress": {
+        "fn":          get_ingress,
         "description": (
             "List Ingress rules, hostnames, ports, and load balancer IPs/addresses. "
             "Can find which ingress and namespace serve a specific hostname (FQDN) or port. "

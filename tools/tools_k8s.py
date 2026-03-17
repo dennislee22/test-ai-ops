@@ -2463,11 +2463,9 @@ def get_service(namespace: str = "all", search: str = None) -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_ingress_status(namespace: str = "all", name: str = "",
-                       port: int = 0) -> str:
+def get_ingress(namespace: str = "all", name: str = "", port: int = 0) -> str:
     def _get_ports(ing) -> list:
         ports = set()
-
         if ing.spec.tls:
             ports.add(443)
 
@@ -2480,9 +2478,10 @@ def get_ingress_status(namespace: str = "all", name: str = "",
             if rule.http:
                 for path in (rule.http.paths or []):
                     svc = path.backend.service
-                    p = svc.port.number if svc.port.number else None
-                    if p:
-                        ports.add(p)
+                    if svc and svc.port:
+                        p = svc.port.number
+                        if p:
+                            ports.add(p)
 
         if not ports:
             ports.add(80)
@@ -2492,58 +2491,65 @@ def get_ingress_status(namespace: str = "all", name: str = "",
         cls   = ing.spec.ingress_class_name or "default"
         hosts = [rule.host or "*" for rule in (ing.spec.rules or [])]
         ports = _get_ports(ing)
-        lb    = [
-            addr.ip or addr.hostname
-            for status in (ing.status.load_balancer.ingress or [])
-            for addr in [status] if status
-        ] if ing.status.load_balancer else []
-        ann   = ing.metadata.annotations or {}
+        
+        lb = []
+        if ing.status.load_balancer and ing.status.load_balancer.ingress:
+            for status in ing.status.load_balancer.ingress:
+                if status.ip: lb.append(status.ip)
+                elif status.hostname: lb.append(status.hostname)
+
         out = [
-            f"Ingress: {ing.metadata.namespace}/{ing.metadata.name}",
-            f"  Class:     {cls}",
-            f"  Hosts:     {', '.join(hosts) or 'none'}",
-            f"  Ports:     {', '.join(str(p) for p in ports)}",
-            f"  LB IP:     {', '.join(lb) or 'pending'}",
+            f"### Ingress: `{ing.metadata.namespace}/{ing.metadata.name}`",
+            f"- **Class**: {cls}",
+            f"- **Hosts**: {', '.join(hosts) or 'none'}",
+            f"- **Ports**: {', '.join(str(p) for p in ports)}",
+            f"- **LB IP**: {', '.join(lb) or 'pending'}",
         ]
+        
+        ann = ing.metadata.annotations or {}
         if ann:
-            out.append("  Annotations:")
+            out.append("\n**Annotations:**")
             for k, v in ann.items():
-                out.append(f"    {k}: {v}")
+                out.append(f"- `{k}`: {v}")
+                
         for rule in (ing.spec.rules or []):
             if rule.http:
-                out.append(f"  Rules ({rule.host or '*'}):")
+                host_str = rule.host or "*"
+                out.append(f"\n**Rules ({host_str}):**")
                 for path in (rule.http.paths or []):
                     svc = path.backend.service
-                    out.append(
-                        f"    {path.path or '/'} -> "
-                        f"{svc.name}:{svc.port.number or svc.port.name}"
-                        f"  [{path.path_type}]")
+                    port_str = svc.port.number or svc.port.name
+                    path_str = path.path or "/"
+                    out.append(f"- `{path_str}` ➔ Service `{svc.name}:{port_str}` ({path.path_type})")
+                    
         tls = ing.spec.tls or []
         if tls:
-            out.append("  TLS:")
+            out.append("\n**TLS:**")
             for t in tls:
-                out.append(f"    secret:{t.secret_name} hosts:{t.hosts}")
+                hosts_str = ", ".join(t.hosts) if t.hosts else "none"
+                out.append(f"- Secret `{t.secret_name}` for hosts: {hosts_str}")
+                
         return "\n".join(out)
 
     try:
         all_ings = _net.list_ingress_for_all_namespaces()
         pool = all_ings.items
 
+        # --- PORT FILTERING (Table Output) ---
         if port:
             pool = [ing for ing in pool if port in _get_ports(ing)]
             if not pool:
                 return f"No ingresses found exposing port {port} in any namespace."
-            out = [f"Ingresses exposing port {port}:"]
+            
+            out = [f"### Ingresses exposing port {port}\n", "| NAMESPACE | NAME | HOSTS | PORTS |", "|---|---|---|---|"]
             for ing in pool:
                 hosts = [rule.host or "*" for rule in (ing.spec.rules or [])]
                 ports = _get_ports(ing)
-                out.append(
-                    f"  {ing.metadata.namespace}/{ing.metadata.name}: "
-                    f"hosts:{hosts} ports:{ports}")
+                out.append(f"| {ing.metadata.namespace} | {ing.metadata.name} | {', '.join(hosts)} | {', '.join(str(p) for p in ports)} |")
             return "\n".join(out)
 
+        # --- SPECIFIC NAME OR HOSTNAME (Detailed Markdown Output) ---
         if name:
-
             if "." in name:
                 host_lower = name.lower()
                 matches = []
@@ -2555,9 +2561,9 @@ def get_ingress_status(namespace: str = "all", name: str = "",
                 if not matches:
                     return (
                         f"No ingress found with hostname '{name}' in any namespace. "
-                        f"Use get_ingress_status(namespace='all') to list all ingresses."
+                        f"Use `get_ingress_status(namespace='all')` to list all ingresses."
                     )
-                return "\n\n".join(_fmt(ing) for ing in matches)
+                return "\n\n---\n\n".join(_fmt(ing) for ing in matches)
 
             if namespace != "all":
                 try:
@@ -2571,25 +2577,37 @@ def get_ingress_status(namespace: str = "all", name: str = "",
                 matches = [i for i in pool if i.metadata.name == name]
                 if not matches:
                     return f"Ingress '{name}' not found in any namespace."
-                return "\n\n".join(_fmt(ing) for ing in matches)
+                return "\n\n---\n\n".join(_fmt(ing) for ing in matches)
 
+        # --- LIST ALL OR BY NAMESPACE (Table Output) ---
         if namespace != "all":
             pool = [i for i in pool if i.metadata.namespace == namespace]
+            
         if not pool:
-            return f"No Ingresses in '{namespace}'."
-        out = [f"Ingresses in '{namespace}':"]
+            return f"No Ingresses found in '{namespace}'."
+            
+        out = [f"### Ingresses in '{namespace}'\n"]
+        if namespace == "all":
+            out.extend(["| NAMESPACE | NAME | HOSTS | PORTS | LOAD BALANCER |", "|---|---|---|---|---|"])
+        else:
+            out.extend(["| NAME | HOSTS | PORTS | LOAD BALANCER |", "|---|---|---|---|"])
+            
         for ing in pool:
             hosts = [rule.host or "*" for rule in (ing.spec.rules or [])]
             ports = _get_ports(ing)
-            lb    = [
-                addr.ip or addr.hostname
-                for status in (ing.status.load_balancer.ingress or [])
-                for addr in [status] if status
-            ] if ing.status.load_balancer else []
-            out.append(
-                f"  {ing.metadata.namespace}/{ing.metadata.name}: "
-                f"hosts:{hosts} ports:{ports} lb:{lb or 'pending'}")
+            lb = []
+            if ing.status.load_balancer and ing.status.load_balancer.ingress:
+                for status in ing.status.load_balancer.ingress:
+                    if status.ip: lb.append(status.ip)
+                    elif status.hostname: lb.append(status.hostname)
+                    
+            if namespace == "all":
+                out.append(f"| {ing.metadata.namespace} | {ing.metadata.name} | {', '.join(hosts) or '*'} | {', '.join(str(p) for p in ports)} | {', '.join(lb) or 'pending'} |")
+            else:
+                out.append(f"| {ing.metadata.name} | {', '.join(hosts) or '*'} | {', '.join(str(p) for p in ports)} | {', '.join(lb) or 'pending'} |")
+                
         return "\n".join(out)
+        
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
