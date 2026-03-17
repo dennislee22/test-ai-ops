@@ -197,10 +197,14 @@ K8S_TOOL_METADATA: dict = {
             "The `search` parameter is highly flexible: you can pass a partial/full 'node_name' "
             "to get ALL labels for that specific node, OR pass a label keyword (e.g., 'gpu', 'cde') "
             "to find which nodes have that specific label. "
+            "IMPORTANT: If the user simply asks to 'list all nodes with labels' or similar, do NOT pass the word 'labels' as a search term. Leave the search parameter empty. "
             "CRITICAL: You must output the exact text/list returned by this tool. Do NOT modify the formatting, summarize the data, or omit ANY labels."
         ),
         "parameters":  {
-            "search": {"type": "string", "description": "Optional keyword to filter by node name OR label content."},
+            "search": {
+                "type": "string", 
+                "description": "Optional keyword to filter by node name OR label content. Leave empty (or null) to list ALL nodes and ALL their labels."
+            },
         },
     },
 
