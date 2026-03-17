@@ -3,7 +3,7 @@ from tools.tools_k8s import (
     get_node_labels, get_node_taints, get_events, get_deployment_status,
     get_daemonset_status, get_statefulset_status, get_job_status, get_hpa_status,
     get_pvc_status, get_cluster_version, get_storage_classes, get_endpoints,
-    get_node_capacity, get_persistent_volumes, get_service_status, get_ingress_status,
+    get_node_capacity, get_persistent_volumes, get_service, get_ingress_status,
     get_configmap_list, get_secrets, get_resource_quotas, get_limit_ranges,
     get_service_accounts, get_cluster_role_bindings, get_namespace_status,
     get_pod_tolerations, get_pod_resource_requests, run_cluster_health, get_replicaset_status,
@@ -194,22 +194,49 @@ K8S_TOOL_METADATA: dict = {
         "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
     },
     
+    "get_statefulset_status": {
+        "fn":          get_statefulset_status,
+        "description": (
+            "List StatefulSets and their health status (desired vs ready pods). "
+            "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
+        ),
+        "parameters": {
+            "namespace": {
+                "type": "string", 
+                "default": "all", 
+                "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."
+            }
+        },
+    },
+
     "get_daemonset_status": {
         "fn":          get_daemonset_status,
-        "description": "Check DaemonSet scheduling health — useful for node-level agents (e.g. Longhorn, CNI).",
-        "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
+        "description": (
+            "List DaemonSets and their health status (desired, ready, available pods). "
+            "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
+        ),
+        "parameters": {
+            "namespace": {
+                "type": "string", 
+                "default": "all", 
+                "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."
+            }
+        },
     },
 
     "get_replicaset_status": {
         "fn":          get_replicaset_status,
-        "description": "Check ReplicaSet health — shows desired, ready, and available replicas, and indicates if ReplicaSets are healthy or degraded.",
-        "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
-    },
-    
-    "get_statefulset_status": {
-        "fn":          get_statefulset_status,
-        "description": "Check StatefulSet replica counts — useful for databases and Longhorn components.",
-        "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
+        "description": (
+            "List ReplicaSets and their health status (desired, ready, available pods). "
+            "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
+        ),
+        "parameters": {
+            "namespace": {
+                "type": "string", 
+                "default": "all", 
+                "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."
+            }
+        },
     },
     
     "get_job_status": {
@@ -326,10 +353,24 @@ K8S_TOOL_METADATA: dict = {
         "parameters":  {},
     },
 
-    "get_service_status": {
-        "fn":          get_service_status,
-        "description": "List Services and highlight those with no pod selector (potential misconfigs).",
-        "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
+    "get_service": {
+        "fn":          get_service,
+        "description": (
+            "List Services and highlight those with no pod selector (potential misconfigs). "
+            "Supports filtering by partial name match. "
+            "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
+        ),
+        "parameters": {
+            "namespace": {
+                "type": "string", 
+                "default": "all", 
+                "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."
+            },
+            "search": {
+                "type": "string", 
+                "description": "Optional keyword to filter services by name (partial match)."
+            }
+        },
     },
     
     "get_ingress_status": {

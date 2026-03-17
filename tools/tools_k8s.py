@@ -2391,23 +2391,46 @@ def get_coredns_health() -> str:
 
     return "\n".join(lines)
 
-def get_service_status(namespace: str = "all") -> str:
+def get_service(namespace: str = "all", search: str = None) -> str:
     try:
         svcs = (_core.list_service_for_all_namespaces()
                 if namespace == "all"
                 else _core.list_namespaced_service(namespace=namespace))
+        
         if not svcs.items:
             return f"No services in '{namespace}'."
-        lines = [f"Services in '{namespace}':"]
+        
+        filtered_svcs = []
         for svc in svcs.items:
+            if search and search.lower() not in svc.metadata.name.lower():
+                continue
+            filtered_svcs.append(svc)
+            
+        if not filtered_svcs:
+            search_term = f" matching '{search}'" if search else ""
+            return f"No services{search_term} found in '{namespace}'."
+
+        title = f"### Services in '{namespace}'"
+        if search:
+            title += f" (matching '{search}')"
+        lines = [title + "\n"]
+
+        if namespace == "all":
+            lines.extend(["| NAMESPACE | NAME | TYPE | PORTS | SELECTOR STATUS |", "|---|---|---|---|---|"])
+        else:
+            lines.extend(["| NAME | TYPE | PORTS | SELECTOR STATUS |", "|---|---|---|---|"])
+
+        for svc in filtered_svcs:
             stype    = svc.spec.type or "ClusterIP"
-            ports    = ", ".join(
-                f"{p.port}/{p.protocol}" for p in (svc.spec.ports or []))
+            ports    = ", ".join(f"{p.port}/{p.protocol}" for p in (svc.spec.ports or []))
             selector = svc.spec.selector or {}
-            flag     = "" if selector else " ⚠ no selector"
-            lines.append(
-                f"  {svc.metadata.namespace}/{svc.metadata.name}: "
-                f"{stype} ports:[{ports}]{flag}")
+            flag     = "✓ Present" if selector else "⚠ No selector"
+            
+            if namespace == "all":
+                lines.append(f"| {svc.metadata.namespace} | {svc.metadata.name} | {stype} | {ports} | {flag} |")
+            else:
+                lines.append(f"| {svc.metadata.name} | {stype} | {ports} | {flag} |")
+                
         return "\n".join(lines)
     except ApiException as e:
         return f"K8s API error: {e.reason}"
