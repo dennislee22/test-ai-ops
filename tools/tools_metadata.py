@@ -196,7 +196,8 @@ K8S_TOOL_METADATA: dict = {
             "Returns key/value pairs representing node metadata, roles, and scheduling hints. "
             "The `search` parameter is highly flexible: you can pass a partial/full 'node_name' "
             "to get ALL labels for that specific node, OR pass a label keyword (e.g., 'gpu', 'cde') "
-            "to find which nodes have that specific label."
+            "to find which nodes have that specific label. "
+            "CRITICAL: You must output the exact text/list returned by this tool. Do NOT modify the formatting, summarize the data, or omit ANY labels."
         ),
         "parameters":  {
             "search": {"type": "string", "description": "Optional keyword to filter by node name OR label content."},
