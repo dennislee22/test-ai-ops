@@ -4015,7 +4015,9 @@ def get_namespace_resource_summary(namespace: str) -> str:
     total_cpu_lim_m   = 0
     total_mem_req_mib = 0.0
     total_mem_lim_mib = 0.0
-    pod_lines = []
+    
+    # List to hold our Markdown table rows
+    table_rows = []
 
     for pod in pods.items:
         pod_cpu_req_m   = 0
@@ -4037,36 +4039,34 @@ def get_namespace_resource_summary(namespace: str) -> str:
         total_mem_req_mib += pod_mem_req_mib
         total_mem_lim_mib += pod_mem_lim_mib
 
-        cpu_req_s = f"{pod_cpu_req_m}m" if pod_cpu_req_m else "0m (not set)"
-        mem_req_s = f"{pod_mem_req_mib:.0f}Mi" if pod_mem_req_mib else "0Mi (not set)"
-        cpu_lim_s = f"{pod_cpu_lim_m}m" if pod_cpu_lim_m else "0m (not set)"
-        mem_lim_s = f"{pod_mem_lim_mib:.0f}Mi" if pod_mem_lim_mib else "0Mi (not set)"
-        pod_lines.append(
-            f"  {pod.metadata.name}: "
-            f"cpu_req={cpu_req_s}  mem_req={mem_req_s}  "
-            f"cpu_lim={cpu_lim_s}  mem_lim={mem_lim_s}"
-        )
+        # Cleaned up the "not set" text so it fits nicely in a table column
+        cpu_req_s = f"{pod_cpu_req_m}m" if pod_cpu_req_m else "0m"
+        mem_req_s = f"{pod_mem_req_mib:.0f}Mi" if pod_mem_req_mib else "0Mi"
+        cpu_lim_s = f"{pod_cpu_lim_m}m" if pod_cpu_lim_m else "0m"
+        mem_lim_s = f"{pod_mem_lim_mib:.0f}Mi" if pod_mem_lim_mib else "0Mi"
+        
+        table_rows.append(f"| {pod.metadata.name} | {cpu_req_s} | {mem_req_s} | {cpu_lim_s} | {mem_lim_s} |")
 
     def _fmt_cpu(m: int) -> str:
         if m == 0:
-            return "0m — no CPU requests set on any pod"
+            return "0m"
         return f"{m}m ({m/1000:.3f} cores)"
 
     def _fmt_mem(mib: float) -> str:
         if mib == 0:
-            return "0Mi — no memory requests set on any pod"
+            return "0Mi"
         return f"{mib:.0f}Mi ({mib/1024:.2f}Gi)"
 
     lines_out = [
-        f"Resource summary for namespace '{namespace}' ({len(pods.items)} pods):",
-        f"",
-        f"  TOTAL CPU  requested : {_fmt_cpu(total_cpu_req_m)}",
-        f"  TOTAL CPU  limit     : {_fmt_cpu(total_cpu_lim_m)}",
-        f"  TOTAL MEM  requested : {_fmt_mem(total_mem_req_mib)}",
-        f"  TOTAL MEM  limit     : {_fmt_mem(total_mem_lim_mib)}",
-        f"",
-        f"Per-pod breakdown (cpu_req / mem_req / cpu_lim / mem_lim):",
-    ] + pod_lines
+        f"### Resource summary for namespace '{namespace}' ({len(pods.items)} pods)\n",
+        f"- **TOTAL CPU REQUESTED**: {_fmt_cpu(total_cpu_req_m)}",
+        f"- **TOTAL CPU LIMIT**: {_fmt_cpu(total_cpu_lim_m)}",
+        f"- **TOTAL MEMORY REQUESTED**: {_fmt_mem(total_mem_req_mib)}",
+        f"- **TOTAL MEMORY LIMIT**: {_fmt_mem(total_mem_lim_mib)}\n",
+        f"**Per-pod breakdown:**\n",
+        "| POD NAME | CPU REQ | MEM REQ | CPU LIM | MEM LIM |",
+        "|---|---|---|---|---|"
+    ] + table_rows
 
     return "\n".join(lines_out)
 
