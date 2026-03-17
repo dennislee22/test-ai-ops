@@ -2443,46 +2443,63 @@ def get_coredns_health() -> str:
     return "\n".join(lines)
 
 def get_service(namespace: str = "all", search: str = None) -> str:
+    """
+    List Kubernetes services in a table format.
+    - Optional namespace filter (`all` for all namespaces)
+    - Optional search keyword to filter service names
+    """
     try:
+        # Get services
         svcs = (_core.list_service_for_all_namespaces()
                 if namespace == "all"
                 else _core.list_namespaced_service(namespace=namespace))
-        
+
         if not svcs.items:
             return f"No services in '{namespace}'."
-        
-        filtered_svcs = []
+
+        # Filter services by search
+        table_rows = []
         for svc in svcs.items:
-            if search and search.lower() not in svc.metadata.name.lower():
+            svc_name = svc.metadata.name
+            if search and search.lower() not in svc_name.lower():
                 continue
-            filtered_svcs.append(svc)
-            
-        if not filtered_svcs:
-            search_term = f" matching '{search}'" if search else ""
-            return f"No services{search_term} found in '{namespace}'."
-
-        title = f"### Services in '{namespace}'"
-        if search:
-            title += f" (matching '{search}')"
-        lines = [title + "\n"]
-
-        if namespace == "all":
-            lines.extend(["| NAMESPACE | NAME | TYPE | PORTS | SELECTOR STATUS |", "|---|---|---|---|---|"])
-        else:
-            lines.extend(["| NAME | TYPE | PORTS | SELECTOR STATUS |", "|---|---|---|---|"])
-
-        for svc in filtered_svcs:
             stype    = svc.spec.type or "ClusterIP"
             ports    = ", ".join(f"{p.port}/{p.protocol}" for p in (svc.spec.ports or []))
             selector = svc.spec.selector or {}
             flag     = "✓ Present" if selector else "⚠ No selector"
-            
+            table_rows.append((svc.metadata.namespace, svc_name, stype, ports, flag))
+
+        # Fallback if search applied and no matches
+        if search and not table_rows:
+            for svc in svcs.items:
+                svc_name = svc.metadata.name
+                stype    = svc.spec.type or "ClusterIP"
+                ports    = ", ".join(f"{p.port}/{p.protocol}" for p in (svc.spec.ports or []))
+                selector = svc.spec.selector or {}
+                flag     = "✓ Present" if selector else "⚠ No selector"
+                table_rows.append((svc.metadata.namespace, svc_name, stype, ports, flag))
+            md_lines = [f"No matches for '{search}'. Showing all services:", ""]
+        elif not table_rows:
+            return f"No services found in '{namespace}'."
+        else:
+            md_lines = []
+
+        # Build Markdown table
+        if table_rows:
             if namespace == "all":
-                lines.append(f"| {svc.metadata.namespace} | {svc.metadata.name} | {stype} | {ports} | {flag} |")
+                md_lines.append("| NAMESPACE | NAME | TYPE | PORTS | SELECTOR STATUS |")
             else:
-                lines.append(f"| {svc.metadata.name} | {stype} | {ports} | {flag} |")
-                
-        return "\n".join(lines)
+                md_lines.append("| NAME | TYPE | PORTS | SELECTOR STATUS |")
+            md_lines.append("|---|---|---|---|---|")
+
+            for ns, name, stype, ports, flag in table_rows:
+                if namespace == "all":
+                    md_lines.append(f"| `{ns}` | `{name}` | {stype} | {ports} | {flag} |")
+                else:
+                    md_lines.append(f"| `{name}` | {stype} | {ports} | {flag} |")
+
+        return "\n".join(md_lines)
+
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
