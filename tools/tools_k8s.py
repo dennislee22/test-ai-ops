@@ -1373,7 +1373,7 @@ def get_hpa_status(namespace: str = "all") -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
- def get_pvc_status(namespace: str = "all", show_all: bool = False, phase_filter: str | None = None) -> str:
+def get_pvc_status(namespace: str = "all", show_all: bool = False, phase_filter: str | None = None) -> str:
     _AM = {"ReadWriteOnce": "RWO", "ReadWriteMany": "RWX"}
 
     def _access(pvc):
@@ -1405,36 +1405,23 @@ def get_hpa_status(namespace: str = "all") -> str:
 
             summary_counts[phase] = summary_counts.get(phase, 0) + 1
 
-            include = False
-            if phase_filter == "bound" and phase == "Bound":
-                include = True
-            elif phase_filter == "non-bound" and phase != "Bound":
-                include = True
-            elif phase_filter is None:
-                include = True
-
-            if include or show_all:
+            # Apply phase filter
+            if show_all or (phase_filter == "bound" and phase == "Bound") or (phase_filter == "non-bound" and phase != "Bound"):
                 detail_lines.append(
                     f"{ns}/{name}: {phase} | access:{am} | class:{sc} | capacity:{cap} | volume:{vol}"
                 )
 
+        # Details first
         lines = []
-
         if detail_lines:
-            if phase_filter == "bound":
-                lines.append("Bound PVCs:")
-            elif phase_filter == "non-bound":
-                lines.append("Non-bound PVCs:")
-            elif show_all:
-                lines.append("All PVCs:")
+            lines.append("Details:")
             lines.extend(detail_lines)
 
+        # Then summary
         lines.append(
             f"\nPVC summary for namespace '{namespace}': "
-            f"Total PVCs: {len(pvcs.items)} | "
-            f"Bound: {summary_counts.get('Bound',0)} | "
-            f"Pending: {summary_counts.get('Pending',0)} | "
-            f"Lost: {summary_counts.get('Lost',0)} | "
+            f"Total PVCs: {len(pvcs.items)} | Bound: {summary_counts.get('Bound',0)} | "
+            f"Pending: {summary_counts.get('Pending',0)} | Lost: {summary_counts.get('Lost',0)} | "
             f"Unknown: {summary_counts.get('Unknown',0)}"
         )
 
