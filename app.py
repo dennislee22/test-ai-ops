@@ -536,7 +536,6 @@ async def run_agent(user_message: str, skip_synthesise: bool = False) -> dict:
     config.logger.info(f"[REQ:{req_id}] done elapsed={elapsed:.1f}s tools={final.get('tool_calls_made', [])}\n[QUESTION] {user_message}\n[FINAL ANSWER]\n{_final_cleaned}\n[END FINAL ANSWER]")
     return {"response": _final_cleaned, "tools_used": final.get("tool_calls_made", []), "iterations": final.get("iteration", 0), "status_updates": updates, "elapsed_seconds": round(elapsed, 1), "clarification_needed": False}
 
-#async def run_agent_streaming(user_message: str, history: list = None, max_new_tokens: int = 0):
 async def run_agent_streaming(user_message: str, history: list = None, max_new_tokens: int = 0, skip_synthesise: bool = False):
     def _sse(payload: dict) -> str: return f"data: {json.dumps(payload)}\n\n"
     import uuid, asyncio
@@ -614,6 +613,7 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
                     tool_texts = [m.content for m in output.get("messages", []) if hasattr(m, "content") and m.content]
                     if tool_texts:
                         last_tool_content = "\n\n---\n\n".join(tool_texts)
+                        yield _sse({"type": "tool_chars", "chars": len(last_tool_content)})
 
                 if name == "llm":
                     has_tool_calls = any(getattr(m, "tool_calls", None) for m in output.get("messages", []))
