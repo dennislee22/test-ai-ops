@@ -730,24 +730,26 @@ def get_storage_classes() -> str:
         scs = _storage.list_storage_class()
         if not scs.items:
             return "No StorageClasses found in the cluster."
-
-        lines = [
-            "Name\tProvisioner\tReclaimPolicy\tVolumeExpansion"
-        ]
+        
+        lines = ["### StorageClasses\n"]
+        lines.extend(["| NAME | PROVISIONER | RECLAIM POLICY | EXPANSION | DEFAULT |", "|---|---|---|---|---|"])
 
         for sc in scs.items:
             name = sc.metadata.name
             provisioner = getattr(sc, "provisioner", "unknown")
-            reclaim = getattr(sc, "reclaim_policy", "unknown")
+            reclaim = getattr(sc, "reclaim_policy", "Delete") # Delete is the K8s default
             allow_expand = getattr(sc, "allow_volume_expansion", False)
-            expand_str = "Yes" if allow_expand else "No"
+            expand_str = "✓ Yes" if allow_expand else "No"
+            
+            # Check for the default-class annotation
+            annotations = sc.metadata.annotations or {}
+            is_default = annotations.get("storageclass.kubernetes.io/is-default-class") == "true"
+            default_str = "★ Yes" if is_default else ""
 
             lines.append(
-                f"{name}\t{provisioner}\t{reclaim}\t{expand_str}"
+                f"| {name} | {provisioner} | {reclaim} | {expand_str} | {default_str} |"
             )
-
         return "\n".join(lines)
-
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
