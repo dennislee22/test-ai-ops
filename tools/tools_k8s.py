@@ -1152,7 +1152,7 @@ def find_resource(name_substring: str, resource_type: str = None, namespace: str
             resources.append(("Service", svcs, lambda s: f"{s.spec.type} {s.spec.cluster_ip}"))
 
         if not resource_type or resource_type == "ingress":
-            ingresses = _networking.list_namespaced_ingress(namespace).items if namespace else _networking.list_ingress_for_all_namespaces().items
+            ingresses = _net.list_namespaced_ingress(namespace).items if namespace else _net.list_ingress_for_all_namespaces().items
             resources.append(("Ingress", ingresses, lambda i: ", ".join([h.host for h in i.spec.rules or []])))
 
         if not resource_type or resource_type == "pvc":
