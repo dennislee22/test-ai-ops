@@ -609,20 +609,28 @@ button{cursor:pointer;font-family:inherit}
   animation:inferPulse 2s ease-in-out infinite;
 }
 
-/* Shiny Gold Toggle */
+/* Shiny Gold Toggle - Inactive (Off) is Light Gold */
 .gold-toggle-track {
-  position: absolute; inset: 0; background: var(--border);
+  position: absolute; inset: 0; 
+  /* Light gold gradient */
+  background: linear-gradient(135deg, #FDE047 0%, #D4AF37 100%);
   border-radius: 20px; transition: all 0.25s ease;
+  box-shadow: inset 0 0 2px rgba(255,255,255,0.4), 0 0 4px rgba(212, 175, 55, 0.3);
 }
+
 .gold-toggle-thumb {
   position: absolute; left: 2px; top: 2px; width: 16px; height: 16px;
   background: #fff; border-radius: 50%; transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   box-shadow: 0 1px 3px rgba(0,0,0,0.5);
 }
+
+/* Shiny Gold Toggle - Active (On) is Dark Gold */
 #skip-synth-toggle:checked ~ .gold-toggle-track {
-  background: linear-gradient(135deg, #FDE047 0%, #F59E0B 100%);
-  box-shadow: inset 0 0 2px rgba(255,255,255,0.5), 0 0 6px rgba(245, 158, 11, 0.4);
+  /* Dark gold gradient */
+  background: linear-gradient(135deg, #D4AF37 0%, #8B6508 100%);
+  box-shadow: inset 0 0 2px rgba(255,255,255,0.3), 0 0 6px rgba(139, 101, 8, 0.6);
 }
+
 #skip-synth-toggle:checked ~ .gold-toggle-thumb {
   transform: translateX(16px);
 }
