@@ -8,7 +8,7 @@ from tools.tools_k8s import (
     get_service_accounts, get_cluster_role_bindings, get_namespace_status,
     get_pod_tolerations, get_pod_resource_requests, run_cluster_health, get_replicaset,
     get_namespace_resource_summary, get_pod_images, get_unhealthy_pods_detail,
-    get_coredns_health, get_pv_usage, get_node_resource_requests, find_resource,
+    get_coredns_health, get_pv_usage, find_resource,
     query_prometheus_metrics, kubectl_exec, exec_db_query, get_pod_storage,
 )
 
@@ -676,18 +676,18 @@ K8S_TOOL_METADATA: dict = {
         },
     },
 
-    "get_node_resource_requests": {
-        "fn":          get_node_resource_requests,
-        "description": (
-            "Aggregate CPU and memory REQUESTS and LIMITS per node. "
-            "Shows scheduling/allocation data — what pods have reserved on each node — NOT real-time usage. "
-            "Use for questions like: 'what is requested per node', 'how much CPU/memory is allocated per node', "
-            "'which node is most heavily scheduled', 'node capacity vs requests', 'node pressure', "
-            "'how many pods per node', or 'node resource utilisation'. "
-            "Do NOT use this tool for actual CPU/memory consumption, load, trends, or node health. "
-        ),
-        "parameters": {},
-    },
+   # "get_node_resource_requests": {
+   #     "fn":          get_node_resource_requests,
+   #     "description": (
+   #         "Aggregate CPU and memory REQUESTS and LIMITS per node. "
+   #         "Shows scheduling/allocation data — what pods have reserved on each node — NOT real-time usage. "
+   #         "Use for questions like: 'what is requested per node', 'how much CPU/memory is allocated per node', "
+   #         "'which node is most heavily scheduled', 'node capacity vs requests', 'node pressure', "
+   #         "'how many pods per node', or 'node resource utilisation'. "
+   #         "Do NOT use this tool for actual CPU/memory consumption, load, trends, or node health. "
+   #     ),
+   #     "parameters": {},
+    #},
 
     "query_prometheus_metrics": {
         "fn":          query_prometheus_metrics,

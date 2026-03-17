@@ -818,12 +818,10 @@ def get_node_capacity() -> str:
 
         lines = ["### Node Capacity Overview\n"]
 
-        # Header rows - Updated to RAM
-        header1 = ["Node", "CPU", "", "", "RAM (Gi)", "", "", "GPU"]
-        header2 = ["", "Allocated", "Request", "Available", "Allocated", "Request", "Available", ""]
-        lines.append("| " + " | ".join(header1) + " |")
-        lines.append("| " + " | ".join(header2) + " |")
-        lines.append("|" + "|".join(["---"] * len(header1)) + "|")
+        # Flattened into a single header row for valid Markdown
+        headers = ["NODE", "CPU ALLOC", "CPU REQ", "CPU AVAIL", "RAM ALLOC (Gi)", "RAM REQ (Gi)", "RAM AVAIL (Gi)", "GPU"]
+        lines.append("| " + " | ".join(headers) + " |")
+        lines.append("|" + "|".join(["---"] * len(headers)) + "|")
 
         for node in sorted(nodes.items, key=lambda n: n.metadata.name):
             alloc = node.status.allocatable or {}
@@ -1370,21 +1368,34 @@ def get_daemonset(namespace: str = "all") -> str:
         return f"K8s API error: {e.reason}"
     
 
-def get_replicaset(namespace: str = "all") -> str:
+def get_replicaset(namespace: str = "all", search: str = None) -> str:
     try:
         rs = (_apps.list_replica_set_for_all_namespaces()
               if namespace == "all"
               else _apps.list_namespaced_replica_set(namespace=namespace))
+        
         if not rs.items:
             return f"No ReplicaSets in '{namespace}'."
-        
-        lines = [f"### ReplicaSets in '{namespace}'\n"]
-        if namespace == "all":
-            lines.extend(["| NAMESPACE | NAME | STATUS | DESIRED | READY | AVAILABLE |", "|---|---|---|---|---|---|"])
-        else:
-            lines.extend(["| NAME | STATUS | DESIRED | READY | AVAILABLE |", "|---|---|---|---|---|"])
-
+            
+        filtered_rs = []
         for r in rs.items:
+            if search and search.lower() not in r.metadata.name.lower():
+                continue
+            filtered_rs.append(r)
+            
+        if not filtered_rs:
+            search_term = f" matching '{search}'" if search else ""
+            return f"No ReplicaSets{search_term} found in '{namespace}'."
+        
+        title = f"### ReplicaSets in '{namespace}'"
+        if search:
+            title += f" (matching '{search}')"
+        lines = [title + "\n"]
+
+        # Always include NAMESPACE column for consistency
+        lines.extend(["| NAMESPACE | NAME | STATUS | DESIRED | READY | AVAILABLE |", "|---|---|---|---|---|---|"])
+
+        for r in filtered_rs:
             desired   = r.status.replicas or 0
             ready     = r.status.ready_replicas or 0
             available = r.status.available_replicas or 0
@@ -1394,43 +1405,50 @@ def get_replicaset(namespace: str = "all") -> str:
             else:
                 status = "✓ Healthy" if ready == desired else "⚠ Degraded"
 
-            if namespace == "all":
-                lines.append(f"| {r.metadata.namespace} | {r.metadata.name} | {status} | {desired} | {ready} | {available} |")
-            else:
-                lines.append(f"| {r.metadata.name} | {status} | {desired} | {ready} | {available} |")
+            lines.append(f"| {r.metadata.namespace} | {r.metadata.name} | {status} | {desired} | {ready} | {available} |")
                 
         return "\n".join(lines)
     except Exception as e:
         return f"Unexpected error: {str(e)}"
 
-
-def get_statefulset(namespace: str = "all") -> str:
+def get_statefulset(namespace: str = "all", search: str = None) -> str:
     try:
         sts = (_apps.list_stateful_set_for_all_namespaces()
                if namespace == "all"
                else _apps.list_namespaced_stateful_set(namespace=namespace))
+               
         if not sts.items:
             return f"No StatefulSets in '{namespace}'."
-        
-        lines = [f"### StatefulSets in '{namespace}'\n"]
-        if namespace == "all":
-            lines.extend(["| NAMESPACE | NAME | STATUS | DESIRED | READY |", "|---|---|---|---|---|"])
-        else:
-            lines.extend(["| NAME | STATUS | DESIRED | READY |", "|---|---|---|---|"])
-
+            
+        filtered_sts = []
         for s in sts.items:
-            desired = s.spec.replicas or 0
-            ready   = s.status.ready_replicas or 0
+            if search and search.lower() not in s.metadata.name.lower():
+                continue
+            filtered_sts.append(s)
+            
+        if not filtered_sts:
+            search_term = f" matching '{search}'" if search else ""
+            return f"No StatefulSets{search_term} found in '{namespace}'."
+
+        title = f"### StatefulSets in '{namespace}'"
+        if search:
+            title += f" (matching '{search}')"
+        lines = [title + "\n"]
+
+        # Always include NAMESPACE and AVAILABLE columns for consistency
+        lines.extend(["| NAMESPACE | NAME | STATUS | DESIRED | READY | AVAILABLE |", "|---|---|---|---|---|---|"])
+
+        for s in filtered_sts:
+            desired   = s.spec.replicas or 0
+            ready     = s.status.ready_replicas or 0
+            available = getattr(s.status, 'available_replicas', None) or 0
             
             if desired == 0 and ready == 0:
                 status = "✓ Scaled to 0"
             else:
                 status = "✓ Healthy" if ready == desired else "⚠ Degraded"
 
-            if namespace == "all":
-                lines.append(f"| {s.metadata.namespace} | {s.metadata.name} | {status} | {desired} | {ready} |")
-            else:
-                lines.append(f"| {s.metadata.name} | {status} | {desired} | {ready} |")
+            lines.append(f"| {s.metadata.namespace} | {s.metadata.name} | {status} | {desired} | {ready} | {available} |")
                 
         return "\n".join(lines)
     except ApiException as e:
