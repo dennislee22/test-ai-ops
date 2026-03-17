@@ -132,7 +132,8 @@ def _build_llm_gguf():
     except ImportError: raise ImportError("llama-cpp-python is required for GGUF models.")
 
     model_path = config.LLM_MODEL
-    n_ctx      = int(os.environ.get("GGUF_N_CTX", "8192"))
+    #n_ctx      = int(os.environ.get("GGUF_N_CTX", "8192"))
+    n_ctx      = int(os.environ.get("GGUF_N_CTX", "16384"))
     n_threads  = int(os.environ.get("GGUF_N_THREADS", str(os.cpu_count() or 4)))
 
     _log_ag.info(f"[LLM/GGUF] Loading {model_path} | ctx={n_ctx} threads={n_threads}")
