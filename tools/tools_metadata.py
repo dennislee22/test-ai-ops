@@ -174,13 +174,12 @@ K8S_TOOL_METADATA: dict = {
     "get_gpu_info": {
         "fn":          get_gpu_info,
         "description": (
-            "Show GPU hardware details detected on Kubernetes nodes. "
-            "Returns GPU model, memory size, GPU count, driver version, and node capacity "
-            "based on node labels such as nvidia.com/gpu.product and GPU capacity fields. "
-            "Use for questions like: 'what GPU model is in the cluster', "
-            "'which nodes have GPUs', 'how many GPUs are available', "
-            "'GPU memory per node', or 'GPU hardware details'. "
-            "Do NOT use for node health or GPU usage — use get_node_health instead."
+            "List nodes with GPU hardware and their technical specifications. "
+            "Returns a Markdown table showing GPU product name, total count, memory per card, "
+            "and current allocatable capacity (from the device plugin). "
+            "Use this to answer: 'what kind of GPUs do we have', 'is the GPU driver working', "
+            "or 'how much VRAM is on ecs-w-03'. "
+            "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
         ),
         "parameters":  {},
     },
