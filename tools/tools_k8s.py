@@ -419,12 +419,17 @@ def get_pod_status(namespace: str = "all", show_all: bool = False, raw_output: b
 
         total = len(pods.items)
 
+        # Updated block: Generates a Markdown Table when raw_output is True
         if raw_output:
             if namespace == "all":
-                hdr = f"{'NAMESPACE':<22} {'NAME':<55} {'READY':<7} {'STATUS':<12} {'RESTARTS':<10} {'AGE'}"
+                hdr = "| NAMESPACE | NAME | READY | STATUS | RESTARTS | AGE |"
+                sep = "|---|---|---|---|---|---|"
             else:
-                hdr = f"{'NAME':<55} {'READY':<7} {'STATUS':<12} {'RESTARTS':<10} {'AGE'}"
-            rows = [hdr, "-" * len(hdr)]
+                hdr = "| NAME | READY | STATUS | RESTARTS | AGE |"
+                sep = "|---|---|---|---|---|"
+            
+            rows = [hdr, sep]
+            
             import datetime as dt
             from datetime import timezone
             for pod in sorted(pods.items, key=lambda p: (p.metadata.namespace, p.metadata.name)):
@@ -440,14 +445,13 @@ def get_pod_status(namespace: str = "all", show_all: bool = False, raw_output: b
                     else:               age_str = f"{age_s//86400}d"
                 else:
                     age_str = "<unknown>"
+                
                 if namespace == "all":
-                    rows.append(
-                        f"{pod.metadata.namespace:<22} {pod.metadata.name:<55} "
-                        f"{ready}/{tot:<5} {phase:<12} {restarts:<10} {age_str}")
+                    rows.append(f"| {pod.metadata.namespace} | {pod.metadata.name} | {ready}/{tot} | {phase} | {restarts} | {age_str} |")
                 else:
-                    rows.append(
-                        f"{pod.metadata.name:<55} {ready}/{tot:<5} {phase:<12} {restarts:<10} {age_str}")
-            rows.append(f"\nTotal: {total} pod(s) in namespace '{namespace}'.")
+                    rows.append(f"| {pod.metadata.name} | {ready}/{tot} | {phase} | {restarts} | {age_str} |")
+            
+            rows.append(f"\n**Total: {total} pod(s) in namespace '{namespace}'.**")
             return "\n".join(rows)
 
         lines = [f"Pods in '{namespace}': {total} total."]
@@ -466,7 +470,7 @@ def get_pod_status(namespace: str = "all", show_all: bool = False, raw_output: b
 
     except ApiException as e:
         return f"K8s API error: {e.reason}"
-
+    
 def get_pod_logs(pod_name: str, namespace: str = "default",
                  tail_lines: int = 50, container: str = "") -> str:
     tail_lines = min(tail_lines, 100)
