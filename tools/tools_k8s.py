@@ -885,20 +885,23 @@ def get_node_labels(search: str = None) -> str:
             labels = node.metadata.labels or {}
             node_name = node.metadata.name
 
-            # Build label lines
             label_lines = [f"- {k}={v}" for k, v in labels.items()] or ["- <none>"]
 
             if search:
-                # Keep only labels that match the search
-                filtered = [l for l in label_lines if search.lower() in l.lower()]
-                if filtered:
+                search_lower = search.lower()  
+                if search_lower in node_name.lower():
+                    pass 
+                else:
+                    filtered = [l for l in label_lines if search_lower in l.lower()]
+                    if not filtered:
+                        continue 
                     label_lines = filtered
-                # else fallback: keep all labels
 
             results.append(f"**{node_name}:**\n" + "\n".join(label_lines) + "\n")
 
+        if not results:
+            return f"No nodes or labels found matching '{search}'."
         return "\n".join(results).rstrip()
-
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
@@ -952,7 +955,7 @@ def get_node_taints(search: str = None) -> str:
         return f"K8s API error: {e.reason}"
     
 def get_node_resource_requests() -> str:
-    """Aggregate CPU/memory requests and limits per node from all running pods, in a Markdown table."""
+    """Aggregate CPU/memory requests and limits per node from all running pods, in a Markdown table (RAM in GiB)."""
     def _parse_cpu(s: str) -> float:
         """Return millicores as float."""
         s = s.strip()
@@ -964,18 +967,17 @@ def get_node_resource_requests() -> str:
             return 0.0
 
     def _parse_mem(s: str) -> float:
-        """Return MiB as float."""
+        """Return GiB as float."""
         s = s.strip()
-        for suffix, factor in [("Ti", 1024*1024), ("Gi", 1024), ("Mi", 1),
-                               ("Ki", 1/1024), ("T", 1000*1024), ("G", 1000),
-                               ("M", 1), ("K", 1/1024)]:
+        for suffix, factor in [("Ti", 1024), ("Gi", 1), ("Mi", 1/1024),
+                               ("Ki", 1/(1024*1024)), ("T", 1000), ("G", 1), ("M", 1/1024), ("K", 1/(1024*1024))]:
             if s.endswith(suffix):
                 try:
                     return float(s[:-len(suffix)]) * factor
                 except ValueError:
                     return 0.0
         try:
-            return float(s) / (1024 * 1024)
+            return float(s) / (1024**3)  # fallback: bytes → GiB
         except ValueError:
             return 0.0
 
@@ -990,9 +992,9 @@ def get_node_resource_requests() -> str:
         alloc = node.status.allocatable or {}
         node_alloc[node.metadata.name] = {
             "cpu_alloc_m":  _parse_cpu(alloc.get("cpu", "0")),
-            "mem_alloc_mi": _parse_mem(alloc.get("memory", "0")),
+            "mem_alloc_gi": _parse_mem(alloc.get("memory", "0")),
             "cpu_req_m": 0.0, "cpu_lim_m": 0.0,
-            "mem_req_mi": 0.0, "mem_lim_mi": 0.0,
+            "mem_req_gi": 0.0, "mem_lim_gi": 0.0,
             "pod_count": 0,
         }
 
@@ -1009,8 +1011,8 @@ def get_node_resource_requests() -> str:
             lim = res.limits   or {}
             node_alloc[node_name]["cpu_req_m"]  += _parse_cpu(req.get("cpu", "0"))
             node_alloc[node_name]["cpu_lim_m"]  += _parse_cpu(lim.get("cpu", "0"))
-            node_alloc[node_name]["mem_req_mi"] += _parse_mem(req.get("memory", "0"))
-            node_alloc[node_name]["mem_lim_mi"] += _parse_mem(lim.get("memory", "0"))
+            node_alloc[node_name]["mem_req_gi"] += _parse_mem(req.get("memory", "0"))
+            node_alloc[node_name]["mem_lim_gi"] += _parse_mem(lim.get("memory", "0"))
 
     # Build Markdown table
     lines = ["### Node Resource Requests and Limits", ""]
@@ -1023,19 +1025,19 @@ def get_node_resource_requests() -> str:
         if not d:
             continue
         cpu_a  = d["cpu_alloc_m"]
-        mem_a  = d["mem_alloc_mi"]
+        mem_a  = d["mem_alloc_gi"]
         cpu_free  = max(0, cpu_a - d["cpu_req_m"])
-        mem_free  = max(0, mem_a - d["mem_req_mi"])
+        mem_free  = max(0, mem_a - d["mem_req_gi"])
         cpu_rp = round(d["cpu_req_m"]  / cpu_a  * 100, 1) if cpu_a  else 0
         cpu_lp = round(d["cpu_lim_m"]  / cpu_a  * 100, 1) if cpu_a  else 0
         cpu_fp = round(cpu_free / cpu_a * 100, 1) if cpu_a else 0
-        mem_rp = round(d["mem_req_mi"] / mem_a  * 100, 1) if mem_a  else 0
-        mem_lp = round(d["mem_lim_mi"] / mem_a  * 100, 1) if mem_a  else 0
+        mem_rp = round(d["mem_req_gi"] / mem_a  * 100, 1) if mem_a  else 0
+        mem_lp = round(d["mem_lim_gi"] / mem_a  * 100, 1) if mem_a  else 0
         mem_fp = round(mem_free / mem_a * 100, 1) if mem_a else 0
 
         lines.append(
             f"| {name} | {d['pod_count']} | {d['cpu_req_m']:.0f}m ({cpu_rp}%) | {d['cpu_lim_m']:.0f}m ({cpu_lp}%) | {cpu_a:.0f}m | {cpu_free:.0f}m ({cpu_fp}%) "
-            f"| {d['mem_req_mi']:.0f}Mi ({mem_rp}%) | {d['mem_lim_mi']:.0f}Mi ({mem_lp}%) | {mem_a:.0f}Mi | {mem_free:.0f}Mi ({mem_fp}%) |"
+            f"| {d['mem_req_gi']:.2f}Gi ({mem_rp}%) | {d['mem_lim_gi']:.2f}Gi ({mem_lp}%) | {mem_a:.2f}Gi | {mem_free:.2f}Gi ({mem_fp}%) |"
         )
 
     return "\n".join(lines)
