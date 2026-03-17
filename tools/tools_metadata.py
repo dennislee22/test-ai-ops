@@ -401,14 +401,11 @@ K8S_TOOL_METADATA: dict = {
     },
 
     "get_service_accounts": {
-        "fn":          get_service_accounts,
-        "description": (
-            "List ServiceAccounts in a namespace. "
-            "Use for: auditing which service accounts exist, checking whether a workload's "
-            "expected service account is present, RBAC troubleshooting, or verifying that "
-            "a service account referenced by a pod spec actually exists in the namespace."
-        ),
-        "parameters":  {"namespace": {"type": "string", "default": "default", "description": "Namespace to query. Defaults to 'default' — only override when the user explicitly names a namespace."}},
+        "fn":          find_service_account,
+        "description": "List Kubernetes ServiceAccounts, optionally filtered by namespace. Shows all namespaces if none specified, and always includes default ServiceAccounts. Falls back to all namespaces if the specified namespace is empty or does not exist.",
+        "parameters":  {
+            "namespace": {"type": "string", "default": None, "description": "Optional namespace to filter ServiceAccounts. Defaults to all namespaces — if the namespace is empty or missing, shows all ServiceAccounts in other namespaces."},
+        },
     },
     
     "get_cluster_role_bindings": {

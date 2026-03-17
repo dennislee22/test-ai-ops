@@ -5,7 +5,6 @@ import logging
 import json as _json
 import yaml as _yaml
 from pathlib import Path
-
 from kubernetes import client as _k8s, config as _k8s_cfg
 from kubernetes.client.rest import ApiException
 
@@ -2534,18 +2533,29 @@ def get_limit_ranges(namespace: str = "all") -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_service_accounts(namespace: str = "default") -> str:
+def get_service_accounts(namespace: str = None) -> str:
     try:
-        sas = _core.list_namespaced_service_account(namespace=namespace)
-        if not sas.items:
-            return f"No ServiceAccounts in '{namespace}'."
-        lines = [f"ServiceAccounts in '{namespace}':"]
-        for sa in sas.items:
-            secrets = len(sa.secrets or [])
-            lines.append(f"  {sa.metadata.name}: secrets={secrets}")
-        return "\n".join(lines)
-    except ApiException as e:
-        return f"K8s API error: {e.reason}"
+        lines = ["Namespace\tName"]
+        results = []
+
+        if namespace:
+            sa_list = _core.list_namespaced_service_account(namespace).items
+            if not sa_list:
+                # fallback: namespace empty or missing, list all namespaces
+                sa_list = _core.list_service_account_for_all_namespaces().items
+        else:
+            sa_list = _core.list_service_account_for_all_namespaces().items
+
+        if not sa_list:
+            return "No ServiceAccounts found in any namespace."
+
+        for sa in sa_list:
+            results.append(f"{sa.metadata.namespace}\t{sa.metadata.name}")
+
+        return "\n".join(lines + results)
+
+    except Exception as e:
+        return f"Unexpected error: {str(e)}"
 
 def get_cluster_role_bindings() -> str:
     try:
@@ -3520,13 +3530,6 @@ def _handle_version() -> str:
         )
     except ApiException as e:
         return f"[ERROR] version: {e.reason}"
-
-import json
-import re
-import shlex
-import logging
-from kubernetes import client, config
-from kubernetes.client.rest import ApiException
 
 logging.basicConfig(level=logging.INFO)
 _log = logging.getLogger(__name__)
