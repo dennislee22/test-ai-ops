@@ -8,6 +8,7 @@
 <title>ECS AI Ops</title>
 <link rel="icon" type="image/svg+xml" href="/static/k8s-logo.svg"/>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<script src="/static/marked.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden}
@@ -444,7 +445,7 @@ button{cursor:pointer;font-family:inherit}
   background:var(--msgBg);border:1px solid var(--border);
   border-radius:2px 14px 14px 14px;padding:13px 17px;
   font-size:14px;color:var(--bodyText);line-height:1.75;
-  white-space:pre-wrap;word-break:break-word;
+  word-break:break-word;
 }
 .ai-bubble.clarification{
   border-color:var(--accent)66;
@@ -452,6 +453,27 @@ button{cursor:pointer;font-family:inherit}
   color:var(--accent2);
   font-style:italic;
 }
+/* Add spacing for generated paragraphs */
+.ai-bubble p { margin-bottom: 12px; }
+.ai-bubble p:last-child { margin-bottom: 0; }
+
+/* Add styles for generated markdown tables */
+.ai-bubble table {
+  border-collapse: collapse; font-size: 12.5px;
+  font-family: 'IBM Plex Mono', monospace;
+  margin: 10px 0 18px; width: 100%;
+}
+.ai-bubble th {
+  background: var(--inputBg); color: var(--panelLabel);
+  font-weight: 700; padding: 7px 12px;
+  border: 1px solid var(--border); text-align: left;
+  letter-spacing: .04em;
+}
+.ai-bubble td {
+  padding: 6px 12px; border: 1px solid var(--border);
+  color: var(--bodyText); vertical-align: top;
+}
+.ai-bubble tr:nth-child(even) td { background: var(--headerBg)55; }
 .ai-meta-row{display:flex;align-items:center;justify-content:space-between;margin-top:5px}
 .ai-elapsed{font-size:10px;color:var(--dimText);font-family:'IBM Plex Mono',monospace}
 .ai-copy-row{display:flex;justify-content:flex-end}
@@ -2247,7 +2269,7 @@ function appendAi(text, tools, iters, elapsed, statusUpdates, isClarification){
     +'<path d="M18 3a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-4.724l-4.762 2.857a1 1 0 0 1 -1.508 -.743l-.006 -.114v-2h-1a4 4 0 0 1 -3.995 -3.8l-.005 -.2v-8a4 4 0 0 1 4 -4zm-2.8 9.286a1 1 0 0 0 -1.414 .014a2.5 2.5 0 0 1 -3.572 0a1 1 0 0 0 -1.428 1.4a4.5 4.5 0 0 0 6.428 0a1 1 0 0 0 -.014 -1.414m-5.69 -4.286h-.01a1 1 0 1 0 0 2h.01a1 1 0 0 0 0 -2m5 0h-.01a1 1 0 0 0 0 2h.01a1 1 0 0 0 0 -2"/>'
     +'</svg></div>'
     +'<div class="ai-body">'
-    +'<div class="'+bubbleCls+'">'+esc(clean)+'</div>'
+    +'<div class="'+bubbleCls+'">'+marked.parse(clean)+'</div>'
     +toolRow
     +cmdLog
     +'<div class="ai-meta-row">'
