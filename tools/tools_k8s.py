@@ -2647,7 +2647,7 @@ def get_ingress(namespace: str = "all", name: str = "", port: int = 0) -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_configmap_list(namespace: str = "default", filter_keys: list = None) -> str:
+def get_configmap_list(namespace: str = "all", filter_keys: list = None) -> str:
     _CERT_KEY_HINTS = {"ca.crt", "tls.crt", "tls.key", "ca-bundle", "ca-certificates",
                        "ca.pem", "cert.pem", "certificate", "ssl.crt", "ssl.key"}
     try:
@@ -2689,7 +2689,7 @@ def get_configmap_list(namespace: str = "default", filter_keys: list = None) -> 
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_secrets(namespace: str = "default", name: str = "",
+def get_secrets(namespace: str = "all", name: str = "",
                 decode: bool = False, filter_keys: list = None) -> str:
     import base64 as _b64
 
