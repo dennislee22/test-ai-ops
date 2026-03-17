@@ -32,7 +32,8 @@ logger = config.logger
 # ── 1. SCHEMAS ───────────────────────────────────────────────────────────────
 
 class HistoryMessage(BaseModel): role: str; content: str
-class ChatRequest(BaseModel): message: str; decode_secrets: bool = False; history: list[HistoryMessage] = []; max_new_tokens: int = 0
+#class ChatRequest(BaseModel): message: str; decode_secrets: bool = False; history: list[HistoryMessage] = []; max_new_tokens: int = 0
+class ChatRequest(BaseModel): message: str; decode_secrets: bool = False; history: list[HistoryMessage] = []; max_new_tokens: int = 0; skip_synthesise: bool = False
 class ChatResponse(BaseModel): response: str; tools_used: list; iterations: int; status_updates: list; elapsed_seconds: float
 class AskRequest(BaseModel): q: str
 class KbAskRequest(BaseModel): q: str; top_k: int = 50; max_tokens: int = 1312; sheet: Optional[str] = None
@@ -100,6 +101,7 @@ class AgentState(TypedDict):
     status_updates: list
     direct_answer: Optional[str]
     req_id: str
+    skip_synthesise: bool
 
 def _build_llm():
     _log_ag.info(f"[LLM] Loading model: {config.LLM_MODEL}")
@@ -427,6 +429,7 @@ def build_agent():
 
         # --- INTERCEPTOR: FORCE THE NAMESPACE ---
         forced_ns = _extract_namespace(user_q)
+        forced_skip = state.get("skip_synthesise", False)
 
         for tc in tcs:
             name, args = tc["name"], dict(tc.get("args", {}) or {})
@@ -450,9 +453,22 @@ def build_agent():
             if name == "rag_search" and isinstance(out, str) and out.startswith("KB_EMPTY:"):
                 updates.append("⚠️ Knowledge base is empty")
                 direct_answer = "⚠️ " + _MSG_NO_INGEST + "\n\nUse the ⚙ Settings → RAG Documents panel to upload."
+            elif forced_skip:
+                pass # Delaying to handle combined tools below
             elif len(tcs) == 1 and should_bypass_llm(name, args, out, user_q, req_id=state.get("req_id", "")):
                 updates.append("⚡ Direct output (LLM synthesis skipped)")
                 direct_answer = build_direct_answer(name, out, user_q, req_id=state.get("req_id", ""))
+                
+        # --- SKIP SYNTHESISE OVERRIDE LOGIC ---
+        if forced_skip and direct_answer is None and results:
+            updates.append("⚡ Skip Synthesise toggled: LLM synthesis bypassed")
+            config.logger.info(f"[REQ:{state.get('req_id', '')}] [tool_node] Skip Synthesise is ON. Overriding normal sequence: bypassing LLM synthesis and formatting raw output.")
+            
+            parts = []
+            for r in results:
+                parts.append(f"**Raw output for `{r.name}`**:\n```text\n{r.content}\n```")
+            direct_answer = "\n\n".join(parts)
+
         return {"messages": results, "tool_calls_made": tools_called, "iteration": state.get("iteration", 0), "status_updates": updates, "direct_answer": direct_answer}
 
     def router(state: AgentState) -> Literal["tools", "end"]:
@@ -519,7 +535,8 @@ async def run_agent(user_message: str) -> dict:
     
     return {"response": _final_cleaned, "tools_used": final.get("tool_calls_made", []), "iterations": final.get("iteration", 0), "status_updates": updates, "elapsed_seconds": round(elapsed, 1), "clarification_needed": False}
 
-async def run_agent_streaming(user_message: str, history: list = None, max_new_tokens: int = 0):
+#async def run_agent_streaming(user_message: str, history: list = None, max_new_tokens: int = 0):
+async def run_agent_streaming(user_message: str, history: list = None, max_new_tokens: int = 0, skip_synthesise: bool = False):
     def _sse(payload: dict) -> str: return f"data: {json.dumps(payload)}\n\n"
     import uuid, asyncio
     req_id, t0 = uuid.uuid4().hex[:8], time.time()
@@ -554,8 +571,13 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
         history_msgs = [HumanMessage(content=t.content) if t.role == "user" else _AIMessage(content=t.content) for t in (history or [])]
         all_messages = history_msgs + [HumanMessage(content=user_message)]
 
+        #async for event in _runnable_agent.astream_events(
+        #    {"messages": all_messages, "tool_calls_made": [], "iteration": 0, "status_updates": [], "req_id": req_id}, 
+        #    version="v2", 
+        #    config={"recursion_limit": 12}
+        #):
         async for event in _runnable_agent.astream_events(
-            {"messages": all_messages, "tool_calls_made": [], "iteration": 0, "status_updates": [], "req_id": req_id}, 
+            {"messages": all_messages, "tool_calls_made": [], "iteration": 0, "status_updates": [], "req_id": req_id, "skip_synthesise": skip_synthesise}, 
             version="v2", 
             config={"recursion_limit": 12}
         ):
@@ -821,7 +843,8 @@ async def chat_stream(req: ChatRequest):
         queue, _SENTINEL = asyncio.Queue(), object()
         async def _producer():
             try:
-                async for chunk in run_agent_streaming(req.message, req.history, req.max_new_tokens): await queue.put(chunk)
+                #async for chunk in run_agent_streaming(req.message, req.history, req.max_new_tokens): await queue.put(chunk)
+                async for chunk in run_agent_streaming(req.message, req.history, req.max_new_tokens, req.skip_synthesise): await queue.put(chunk)
             finally: await queue.put(_SENTINEL)
         task = asyncio.ensure_future(_producer())
         try:

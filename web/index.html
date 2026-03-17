@@ -735,14 +735,21 @@ button{cursor:pointer;font-family:inherit}
       <!-- ── Chat pane ─────────────────────────────────────────────────── -->
       <div id="chat-pane">
         <div id="chat-token-row">
-          <div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;font-family:'IBM Plex Mono',monospace">
-            <label style="font-size:11px;color:var(--dimText);white-space:nowrap">
-              Max output tokens: <strong id="chat-max-tokens-val" style="color:var(--accent2)">4096</strong>
+          <div style="display:flex;align-items:center;justify-content:space-between;font-family:'IBM Plex Mono',monospace">
+            <label style="font-size:11px;color:var(--dimText);white-space:nowrap;display:flex;align-items:center;gap:6px;cursor:pointer">
+              <input type="checkbox" id="skip-synth-toggle" style="accent-color:var(--accent);cursor:pointer"/>
+              <span title="Skip LLM synthesis and show raw tool output directly">Skip Synthesise</span>
             </label>
-            <input type="range" id="chat-max-tokens-slider" min="512" max="8192" step="512" value="4096"
-              style="width:120px;accent-color:var(--accent);cursor:pointer;height:5px"
-              title="Maximum tokens the LLM can generate per response."/>
-            <span style="font-size:10px;color:var(--panelDim)">512 — 8192</span>
+            
+            <div style="display:flex;align-items:center;gap:10px">
+              <label style="font-size:11px;color:var(--dimText);white-space:nowrap">
+                Max output tokens: <strong id="chat-max-tokens-val" style="color:var(--accent2)">4096</strong>
+              </label>
+              <input type="range" id="chat-max-tokens-slider" min="512" max="8192" step="512" value="4096"
+                style="width:120px;accent-color:var(--accent);cursor:pointer;height:5px"
+                title="Maximum tokens the LLM can generate per response."/>
+              <span style="font-size:10px;color:var(--panelDim)">512 — 8192</span>
+            </div>
           </div>
         </div>
         <div id="messages">
@@ -2372,14 +2379,21 @@ async function sendMessage(override){
   // No conversation history — each request is fully independent.
 
   try{
+
+    const skipSynth = document.getElementById('skip-synth-toggle')?.checked || false;
+
     const res = await fetch('/chat/stream', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({
-        message: q, decode_secrets: decodeSecrets, history: [],
-        max_new_tokens: parseInt(document.getElementById('chat-max-tokens-slider')?.value||'0')
+        message: q, 
+        decode_secrets: decodeSecrets, 
+        history: [],
+        max_new_tokens: parseInt(document.getElementById('chat-max-tokens-slider')?.value||'0'),
+        skip_synthesise: skipSynth
       }),
     });
+
     if(!res.ok){
       const e = await res.json().catch(()=>({}));
       throw new Error(e.detail || 'HTTP '+res.status);
