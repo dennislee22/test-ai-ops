@@ -675,14 +675,11 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
         scope = f"namespace '{namespace}'" if namespace != "all" else "all namespaces"
         return f"No unhealthy pods found in {scope}."
 
-    # --- Summary table header ---
-    out = [
-        f"Unhealthy pods ({len(unhealthy)}) — summary and detailed diagnosis:\n",
-        f"{'Namespace':<15} {'Pod':<30} {'Phase':<10} {'Ready':<7} {'Restarts':<8}",
-        "-"*75
-    ]
+    # --- Markdown Summary Table ---
+    out = ["### Unhealthy Pods Summary", ""]
+    out.append("| Namespace | Pod | Phase | Ready | Restarts |")
+    out.append("|---|---|---|---|---|")
 
-    # --- Summary rows ---
     for pod in unhealthy:
         ns_name  = pod.metadata.namespace
         pod_name = pod.metadata.name
@@ -690,10 +687,9 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
         restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
         ready    = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
         tot      = len(pod.spec.containers)
+        out.append(f"| `{ns_name}` | `{pod_name}` | {phase} | {ready}/{tot} | {restarts} |")
 
-        out.append(f"{ns_name:<15} {pod_name:<30} {phase:<10} {ready}/{tot:<7} {restarts:<8}")
-
-    # --- Detailed diagnostics ---
+    # --- Detailed diagnostics below ---
     for pod in unhealthy:
         ns_name  = pod.metadata.namespace
         pod_name = pod.metadata.name
@@ -790,6 +786,23 @@ def get_endpoints(namespace: str = None) -> str:
         return f"[ERROR] Unexpected error: {str(e)}"
     
 def get_node_capacity() -> str:
+    def _parse_cpu(val) -> float:
+        if not val: return 0.0
+        val_str = str(val)
+        if val_str.endswith("m"):
+            return float(val_str[:-1]) / 1000.0
+        return float(val_str)
+
+    def _parse_mem_gib(val) -> float:
+        if not val: return 0.0
+        val_str = str(val)
+        if val_str.endswith("Ki"): return float(val_str[:-2]) / (1024**2)
+        if val_str.endswith("Mi"): return float(val_str[:-2]) / 1024.0
+        if val_str.endswith("Gi"): return float(val_str[:-2])
+        if val_str.endswith("Ti"): return float(val_str[:-2]) * 1024.0
+        if val_str.isdigit(): return float(val_str) / (1024**3) # Plain bytes
+        return 0.0
+
     try:
         nodes = _core.list_node()
         if not nodes.items:
@@ -797,7 +810,6 @@ def get_node_capacity() -> str:
 
         lines = ["### Node Capacity Overview\n"]
 
-        # Header rows
         header1 = ["Node", "CPU", "", "", "Memory (Gi)", "", "", "GPU"]
         header2 = ["", "Allocated", "Request", "Available", "Allocated", "Request", "Available", ""]
         lines.append("| " + " | ".join(header1) + " |")
@@ -806,11 +818,10 @@ def get_node_capacity() -> str:
 
         for node in sorted(nodes.items, key=lambda n: n.metadata.name):
             alloc = node.status.allocatable or {}
-            cpu_alloc = float(alloc.get("cpu", 0))
-            mem_alloc = alloc.get("memory", "0Ki")
-            mem_alloc_gib = round(int(mem_alloc.rstrip("Ki")) / 1024 / 1024, 2) if mem_alloc.endswith("Ki") else 0
+            
+            cpu_alloc = _parse_cpu(alloc.get("cpu", 0))
+            mem_alloc_gib = _parse_mem_gib(alloc.get("memory", "0Ki"))
 
-            # Count GPU
             gpu = 0
             for key in alloc:
                 if "nvidia.com/gpu" in key or "amd.com/gpu" in key:
@@ -819,28 +830,21 @@ def get_node_capacity() -> str:
                     except (ValueError, TypeError):
                         pass
 
-            # Calculate requested resources from pods on this node
             cpu_req_total = 0.0
             mem_req_total_gib = 0.0
             pods = _core.list_pod_for_all_namespaces(field_selector=f"spec.nodeName={node.metadata.name}")
             for pod in pods.items:
                 for c in pod.spec.containers or []:
                     if c.resources and c.resources.requests:
-                        cpu_req_total += float(c.resources.requests.get("cpu", 0))
-                        mem_req = c.resources.requests.get("memory", "0")
-                        if mem_req.endswith("Ki"):
-                            mem_req_total_gib += int(mem_req.rstrip("Ki")) / 1024 / 1024
-                        elif mem_req.endswith("Mi"):
-                            mem_req_total_gib += int(mem_req.rstrip("Mi")) / 1024
-                        elif mem_req.endswith("Gi"):
-                            mem_req_total_gib += int(mem_req.rstrip("Gi"))
+                        cpu_req_total += _parse_cpu(c.resources.requests.get("cpu", 0))
+                        mem_req_total_gib += _parse_mem_gib(c.resources.requests.get("memory", "0"))
 
             cpu_avail = round(cpu_alloc - cpu_req_total, 2)
             mem_avail = round(mem_alloc_gib - mem_req_total_gib, 2)
 
             lines.append(
-                f"| {node.metadata.name} | {cpu_alloc} | {cpu_req_total} | {cpu_avail} "
-                f"| {mem_alloc_gib} | {round(mem_req_total_gib, 2)} | {mem_avail} | {gpu} |"
+                f"| {node.metadata.name} | {round(cpu_alloc, 2)} | {round(cpu_req_total, 2)} | {cpu_avail} "
+                f"| {round(mem_alloc_gib, 2)} | {round(mem_req_total_gib, 2)} | {mem_avail} | {gpu} |"
             )
 
         return "\n".join(lines)
@@ -894,44 +898,45 @@ def get_node_taints(search: str = None) -> str:
         if not nodes:
             return "No nodes found."
 
-        results = []
+        table_rows = []
 
         for node in nodes:
             node_taints = node.spec.taints or []
             if not node_taints:
                 continue
 
-            taint_lines = []
             for t in node_taints:
                 taint_str = f"{t.key}={t.value}:{t.effect}" if t.value else f"{t.key}:{t.effect}"
                 if search and search.lower() not in taint_str.lower():
                     continue
-                taint_lines.append(f"- {taint_str}")
+                table_rows.append((node.metadata.name, taint_str))
 
-            if taint_lines:
-                results.append(f"**{node.metadata.name}:**\n" + "\n".join(taint_lines) + "\n")
-
-        # If search was applied and no matches, show all tainted nodes
-        if search and not results:
-            fallback_results = []
+        # Fallback: if search applied and no matches, show all taints
+        if search and not table_rows:
             for node in nodes:
                 node_taints = node.spec.taints or []
                 if not node_taints:
                     continue
-                taint_lines = []
                 for t in node_taints:
                     taint_str = f"{t.key}={t.value}:{t.effect}" if t.value else f"{t.key}:{t.effect}"
-                    taint_lines.append(f"- {taint_str}")
-                if taint_lines:
-                    fallback_results.append(f"**{node.metadata.name}:**\n" + "\n".join(taint_lines) + "\n")
-            if fallback_results:
-                return f"No matches for '{search}'. Showing all tainted nodes:\n" + "\n".join(fallback_results).rstrip()
-            return "No tainted nodes found at all."
-
-        if not results:
+                    table_rows.append((node.metadata.name, taint_str))
+            if table_rows:
+                md_lines = [f"No matches for '{search}'. Showing all tainted nodes:", ""]
+            else:
+                return "No tainted nodes found at all."
+        elif not table_rows:
             return "No tainted nodes found."
+        else:
+            md_lines = []
 
-        return "\n".join(results).rstrip()
+        # Build Markdown table
+        if table_rows:
+            md_lines.append("| Node | Taint |")
+            md_lines.append("|---|---|")
+            for node_name, taint in table_rows:
+                md_lines.append(f"| `{node_name}` | {taint} |")
+
+        return "\n".join(md_lines)
 
     except ApiException as e:
         return f"K8s API error: {e.reason}"
@@ -1615,9 +1620,9 @@ def get_pv_usage(threshold: int = 80) -> str:
                 "flag": flag,
                 "ns_pvc": f"{ns}/{pvc_name}",
                 "pct_str": pct_label,
-                "used": used_gib,
-                "total": total_gib,
-                "free": avail_gib,
+                "used": f"{used_gib}Gi ({pct}%)",
+                "total": f"{total_gib}Gi",
+                "free": f"{avail_gib}Gi ({100 - pct}%)",
                 "sc": sc
             }
             return (entry_data, False)
@@ -1713,9 +1718,9 @@ def get_pv_usage(threshold: int = 80) -> str:
             "flag": flag,
             "ns_pvc": f"{ns}/{pvc_name}",
             "pct_str": f"{pct}%",
-            "used": used_gib,
-            "total": total_gib,
-            "free": avail_gib,
+            "used": f"{used_gib}Gi ({pct}%)",
+            "total": f"{total_gib}Gi",
+            "free": f"{avail_gib}Gi ({100 - pct}%)",
             "sc": sc
         })
 
@@ -1727,10 +1732,10 @@ def get_pv_usage(threshold: int = 80) -> str:
         if not data:
             return ""
         lines = [f"### {title}", ""]
-        lines.append("| Status | Namespace / PVC | Usage | Used (GiB) | Total (GiB) | Free (GiB) | Class |")
-        lines.append("|---|---|---|---|---|---|---|")
+        lines.append("| Status | Namespace / PVC | Usage | Used (GiB) | Total (GiB) | Free (GiB) |")
+        lines.append("|---|---|---|---|---|")
         for d in data:
-            lines.append(f"| {d['flag']} | `{d['ns_pvc']}` | **{d['pct_str']}** | {d['used']} | {d['total']} | {d['free']} | {d['sc']} |")
+            lines.append(f"| {d['flag']} | `{d['ns_pvc']}` | **{d['pct_str']}** | {d['used']} | {d['total']} | {d['free']} |")
         return "\n".join(lines)
 
     output = []
