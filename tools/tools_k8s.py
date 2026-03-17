@@ -2638,7 +2638,7 @@ def get_pod_images(namespace: str = "all") -> str:
     header = f"Pod images in '{namespace}' ({len(pods.items)} pods):"
     return header + "\n" + "\n".join(rows)
 
-def run_cluster_health(namespace: str = "all", show_all: bool = False, raw_output: bool = False) -> str:
+def run_cluster_health(namespace: str = "all", show_all: bool = True, raw_output: bool = True) -> str:
     try:
         report = []
 
@@ -2667,7 +2667,7 @@ def run_cluster_health(namespace: str = "all", show_all: bool = False, raw_outpu
             report.append(f"  Moderate (Pressure issues): {len(moderate_nodes)} — {', '.join(moderate_nodes)}")
 
         # --- Namespaces and Pods ---
-        ns_status = get_namespace_status(namespace=namespace, show_all=show_all, phase_only=False)
+        ns_status = get_namespace_status(namespace=namespace, show_all=show_all)
         report.append("\nNamespace/Pod summary:\n" + ns_status)
 
         # --- PVCs ---
@@ -2675,7 +2675,7 @@ def run_cluster_health(namespace: str = "all", show_all: bool = False, raw_outpu
         unbound_pvcs = [f"{p.metadata.namespace}/{p.metadata.name}" for p in pvcs if p.status.phase != "Bound"]
         if unbound_pvcs:
             report.append(f"\nPersistentVolumeClaims not bound: {len(unbound_pvcs)}")
-            if raw_output or show_all:
+            if raw_output:
                 report.extend(f"  {p}" for p in unbound_pvcs)
 
         # --- Ingresses ---
@@ -2684,7 +2684,7 @@ def run_cluster_health(namespace: str = "all", show_all: bool = False, raw_outpu
         failed_ing = [f"{i.metadata.namespace}/{i.metadata.name}" for i in ingresses if not i.status.load_balancer.ingress]
         if failed_ing:
             report.append(f"\nIngresses without active load balancer: {len(failed_ing)}")
-            if raw_output or show_all:
+            if raw_output:
                 report.extend(f"  {i}" for i in failed_ing)
 
         # --- Core system components ---
@@ -2703,7 +2703,7 @@ def run_cluster_health(namespace: str = "all", show_all: bool = False, raw_outpu
 
         if system_unhealthy:
             report.append(f"\nSystem components with unhealthy pods: {len(system_unhealthy)}")
-            if raw_output or show_all:
+            if raw_output:
                 report.extend(f"  {p}" for p in system_unhealthy)
 
         # --- Cluster-wide resource usage ---

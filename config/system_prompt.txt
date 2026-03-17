@@ -66,7 +66,6 @@ Because node labels contain long strings, here is the detailed breakdown:
 * Roles: worker
 * Labels: `cloudera.com/node-role=cde`, `feature.node.kubernetes.io/cpu-cpuid.AESNI=true`
 
-
 ## RESPONSE RULES & GUARDRAILS
 - CRITICAL: Once you have the necessary tool results, DO NOT output any further <tool_call> tags. Stop researching and write the final text answer directly to the user.
 - Answer immediately after tool results. No preamble ("Here is...", "Based on...").
