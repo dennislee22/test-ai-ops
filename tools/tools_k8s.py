@@ -784,7 +784,8 @@ def get_endpoints(namespace: str = "all", search: str = None) -> str:
 
         fallback_msg = ""
         if search and not table_rows:
-            fallback_msg = f"No matches for '{search}'. Showing all endpoints:\n"
+            #fallback_msg = f"No matches for '{search}'. Showing all endpoints:\n"
+            fallback_msg = f"No matches. Showing all endpoints:\n"
             for ep in eps.items:
                 ns_name = ep.metadata.namespace
                 name = ep.metadata.name
@@ -2499,7 +2500,8 @@ def get_service(namespace: str = "all", search: str = None) -> str:
         # Fallback: show all services if search applied but no matches
         fallback_msg = ""
         if search and not table_rows:
-            fallback_msg = f"No matches for '{search}'. Showing all services:\n"
+            #fallback_msg = f"No matches for '{search}'. Showing all services:\n"
+            fallback_msg = f"No matches. Showing all services:\n"
             table_rows = []
             for svc in svcs.items:
                 stype    = svc.spec.type or "ClusterIP"

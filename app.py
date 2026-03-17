@@ -517,6 +517,7 @@ def _clean_response(text: str, user_question: str = "") -> str:
 async def run_agent(user_message: str, skip_synthesise: bool = False) -> dict:
     import uuid
     req_id = uuid.uuid4().hex[:8]
+    config.logger.info(f"[REQ:{req_id}] /api/ask  q={user_message[:120]!r}")
     _runnable_agent = get_agent()
     t0 = time.time()
     
