@@ -1513,8 +1513,10 @@ def get_pv_usage(threshold: int = 80) -> str:
                 f"class:{sc}  source:longhorn-crd"
             )
             return (entry, False)
-        except Exception:
-            return (None, True)
+        except Exception as e:
+            return (f"  {ns}/{pvc_name}: CRD Error - {str(e)}", True)
+        #except Exception:
+        #    return (None, True)
 
     try:
         pvcs = _core.list_persistent_volume_claim_for_all_namespaces()
