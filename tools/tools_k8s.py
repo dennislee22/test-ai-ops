@@ -885,14 +885,20 @@ def get_node_labels(search: str = None) -> str:
 
         results = []
 
+        # ✅ Normalize "non-filter" keywords
+        if search:
+            search_lower = search.lower().strip()
+            if search_lower in ("*", "all", "labels", "node", "nodes"):
+                search = None
+
         for node in nodes:
             labels = node.metadata.labels or {}
             node_name = node.metadata.name
 
             label_lines = [f"- {k}={v}" for k, v in labels.items()] or ["- <none>"]
 
-            # ✅ Handle wildcard / empty search
-            if search in (None, "", "*"):
+            # ✅ No filtering → show all
+            if not search:
                 results.append(f"**{node_name}:**\n" + "\n".join(label_lines) + "\n")
                 continue
 
