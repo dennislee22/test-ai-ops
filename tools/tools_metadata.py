@@ -1,12 +1,12 @@
 from tools.tools_k8s import (
     get_pod_status, get_pod_logs, describe_pod, get_node_info, get_gpu_info,
-    get_node_labels, get_node_taints, get_events, get_deployment_status,
-    get_daemonset_status, get_statefulset_status, get_job_status, get_hpa_status,
+    get_node_labels, get_node_taints, get_events, get_deployment,
+    get_daemonset, get_statefulset, get_job_status, get_hpa_status,
     get_pvc_status, get_cluster_version, get_storage_classes, get_endpoints,
     get_node_capacity, get_persistent_volumes, get_service, get_ingress_status,
     get_configmap_list, get_secrets, get_resource_quotas, get_limit_ranges,
     get_service_accounts, get_cluster_role_bindings, get_namespace_status,
-    get_pod_tolerations, get_pod_resource_requests, run_cluster_health, get_replicaset_status,
+    get_pod_tolerations, get_pod_resource_requests, run_cluster_health, get_replicaset,
     get_namespace_resource_summary, get_pod_images, get_unhealthy_pods_detail,
     get_coredns_health, get_pv_usage, get_node_resource_requests, find_resource,
     query_prometheus_metrics, kubectl_exec, exec_db_query, get_pod_storage,
@@ -188,14 +188,28 @@ K8S_TOOL_METADATA: dict = {
         },
     },
 
-    "get_deployment_status": {
-        "fn":          get_deployment_status,
-        "description": "Check Deployment replica counts and health across namespaces.",
-        "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
+    "get_deployment": {
+        "fn":          get_deployment,
+        "description": (
+            "List Deployments and their health status (desired, ready, available pods). "
+            "Supports filtering by partial name match. "
+            "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
+        ),
+        "parameters": {
+            "namespace": {
+                "type": "string", 
+                "default": "all", 
+                "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."
+            },
+            "search": {
+                "type": "string", 
+                "description": "Optional keyword to filter deployments by name (partial match)."
+            }
+        },
     },
     
-    "get_statefulset_status": {
-        "fn":          get_statefulset_status,
+    "get_statefulset": {
+        "fn":          get_statefulset,
         "description": (
             "List StatefulSets and their health status (desired vs ready pods). "
             "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
@@ -209,8 +223,8 @@ K8S_TOOL_METADATA: dict = {
         },
     },
 
-    "get_daemonset_status": {
-        "fn":          get_daemonset_status,
+    "get_daemonset": {
+        "fn":          get_daemonset,
         "description": (
             "List DaemonSets and their health status (desired, ready, available pods). "
             "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
@@ -224,8 +238,8 @@ K8S_TOOL_METADATA: dict = {
         },
     },
 
-    "get_replicaset_status": {
-        "fn":          get_replicaset_status,
+    "get_replicaset": {
+        "fn":          get_replicaset,
         "description": (
             "List ReplicaSets and their health status (desired, ready, available pods). "
             "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."

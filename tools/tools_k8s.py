@@ -1288,27 +1288,55 @@ def get_events(namespace: str = "all", warning_only: bool = True) -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_deployment_status(namespace: str = "all") -> str:
+def get_deployment(namespace: str = "all", search: str = None) -> str:
     try:
         deps = (_apps.list_deployment_for_all_namespaces()
                 if namespace == "all"
                 else _apps.list_namespaced_deployment(namespace=namespace))
+        
         if not deps.items:
             return f"No deployments in '{namespace}'."
-        lines = [f"Deployments in '{namespace}':"]
+            
+        filtered_deps = []
         for dep in deps.items:
+            if search and search.lower() not in dep.metadata.name.lower():
+                continue
+            filtered_deps.append(dep)
+            
+        if not filtered_deps:
+            search_term = f" matching '{search}'" if search else ""
+            return f"No deployments{search_term} found in '{namespace}'."
+        
+        title = f"### Deployments in '{namespace}'"
+        if search:
+            title += f" (matching '{search}')"
+        lines = [title + "\n"]
+        
+        if namespace == "all":
+            lines.extend(["| NAMESPACE | NAME | STATUS | DESIRED | READY | AVAILABLE |", "|---|---|---|---|---|---|"])
+        else:
+            lines.extend(["| NAME | STATUS | DESIRED | READY | AVAILABLE |", "|---|---|---|---|---|"])
+
+        for dep in filtered_deps:
             desired = dep.spec.replicas or 0
             ready   = dep.status.ready_replicas or 0
             avail   = dep.status.available_replicas or 0
-            status  = "✓ Healthy" if ready == desired and desired > 0 else "⚠ Degraded"
-            lines.append(
-                f"  {dep.metadata.namespace}/{dep.metadata.name}: {status} "
-                f"| Desired:{desired} Ready:{ready} Available:{avail}")
+            
+            if desired == 0 and ready == 0:
+                status = "✓ Scaled to 0"
+            else:
+                status = "✓ Healthy" if ready == desired else "⚠ Degraded"
+
+            if namespace == "all":
+                lines.append(f"| {dep.metadata.namespace} | {dep.metadata.name} | {status} | {desired} | {ready} | {avail} |")
+            else:
+                lines.append(f"| {dep.metadata.name} | {status} | {desired} | {ready} | {avail} |")
+                
         return "\n".join(lines)
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_daemonset_status(namespace: str = "all") -> str:
+def get_daemonset(namespace: str = "all") -> str:
     try:
         ds = (_apps.list_daemon_set_for_all_namespaces()
               if namespace == "all"
@@ -1342,7 +1370,7 @@ def get_daemonset_status(namespace: str = "all") -> str:
         return f"K8s API error: {e.reason}"
     
 
-def get_replicaset_status(namespace: str = "all") -> str:
+def get_replicaset(namespace: str = "all") -> str:
     try:
         rs = (_apps.list_replica_set_for_all_namespaces()
               if namespace == "all"
@@ -1376,7 +1404,7 @@ def get_replicaset_status(namespace: str = "all") -> str:
         return f"Unexpected error: {str(e)}"
 
 
-def get_statefulset_status(namespace: str = "all") -> str:
+def get_statefulset(namespace: str = "all") -> str:
     try:
         sts = (_apps.list_stateful_set_for_all_namespaces()
                if namespace == "all"
