@@ -8,6 +8,10 @@ from pathlib import Path
 from kubernetes import client as _k8s, config as _k8s_cfg
 from kubernetes.client.rest import ApiException
 
+_KUBECTL_MAX_OUT = 4000
+_KUBECTL_READ_VERBS = {"get", "describe", "logs", "top", "rollout", "auth", "api-resources", "version"}
+
+logging.basicConfig(level=logging.INFO)
 _log = logging.getLogger("k8s")
 
 def _load_k8s():
@@ -3531,16 +3535,10 @@ def _handle_version() -> str:
     except ApiException as e:
         return f"[ERROR] version: {e.reason}"
 
-logging.basicConfig(level=logging.INFO)
-_log = logging.getLogger(__name__)
-
-_KUBECTL_MAX_OUT = 4000
-_KUBECTL_READ_VERBS = {"get", "describe", "logs", "top", "rollout", "auth", "api-resources", "version"}
-
-try:
-    config.load_incluster_config()
-except config.ConfigException:
-    config.load_kubeconfig()
+#try:
+#    config.load_incluster_config()
+#except config.ConfigException:
+#    config.load_kubeconfig()
 
 
 def _parse_kubectl(command: str) -> dict:
@@ -3656,6 +3654,8 @@ def _handle_logs(p: dict) -> str:
     
     logs = core_v1.read_namespaced_pod_log(name=p["name"], namespace=p["namespace"], tail_lines=50)
     return logs
+
+_log = logging.getLogger(__name__)
 
 def kubectl_exec(command: str) -> str:
     command = command.strip()
