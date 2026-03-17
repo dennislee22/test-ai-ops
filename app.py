@@ -32,10 +32,9 @@ logger = config.logger
 # ── 1. SCHEMAS ───────────────────────────────────────────────────────────────
 
 class HistoryMessage(BaseModel): role: str; content: str
-#class ChatRequest(BaseModel): message: str; decode_secrets: bool = False; history: list[HistoryMessage] = []; max_new_tokens: int = 0
 class ChatRequest(BaseModel): message: str; decode_secrets: bool = False; history: list[HistoryMessage] = []; max_new_tokens: int = 0; skip_synthesise: bool = False
 class ChatResponse(BaseModel): response: str; tools_used: list; iterations: int; status_updates: list; elapsed_seconds: float
-class AskRequest(BaseModel): q: str
+class AskRequest(BaseModel): q: str; skip_synthesise: bool = False
 class KbAskRequest(BaseModel): q: str; top_k: int = 50; max_tokens: int = 1312; sheet: Optional[str] = None
 class KubeconfigRequest(BaseModel): kubeconfig: str
 class PromptUpdateRequest(BaseModel): content: str
@@ -514,7 +513,8 @@ def _clean_response(text: str, user_question: str = "") -> str:
     text = re.sub(r'Summarise the above tool results.*', '', text, flags=re.IGNORECASE)
     return re.sub(r'\n{3,}', '\n\n', text).strip()
 
-async def run_agent(user_message: str) -> dict:
+
+async def run_agent(user_message: str, skip_synthesise: bool = False) -> dict:
     import uuid
     req_id = uuid.uuid4().hex[:8]
     _runnable_agent = get_agent()
@@ -525,7 +525,7 @@ async def run_agent(user_message: str) -> dict:
         global _agent
         _agent = _runnable_agent
         
-    final = await _runnable_agent.ainvoke({"messages": [HumanMessage(content=user_message)], "tool_calls_made": [], "iteration": 0, "status_updates": [f"🤖 Model: {config.LLM_MODEL}"], "req_id": req_id})
+    final = await _runnable_agent.ainvoke({"messages": [HumanMessage(content=user_message)], "tool_calls_made": [], "iteration": 0, "status_updates": [f"🤖 Model: {config.LLM_MODEL}"], "req_id": req_id, "skip_synthesise": skip_synthesise})
     elapsed, last = time.time() - t0, final["messages"][-1]
     raw = last.content if hasattr(last, "content") else str(last)
     updates = final.get("status_updates", [])
@@ -793,7 +793,7 @@ async def api_index(request: Request):
         "endpoints": [
             {"method": "GET",  "path": "/api/info",           "description": "Model, GPU, cluster info"},
             {"method": "POST", "path": "/api/ask",            "description": "Ask the AI chatbot (blocking)",
-             "curl": f'curl -s -X POST {base}/api/ask -H "Content-Type: application/json" -d \'{{"q":"list all pods with problems"}}\''},
+             "curl": f'curl -s -X POST {base}/api/ask -H "Content-Type: application/json" -d \'{{"q":"list all pods with problems", "skip_synthesise": true}}\''},
             {"method": "POST", "path": "/api/tool",           "description": "Call a specific K8s tool directly",
              "curl": f'curl -s -X POST {base}/api/tool -H "Content-Type: application/json" -d \'{{"name":"get_pod_status","args":{{"namespace":"all","show_all":true}}}}\''},
             {"method": "GET",  "path": "/api/tools",          "description": "List all registered tools and their signatures"},
@@ -921,9 +921,10 @@ async def ingest_upload_real(files: list[UploadFile] = File(...), force: str = F
 async def api_ask(req: AskRequest):
     if not req.q.strip(): return _JSONResponse(status_code=400, content={"error": "q must not be empty"})
     try:
-        result = await run_agent(req.q)
+        result = await run_agent(req.q, skip_synthesise=req.skip_synthesise)
         return {"question": req.q, "answer": result["response"], "tools_used": result["tools_used"], "iterations": result["iterations"], "elapsed_seconds": result["elapsed_seconds"]}
     except Exception as e: return _JSONResponse(status_code=500, content={"error": str(e)})
+
 
 @app.post("/api/tool")
 async def api_tool(req: ToolCallRequest):
