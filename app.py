@@ -466,7 +466,8 @@ def build_agent():
             
             parts = []
             for r in results:
-                parts.append(f"**Raw output for `{r.name}`**:\n```text\n{r.content}\n```")
+                #parts.append(f"**Raw output for `{r.name}`**:\n```text\n{r.content}\n```")
+                parts.append(f"**Raw output for `{r.name}`**:\n\n{r.content}")
             direct_answer = "\n\n".join(parts)
 
         return {"messages": results, "tool_calls_made": tools_called, "iteration": state.get("iteration", 0), "status_updates": updates, "direct_answer": direct_answer}
