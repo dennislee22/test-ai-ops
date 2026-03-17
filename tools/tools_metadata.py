@@ -152,24 +152,20 @@ K8S_TOOL_METADATA: dict = {
     "get_node_info": {
         "fn":          get_node_info,
         "description": (
-            "Check Kubernetes node health and scheduling status. "
-            "Lists nodes with columns: Node Name, Roles, Ready, CPU, Mem, GPU. "
-            "Supports filtering for a specific node by name. "
-            "If a node name is provided and no match is found, it falls back to listing all nodes with a warning. "
-            "Use for questions like: 'which node has taints', 'are nodes healthy', "
-            "'node readiness', 'list node ecs-w-01', or 'why pods cannot schedule'. "
-            "Roles are extracted from node labels. Allocatable CPU, memory, and GPU "
-            "are reported directly from the Kubernetes API. "
-            "Does NOT calculate pod-level GPU usage or tolerations."
+            "Check Kubernetes node health, resources, and scheduling status. "
+            "Returns a Markdown table with columns: NODE, ROLES, STATUS (including Ready/NotReady and Cordon/SchedulingDisabled), CPU, RAM (Gi), GPU. "
+            "Supports filtering for a specific node by partial name match. "
+            "Use for questions like: 'are nodes healthy', 'is ecs-w-01 cordoned', or 'why are pods pending'. "
+            "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
         ),
         "parameters":  {
             "node_name": {
                 "type": "string",
                 "default": None,
                 "description": (
-                    "Optional specific node to query. Supports substring matching; "
-                    "if not provided, all nodes are listed. "
-                    "If no nodes match the search, the function falls back to listing all nodes."
+                    "Optional specific node to query (partial match supported). "
+                    "Leave empty or null to list ALL nodes. "
+                    "If a search yields no matches, it automatically falls back to listing all nodes."
                 ),
             },
         },

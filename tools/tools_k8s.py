@@ -1079,60 +1079,63 @@ def get_node_info(node_name: str = None) -> str:
         if not nodes:
             return "No nodes found."
 
-        lines = ["Node Name\tRoles\tReady\tCPU\tMem (Gi)\tGPU"]
-        results = []
-
-        for node in nodes:
-            if node_name and node_name not in node.metadata.name:
-                continue
-
-            roles = []
-            for label_key in node.metadata.labels or {}:
-                if label_key.startswith("node-role.kubernetes.io/"):
-                    roles.append(label_key.replace("node-role.kubernetes.io/", ""))
+        headers = ["NODE", "ROLES", "STATUS", "CPU", "RAM (Gi)", "GPU"]
+        
+        def _build_row(node) -> str:
+            # 1. Parse Roles
+            roles = [k.replace("node-role.kubernetes.io/", "") 
+                     for k in (node.metadata.labels or {}) 
+                     if k.startswith("node-role.kubernetes.io/")]
             roles_str = ",".join(roles) if roles else "worker"
 
+            # 2. Parse Readiness
             ready_status = "Unknown"
             for cond in node.status.conditions or []:
                 if cond.type == "Ready":
-                    ready_status = cond.status
+                    ready_status = "Ready" if cond.status == "True" else "NotReady"
+                    break
+            
+            # 3. Apply Cordon Status (Unschedulable)
+            if node.spec.unschedulable:
+                ready_status += ",SchedulingDisabled"
+
+            # 4. Parse Resources
+            alloc = node.status.allocatable or {}
+            cpu = alloc.get("cpu", "n/a")
+            mem = _mem_to_gib(alloc.get("memory", ""))
+            
+            gpu = "0"
+            for key in alloc:
+                if "nvidia.com/gpu" in key or "amd.com/gpu" in key:
+                    gpu = alloc[key]
                     break
 
-            cpu = node.status.allocatable.get("cpu", "n/a")
-            mem = _mem_to_gib(node.status.allocatable.get("memory", "n/a"))
-            gpu = node.status.allocatable.get("nvidia.com/gpu", "0")
+            return f"| {node.metadata.name} | {roles_str} | {ready_status} | {cpu} | {mem} | {gpu} |"
 
-            results.append(f"{node.metadata.name}\t{roles_str}\t{ready_status}\t{cpu}\t{mem}\t{gpu}")
+        # Filter nodes based on search parameter
+        filtered_nodes = [n for n in nodes if node_name and node_name.lower() in n.metadata.name.lower()]
+        
+        # Handle fallback if search yields no results
+        if node_name and not filtered_nodes:
+            out = [f"### No matches for '{node_name}'. Showing all nodes:\n"]
+            target_nodes = nodes
+        else:
+            title = f"### Node Info" + (f" (matching '{node_name}')" if node_name else "")
+            out = [title + "\n"]
+            target_nodes = filtered_nodes if node_name else nodes
 
-        if node_name and not results:
-            # fallback to all nodes
-            results = []
-            for node in nodes:
-                roles = []
-                for label_key in node.metadata.labels or {}:
-                    if label_key.startswith("node-role.kubernetes.io/"):
-                        roles.append(label_key.replace("node-role.kubernetes.io/", ""))
-                roles_str = ",".join(roles) if roles else "worker"
+        # Build Table
+        out.append("| " + " | ".join(headers) + " |")
+        out.append("|" + "|".join(["---"] * len(headers)) + "|")
 
-                ready_status = "Unknown"
-                for cond in node.status.conditions or []:
-                    if cond.type == "Ready":
-                        ready_status = cond.status
-                        break
+        for node in target_nodes:
+            out.append(_build_row(node))
 
-                cpu = node.status.allocatable.get("cpu", "n/a")
-                mem = _mem_to_gib(node.status.allocatable.get("memory", "n/a"))
-                gpu = node.status.allocatable.get("nvidia.com/gpu", "0")
-
-                results.append(f"{node.metadata.name}\t{roles_str}\t{ready_status}\t{cpu}\t{mem}\t{gpu}")
-
-            return f"No matches for '{node_name}'. Showing all nodes:\n" + "\n".join([lines[0]] + results)
-
-        return "\n".join([lines[0]] + results)
+        return "\n".join(out)
 
     except Exception as e:
         return f"Unexpected error: {str(e)}"
-
+    
 def find_resource(name_substring: str, resource_type: str = None, namespace: str = None) -> str:
     try:
         resource_type = resource_type.lower() if resource_type else None
