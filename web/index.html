@@ -2422,7 +2422,7 @@ async function sendMessage(override){
         if (_elapsedSec >= 20 && !isSkipping && _toolChars > 0) {
           hdr.innerHTML = `AGENT STATUS — processing (${_elapsedSec}s)<br>` +
                           `<span style="color: #ef4444; text-transform: none; letter-spacing: normal; font-size: 11px; display: inline-block; margin-top: 5px; line-height: 1.4;">` +
-                          `LLM is taking a longer time to digest <strong>${_toolChars.toLocaleString()}</strong> chars for synthesis. You can opt to "Skip Synthesise" to see the raw output from the tool or please rephrase your ask/question 🙏.</span>`;
+                          `LLM is taking a longer time to digest <strong>${_toolChars.toLocaleString()}</strong> chars for synthesis. You can opt to "Skip Synthesise" to see the raw output from the tool or please rephrase your ask 🙏.</span>`;
           hdr.style.color = ''; 
         } else {
           hdr.innerHTML = `AGENT STATUS — processing (${_elapsedSec}s)`;
