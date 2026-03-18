@@ -119,7 +119,8 @@ K8S_TOOL_METADATA: dict = {
         "description": (
             "Show storage types (PVC access modes like ReadWriteOnce/ReadWriteMany) used by pods in a namespace. "
             "Supports searching by pod name or namespace — if no matches are found, falls back to all pods. "
-            "Returns a Markdown table listing pods with their attached PVCs and access modes, and a summary of storage types used across pods. "
+            "Returns a Markdown table listing pods with their attached PVCs, access modes, and storage class, "
+            "and a summary of storage types and storage classes used across pods. "
             "Use this for queries like: 'which pods use RWX', 'list all storage types in namespace X', "
             "'what PVCs are attached to pod Y', 'storage summary for pods in namespace Z'."
         ),
