@@ -3030,7 +3030,7 @@ def run_cluster_health(namespace: str = "all", show_all: bool = True, raw_output
     except Exception as e:
         return f"[ERROR] Unexpected error: {str(e)}"
 
-def get_pod_storage(namespace: str = "all", show_all: bool = False) -> str:
+def get_pod_storage(namespace: str = "all", search: str | None = None) -> str:
     try:
         pods = (
             _core.list_namespaced_pod(namespace=namespace).items
@@ -3040,10 +3040,25 @@ def get_pod_storage(namespace: str = "all", show_all: bool = False) -> str:
         if not pods:
             return f"No pods found in namespace '{namespace}'."
 
-        storage_summary = {}
-        lines = []
+        filtered_pods = []
+        if search:
+            search_lower = search.lower()
+            for pod in pods:
+                if search_lower in pod.metadata.name.lower() or (namespace != "all" and search_lower in pod.metadata.namespace.lower()):
+                    filtered_pods.append(pod)
+        else:
+            filtered_pods = pods
 
-        for pod in pods:
+        if search and not filtered_pods:
+            filtered_pods = pods
+
+        storage_summary = {}
+        md_lines = []
+        md_lines.append(f"### Pods in namespace '{namespace}' with their storage\n")
+        md_lines.append("| NAMESPACE | POD | PVC(s) |")
+        md_lines.append("|---|---|---|")
+
+        for pod in sorted(filtered_pods, key=lambda p: (p.metadata.namespace, p.metadata.name)):
             pod_name = pod.metadata.name
             pod_ns   = pod.metadata.namespace
             pod_pvcs = []
@@ -3058,19 +3073,15 @@ def get_pod_storage(namespace: str = "all", show_all: bool = False) -> str:
                     pod_pvcs.append(f"{pvc_name}({mode_str})")
                     storage_summary[mode_str] = storage_summary.get(mode_str, 0) + 1
 
-            if show_all:
-                lines.append(f"{pod_ns}/{pod_name}: " + (", ".join(pod_pvcs) if pod_pvcs else "No PVCs"))
+            md_lines.append(
+                f"| `{pod_ns}` | `{pod_name}` | {', '.join(pod_pvcs) if pod_pvcs else 'No PVCs'} |"
+            )
 
-        summary_lines = [f"In namespace '{namespace}': {len(pods)} pods."]
-        summary_lines.append("Storage types used across pods:")
+        md_lines.append("\n### Storage types used across pods")
         for stype, count in storage_summary.items():
-            summary_lines.append(f"  {stype}: {count} pod(s)")
+            md_lines.append(f"- {stype}: {count} pod(s)")
 
-        if show_all:
-            summary_lines.append("\nPer-pod storage:")
-            summary_lines.extend(lines)
-
-        return "\n".join(summary_lines)
+        return "\n".join(md_lines)
 
     except ApiException as e:
         return f"K8s API error: {e.reason}"

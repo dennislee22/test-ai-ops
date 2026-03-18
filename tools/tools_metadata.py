@@ -117,17 +117,17 @@ K8S_TOOL_METADATA: dict = {
     "get_pod_storage": {
         "fn":          get_pod_storage,
         "description": (
-            "Show storage types (PVC access modes like RWO/RWX) used by pods in a namespace. "
-            "Returns a summary of storage types across pods. "
-            "Use `show_all=True` to include per-pod PVC details with access modes. "
-            "Use this for: 'which pods use RWX', 'list all storage types in namespace X', "
-            "'what PVCs are attached to pod Y'."
+            "Show storage types (PVC access modes like ReadWriteOnce/ReadWriteMany) used by pods in a namespace. "
+            "Supports searching by pod name or namespace — if no matches are found, falls back to all pods. "
+            "Returns a Markdown table listing pods with their attached PVCs and access modes, and a summary of storage types used across pods. "
+            "Use this for queries like: 'which pods use RWX', 'list all storage types in namespace X', "
+            "'what PVCs are attached to pod Y', 'storage summary for pods in namespace Z'."
         ),
         "parameters":  {
             "namespace": {"type": "string", "default": "all",
-                          "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "show_all":  {"type": "boolean", "default": False,
-                          "description": "Include per-pod PVC details. Defaults to False for a brief summary."},
+                          "description": "Namespace to query. Defaults to 'all' namespaces — override only when explicitly specified."},
+            "search":    {"type": "string", "default": None,
+                          "description": "Optional search term to filter pods by name or namespace (partial matches allowed)."},
         },
     },
     
