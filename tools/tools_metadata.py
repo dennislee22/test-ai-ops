@@ -587,17 +587,21 @@ K8S_TOOL_METADATA: dict = {
     "get_pod_resource_requests": {
         "fn":          get_pod_resource_requests,
         "description": (
-            "Show CPU and memory RESOURCE REQUESTS and LIMITS for containers in a specific pod. "
-            "Returns the requested CPU and memory for each container and totals for the pod. "
+            "Show CPU and memory RESOURCE REQUESTS and LIMITS for containers across pods. "
+            "Returns a Markdown table with requested CPU, memory, and totals per pod. "
+            "Also shows which containers request GPU resources. "
+            "Supports filtering pods by name or namespace using the 'search' parameter. "
+            "If no search matches, the table falls back to listing all pods. "
             "This is scheduling allocation data from pod.spec.resources, NOT real-time usage. "
-            "Use for: 'cpu request for pod X', 'memory limit for pod Y', "
-            "'resources requested by pod', 'what cpu/ram is allocated to pod'. "
-            "Do NOT use for runtime health/status — use get_pod_status instead. "
-            "Do NOT use for namespace-wide totals — use get_namespace_resource_summary instead."
+            "Use for questions like: 'cpu request for pod X', 'memory limit for pod Y', "
+            "'resources requested by pods', or 'which pods request GPU'. "
+            "Do NOT use for runtime health/status — use get_pod_status instead."
         ),
         "parameters":  {
-            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "pod_name":  {"type": "string", "description": "Name of the pod to inspect (supports partial matches)."}
+            "namespace": {"type": "string", "default": "all",
+                          "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
+            "search":    {"type": "string",
+                          "description": "Optional string to filter pods or namespaces (partial match)."}
         },
     },
 

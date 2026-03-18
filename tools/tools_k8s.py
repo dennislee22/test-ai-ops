@@ -1580,7 +1580,6 @@ def get_job_status(namespace: str = "all",
                 else:
                     healthy_jobs.append(entry)
 
-        # RAW table output
         if raw_output:
             hdr = f"{'NAMESPACE':<22} {'NAME':<55} {'STATUS':<12} {'ACTIVE':<7} {'SUCCEEDED':<9} {'FAILED':<7}"
             rows = [hdr, "-"*len(hdr)]
