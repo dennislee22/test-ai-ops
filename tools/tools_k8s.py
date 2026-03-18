@@ -485,78 +485,127 @@ def get_pod_status(namespace: str = "all", show_all: bool = False, raw_output: b
     except ApiException as e:
         return f"K8s API error: {e.reason}"
     
-def get_pod_logs(pod_name: str, namespace: str = "default",
+def get_pod_logs(namespace: str = "all", search: str | None = None,
                  tail_lines: int = 50, container: str = "") -> str:
     tail_lines = min(tail_lines, 100)
     try:
-        # For multi-container pods the K8s API returns 400 Bad Request unless
-        # a container name is specified.  Auto-detect the main app container
-        # if the caller did not supply one.
-        kw: dict = {"tail_lines": tail_lines, "timestamps": True}
-        if container:
-            kw["container"] = container
+        pods = (_core.list_pod_for_all_namespaces().items
+                if namespace == "all"
+                else _core.list_namespaced_pod(namespace=namespace).items)
+
+        if not pods:
+            return f"No pods found in namespace '{namespace}'."
+
+        matching_pods = []
+        if search:
+            search_lower = search.lower()
+            for pod in pods:
+                if search_lower in pod.metadata.name.lower() or (namespace != "all" and search_lower in pod.metadata.namespace.lower()):
+                    matching_pods.append(pod)
         else:
-            try:
-                pod = _core.read_namespaced_pod(name=pod_name, namespace=namespace)
+            matching_pods = pods
+
+        if not matching_pods:
+            return f"No pods matching '{search}' found in namespace '{namespace}'."
+
+        log_entries = []
+        for pod in sorted(matching_pods, key=lambda p: (p.metadata.namespace, p.metadata.name)):
+            pod_name = pod.metadata.name
+            ns_name = pod.metadata.namespace
+
+            kw: dict = {"tail_lines": tail_lines, "timestamps": True}
+
+            if container:
+                kw["container"] = container
+            else:
                 containers = [c.name for c in (pod.spec.containers or [])]
-                if len(containers) > 1:
-                    # Prefer a container whose name matches the pod name stem,
-                    # otherwise fall back to the last container (usually the app).
-                    pod_stem = pod_name.rsplit("-", 2)[0] if pod_name.count("-") >= 2 else pod_name
-                    preferred = next(
-                        (c for c in containers if pod_stem in c or c in pod_stem),
-                        containers[-1]
-                    )
-                    kw["container"] = preferred
-            except ApiException:
-                pass  # let the log call fail naturally with a clear error
-        logs = _core.read_namespaced_pod_log(
-            name=pod_name, namespace=namespace, **kw)
-        container_label = (f" [{kw['container']}]" if "container" in kw else "")
-        return (f"Last {tail_lines} lines of '{pod_name}'{container_label}:\n{logs}"
-                if logs.strip() else f"No logs for '{pod_name}'{container_label}.")
+                if containers:
+                    if len(containers) > 1:
+                        pod_stem = pod_name.rsplit("-", 2)[0] if pod_name.count("-") >= 2 else pod_name
+                        preferred = next(
+                            (c for c in containers if pod_stem in c or c in pod_stem),
+                            containers[-1]
+                        )
+                        kw["container"] = preferred
+                    else:
+                        kw["container"] = containers[0]
+
+            try:
+                logs = _core.read_namespaced_pod_log(
+                    name=pod_name, namespace=ns_name, **kw)
+                container_label = f" [{kw['container']}]" if "container" in kw else ""
+                if logs.strip():
+                    log_entries.append(f"### `{ns_name}/{pod_name}`{container_label}\n```\n{logs}\n```")
+                else:
+                    log_entries.append(f"### `{ns_name}/{pod_name}`{container_label}\n_No logs available._")
+            except ApiException as e:
+                log_entries.append(f"### `{ns_name}/{pod_name}`\n_Error fetching logs: {e.reason}_")
+
+        header = ""
+        if namespace == "all":
+            header = "_As no namespace was specified, showing logs from all namespaces._\n\n"
+
+        return header + "\n\n".join(log_entries)
+
     except ApiException as e:
-        return (f"Pod '{pod_name}' not found."
-                if e.status == 404 else f"K8s error: {e.reason}")
+        return f"K8s API error: {e.reason}"
 
-def describe_pod(pod_name: str, namespace: str = "all") -> str:
-
+def describe_pod(pod_name: str, namespace: str = "all", search: str | None = None) -> str:
     if "/" in pod_name:
         parts = pod_name.split("/", 1)
         if len(parts) == 2:
             pod_name = parts[1]
+
     try:
-        pod   = _core.read_namespaced_pod(name=pod_name, namespace=namespace)
-        lines = [
-            f"Pod:       {pod.metadata.name}",
-            f"Namespace: {pod.metadata.namespace}",
-            f"Phase:     {pod.status.phase}",
-            "Conditions:",
-        ]
-        for c in (pod.status.conditions or []):
-            lines.append(f"  {c.type}:{c.status}"
-                         + (f" — {c.message}" if c.message else ""))
-        lines.append("Containers:")
-        for cs in (pod.status.container_statuses or []):
-            sk = list(cs.state.to_dict().keys())[0] if cs.state else "unknown"
-            lines.append(f"  {cs.name}: ready={cs.ready} "
-                         f"restarts={cs.restart_count} state={sk}")
-            if cs.last_state and cs.last_state.terminated:
-                lt = cs.last_state.terminated
-                lines.append(f"    Last terminated: exit={lt.exit_code} "
-                              f"reason={lt.reason}")
-        for c in pod.spec.containers:
-            if c.resources:
-                req = c.resources.requests or {}
-                lim = c.resources.limits   or {}
-                lines.append(
-                    f"  {c.name} resources: "
-                    f"req=cpu:{req.get('cpu','none')}/mem:{req.get('memory','none')} "
-                    f"lim=cpu:{lim.get('cpu','none')}/mem:{lim.get('memory','none')}")
+        pods = (_core.list_pod_for_all_namespaces().items
+                if namespace == "all"
+                else _core.list_namespaced_pod(namespace=namespace).items)
+
+        if not pods:
+            return f"No pods found in namespace '{namespace}'."
+
+        matching_pods = []
+        if search:
+            search_lower = search.lower()
+            for pod in pods:
+                if search_lower in pod.metadata.name.lower() or (namespace != "all" and search_lower in pod.metadata.namespace.lower()):
+                    matching_pods.append(pod)
+        else:
+            matching_pods = [p for p in pods if p.metadata.name == pod_name]
+
+        if not matching_pods:
+            return f"No pods matching '{pod_name if not search else search}' found in namespace '{namespace}'."
+
+        lines = []
+        for pod in sorted(matching_pods, key=lambda p: (p.metadata.namespace, p.metadata.name)):
+            lines.append(f"## Pod `{pod.metadata.name}` in namespace `{pod.metadata.namespace}`")
+            lines.append(f"Phase: `{pod.status.phase}`")
+            lines.append("**Conditions:**")
+            for c in (pod.status.conditions or []):
+                lines.append(f"  - {c.type}: {c.status}" + (f" — {c.message}" if c.message else ""))
+
+            lines.append("**Containers:**")
+            for cs in (pod.status.container_statuses or []):
+                sk = list(cs.state.to_dict().keys())[0] if cs.state else "unknown"
+                lines.append(f"  - {cs.name}: ready={cs.ready}, restarts={cs.restart_count}, state={sk}")
+                if cs.last_state and cs.last_state.terminated:
+                    lt = cs.last_state.terminated
+                    lines.append(f"    Last terminated: exit={lt.exit_code}, reason={lt.reason}")
+
+            for c in pod.spec.containers or []:
+                if c.resources:
+                    req = c.resources.requests or {}
+                    lim = c.resources.limits   or {}
+                    lines.append(
+                        f"  - {c.name} resources: req=cpu:{req.get('cpu','none')}/mem:{req.get('memory','none')} "
+                        f"lim=cpu:{lim.get('cpu','none')}/mem:{lim.get('memory','none')}")
+
+            lines.append("")  # newline between pods
+
         return "\n".join(lines)
+
     except ApiException as e:
-        return (f"Pod '{pod_name}' not found."
-                if e.status == 404 else f"K8s error: {e.reason}")
+        return f"Pod '{pod_name}' not found." if e.status == 404 else f"K8s error: {e.reason}"
 
 def get_unhealthy_pods_detail(namespace: str = "all") -> str:
     import datetime as _dt
@@ -607,7 +656,6 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
         tot      = len(pod.spec.containers)
         lines.append(f"  Phase: {phase} | Ready: {ready}/{tot} | Total restarts: {restarts}")
 
-        # Conditions
         bad_conds = [(c.type, c.reason or "", c.message or "")
                      for c in (pod.status.conditions or []) if c.status != "True"]
         if bad_conds:
@@ -615,7 +663,6 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
             for ctype, reason, msg in bad_conds:
                 lines.append(f"    {ctype}: {reason} — {msg}" if reason or msg else f"    {ctype}: False")
 
-        # Container statuses
         lines.append("  Containers:")
         for cs in (pod.status.container_statuses or []):
             state_dict = cs.state.to_dict() if cs.state else {}
@@ -635,7 +682,6 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
                 lines.append(f"      Last exit: code={lt.exit_code} reason={lt.reason}"
                               + (f" message={lt.message.strip()[:200]}" if lt.message else ""))
 
-        # Container resources
         for c in (pod.spec.containers or []):
             req = (c.resources.requests or {}) if c.resources else {}
             lim = (c.resources.limits   or {}) if c.resources else {}
@@ -644,7 +690,6 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
                               f"requests=cpu:{req.get('cpu','none')}/mem:{req.get('memory','none')} "
                               f"limits=cpu:{lim.get('cpu','none')}/mem:{lim.get('memory','none')}")
 
-        # Events
         events = []
         try:
             ev = _core.list_namespaced_event(
@@ -678,8 +723,6 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
         except ApiException:
             pass
         return ""
-
-    # --- Main ---
     try:
         unhealthy = _collect_unhealthy()
     except Exception as e:
@@ -703,7 +746,6 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
         tot      = len(pod.spec.containers)
         out.append(f"| `{ns_name}` | `{pod_name}` | {phase} | {ready}/{tot} | {restarts} |")
 
-    # --- Detailed diagnostics below ---
     for pod in unhealthy:
         ns_name  = pod.metadata.namespace
         pod_name = pod.metadata.name

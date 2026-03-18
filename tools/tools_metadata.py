@@ -119,16 +119,16 @@ K8S_TOOL_METADATA: dict = {
     "get_pod_logs": {
         "fn":          get_pod_logs,
         "description": (
-            "Fetch recent log lines from a specific pod. "
+            "Fetch recent log lines from pods. "
+            "Supports filtering by pod name or namespace. "
             "Use for: 'show me the log of pod X', 'get logs for X', 'what does pod X log say?'. "
             "For multi-container pods the correct container is auto-selected — "
             "only pass container= if the user asks for a specific container's logs. "
-            "ALWAYS pass the namespace explicitly — never leave it as 'default' "
-            "when the pod is in a named namespace."
+            "Defaults to searching across all namespaces if namespace is not specified."
         ),
         "parameters":  {
-            "pod_name":   {"type": "string", "description": "Exact pod name (e.g. 'cdp-release-prometheus-server-86844db8-v8lkg')."},
-            "namespace":  {"type": "string", "default": "default", "description": "Namespace to query. Defaults to 'default' — only override when the user explicitly names a namespace."},
+            "search":     {"type": "string", "description": "Partial pod name to search for (e.g., 'prometheus-server')."},
+            "namespace":  {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
             "tail_lines": {"type": "integer", "default": 50, "description": "Number of log lines to return (max 100)."},
             "container":  {"type": "string",  "default": "", "description": "Container name. Leave empty to auto-select the main app container."},
         },
@@ -137,15 +137,16 @@ K8S_TOOL_METADATA: dict = {
     "describe_pod": {
         "fn":          describe_pod,
         "description": (
-            "Get detailed info about a specific pod: container states, restart count, "
+            "Get detailed info about pods: container states, restart count, "
             "last termination reason (e.g. OOMKilled, Error), and CPU/memory requests and limits per container. "
-            "Use this for: 'what are the resource limits for pod X', 'why did pod X crash', "
+            "Supports searching by pod name and namespace. "
+            "Use for: 'what are the resource limits for pod X', 'why did pod X crash', "
             "'what is the memory limit for pod X', or any OOMKilled diagnosis. "
             "This is the ONLY tool that shows per-pod resource limits and termination reasons."
         ),
         "parameters":  {
-            "pod_name":  {"type": "string"},
-            "namespace": {"type": "string", "default": "default", "description": "Namespace to query. Defaults to 'default' — only override when the user explicitly names a namespace."},
+            "search":    {"type": "string", "description": "Partial pod name to search for across namespaces."},
+            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
         },
     },
     
