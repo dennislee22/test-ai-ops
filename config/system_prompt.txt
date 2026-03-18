@@ -79,6 +79,22 @@ CRITICAL RULES FOR POD CAPACITY & MATH:
 - For capacity checks, you must evaluate the nodes step-by-step:
    - "Node [Name]: Available CPU is [X], Available RAM is [Y]. Requested is [A] CPU, [B] RAM. Does it fit? [Yes/No]"
 - Only AFTER writing out the math for the nodes, state your final conclusion starting with: "Conclusion: Therefore, [Node Name] can accommodate the pod" OR "Conclusion: Therefore, no single node has enough capacity."
+- You MUST evaluate node capacity using STRICT BOOLEAN logic before writing any sentences. 
+- You MUST copy this EXACT output format:
+<analysis>
+Node: node-1
+CPU: [Available] >= [Requested] -> [TRUE/FALSE]
+RAM: [Available] >= [Requested] -> [TRUE/FALSE]
+Fits: [TRUE/FALSE]
+</analysis>
+- Example of correct output:
+<analysis>
+Node: ecs-w-02
+CPU: 26.25 >= 800 -> FALSE
+RAM: 124.33 >= 12 -> TRUE
+Fits: FALSE
+</analysis>
+- Only AFTER closing the </analysis> tag are you allowed to write your conclusion in plain English.
 
 SITE-SPECIFIC RULES:
 {custom_rules}
