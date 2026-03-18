@@ -2711,8 +2711,11 @@ def get_configmap_list(namespace: str = "all", filter_keys: list = None) -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_secret_list(namespace: str = "all", name: str = "",
-                decode: bool = False, filter_keys: list = None) -> str:
+def get_secret_list(namespace: str = "all",
+                    name: str = "",
+                    search: str | None = None,
+                    decode: bool = False,
+                    filter_keys: list = None) -> str:
     import base64 as _b64
 
     def _decode(val: str) -> str:
@@ -2722,6 +2725,73 @@ def get_secret_list(namespace: str = "all", name: str = "",
             return "<decode error>"
 
     try:
+        if search:
+            pods = _core.list_namespaced_pod(namespace=namespace).items
+            matched = [p for p in pods if search.lower() in p.metadata.name.lower()]
+
+            if matched:
+                lines = []
+                for pod in matched:
+                    pod_name = pod.metadata.name
+                    lines.append(f"Pod: {namespace}/{pod_name}")
+
+                    secret_names = set()
+                    configmap_names = set()
+
+                    for c in pod.spec.containers or []:
+                        for e in c.env or []:
+                            if e.value_from:
+                                if e.value_from.secret_key_ref:
+                                    secret_names.add(e.value_from.secret_key_ref.name)
+                                if e.value_from.config_map_key_ref:
+                                    configmap_names.add(e.value_from.config_map_key_ref.name)
+
+                        for ef in c.env_from or []:
+                            if ef.secret_ref:
+                                secret_names.add(ef.secret_ref.name)
+                            if ef.config_map_ref:
+                                configmap_names.add(ef.config_map_ref.name)
+
+                    for v in pod.spec.volumes or []:
+                        if v.secret:
+                            secret_names.add(v.secret.secret_name)
+                        if v.config_map:
+                            configmap_names.add(v.config_map.name)
+
+                    if not secret_names and not configmap_names:
+                        lines.append("  No secrets/configmaps referenced.")
+                        continue
+
+                    if secret_names:
+                        lines.append("  Secrets:")
+                        for sname in sorted(secret_names):
+                            try:
+                                sec = _core.read_namespaced_secret(sname, namespace)
+                                data = sec.data or {}
+                                lines.append(f"    {sname}:")
+                                for k, v in data.items():
+                                    if filter_keys:
+                                        if not any(f in k.lower() for f in filter_keys):
+                                            continue
+                                    val = _decode(v) if decode else "<hidden>"
+                                    lines.append(f"      {k}: {val}")
+                            except ApiException:
+                                lines.append(f"    {sname}: <error fetching>")
+
+                        if not decode:
+                            lines.append("    ❗ Secret values are hidden — enable 'Show Secret Values' in ⚙ Settings → Security to decode.")
+
+                    if configmap_names:
+                        lines.append("  ConfigMaps:")
+                        for cname in sorted(configmap_names):
+                            try:
+                                cm = _core.read_namespaced_config_map(cname, namespace)
+                                data = cm.data or {}
+                                lines.append(f"    {cname}: keys={list(data.keys())}")
+                            except ApiException:
+                                lines.append(f"    {cname}: <error fetching>")
+
+                return "\n".join(lines)
 
         if name:
             try:
@@ -2730,91 +2800,32 @@ def get_secret_list(namespace: str = "all", name: str = "",
                 if e.status == 404:
                     return f"Secret '{name}' not found in namespace '{namespace}'."
                 raise
+
             data = secret.data or {}
-            lines = [
-                f"Secret: {namespace}/{name}",
-                f"  Type: {secret.type}",
-            ]
+            lines = [f"Secret: {namespace}/{name}", f"  Type: {secret.type}"]
+
             if data:
                 lines.append("  Data:")
                 for k, v in data.items():
-                    lines.append(f"    {k}: {_decode(v or '') if decode else '<hidden>'}")
+                    val = _decode(v or "") if decode else "<hidden>"
+                    lines.append(f"    {k}: {val}")
+
             if not decode:
-                lines.append("\n  Values hidden. Enable 'Show Secret Values' in ⚙ Settings → Security to decode.")
-            ann = secret.metadata.annotations or {}
-            if ann:
-                lines.append("  Annotations:")
-                for k, v in ann.items():
-                    lines.append(f"    {k}: {v}")
-            return "\n".join(lines)
+                lines.append("\n  ❗ Secret values are hidden — enable 'Show Secret Values' in ⚙ Settings → Security to decode.")
 
-        if filter_keys:
-            import logging as _flog
-            _flog.getLogger("tools.k8s").debug(
-                f"[get_secret_list] ENTRY filter_keys={filter_keys}  decode={decode}  namespace={namespace}")
-            _fk_lower = [f.lower() for f in filter_keys]
-            secrets = _core.list_namespaced_secret(namespace=namespace)
-
-            candidate_names = []
-            for s in secrets.items:
-                data = s.data or {}
-                hit_keys = [k for k in data if any(f in k.lower() for f in _fk_lower)]
-                if hit_keys:
-                    candidate_names.append((s.metadata.name, s.type or "Opaque", hit_keys))
-
-            if not candidate_names:
-                return (f"No secrets in '{namespace}' contain keys matching "
-                        f"{filter_keys}.\nNo credentials found in secrets.")
-
-            lines = [f"Secrets in '{namespace}' matching keys {filter_keys} "
-                     f"({len(candidate_names)} found):"]
-            for sname, stype, hit_keys in sorted(candidate_names):
-                lines.append(f"  {sname} [type={stype}]:")
-                if decode:
-
-                    try:
-                        full = _core.read_namespaced_secret(name=sname, namespace=namespace)
-                        full_data = full.data or {}
-                        for k in hit_keys:
-                            val = _decode(full_data.get(k) or "")
-                            lines.append(f"    {k}: {val}")
-                    except ApiException:
-                        for k in hit_keys:
-                            lines.append(f"    {k}: <fetch error>")
-                else:
-                    for k in hit_keys:
-                        lines.append(f"    {k}: <hidden>")
-                    lines.append("    ❗ Secret values are hidden — enable 'Show Secret Values' in ⚙ Settings → Security to decode.")
             return "\n".join(lines)
 
         secrets = _core.list_namespaced_secret(namespace=namespace)
         if not secrets.items:
             return f"No secrets in namespace '{namespace}'."
 
-        _CERT_TYPES = {"kubernetes.io/tls", "helm.sh/release.v1"}
-        _CERT_KEY_HINTS = {"ca.crt", "tls.crt", "tls.key", "ca-bundle",
-                           "ca.pem", "cert.pem", "certificate", "ssl.crt"}
-
-        by_type: dict = {}
+        lines = [f"Secrets in '{namespace}':"]
         for s in secrets.items:
-            t = s.type or "Opaque"
-
             keys = list((s.data or {}).keys())
+            lines.append(f"  {s.metadata.name}: keys={keys}")
 
-            is_cert = (t in _CERT_TYPES
-                       or any(k in _CERT_KEY_HINTS for k in keys)
-                       or any(h in k.lower() for k in keys
-                              for h in ("cert", "tls", "ssl", "ca.", ".crt", ".pem")))
-            by_type.setdefault(t, []).append((s.metadata.name, keys, is_cert))
-
-        lines = [f"Secrets in '{namespace}' ({len(secrets.items)} total):"]
-        for stype, entries in sorted(by_type.items()):
-            lines.append(f"  [{stype}] ({len(entries)})")
-            for n, keys, is_cert in sorted(entries):
-                tag = " [cert/TLS]" if is_cert else ""
-                lines.append(f"    {n}: keys={keys}{tag}")
-        lines.append("\n(Ask for a specific secret by name to see its values.)")
         return "\n".join(lines)
+
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 

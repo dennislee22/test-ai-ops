@@ -495,17 +495,16 @@ K8S_TOOL_METADATA: dict = {
     "get_secret_list": {
         "fn":          get_secret_list,
         "description": (
-            "List or search secrets in a namespace. "
-            "Use filter_keys=['username','password','user','pass'] to find secrets "
-            "containing credential keys. "
-            "Use filter_keys=['tls','cert','ca'] for certificate searches. "
-            "If name is provided, returns all keys of that specific secret. "
-            "Whether values are shown or hidden is controlled by the user's Security settings — do NOT pass a decode argument."
+            "List Secrets in a namespace — useful for checking credentials or certificates. "
+            "Supports searching by secret name or by keys using filter_keys "
+            "(e.g., filter_keys=['username','password'] to find credential secrets, "
+            "filter_keys=['tls','cert','ca'] for certificates). "
+            "Values are shown only if the user's Security settings allow decoding."
         ),
-        "parameters": {
+        "parameters":  {
             "namespace":   {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "name":        {"type": "string", "default": ""},
-            "filter_keys": {"type": "array",  "default": None, "description": "Optional list of key name substrings to filter by."},
+            "name":        {"type": "string", "default": "", "description": "Optional secret name to fetch. If empty, lists all secrets in the namespace."},
+            "filter_keys": {"type": "array",  "default": None, "description": "Optional list of key name substrings to filter secrets by."},
         },
     },
     
