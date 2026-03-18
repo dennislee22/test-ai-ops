@@ -331,19 +331,18 @@ K8S_TOOL_METADATA: dict = {
         "fn":          get_pvc_status,
         "description": (
             "Show the status of PersistentVolumeClaims (PVCs) in a namespace. "
-            "Provides a detailed list of PVCs and a summary of counts per phase (Bound, Pending, Lost, Unknown). "
-            "Supports filtering by PVC status using phase_filter='bound' or 'non-bound'. "
-            "The LLM can semantically map user questions like 'which PVCs are attached?', "
-            "'which are not bound?', 'list all PVCs', or 'show unassigned volumes' to the appropriate filter. "
-            "Use show_all=True to include all PVC details."
+            "Provides a Markdown table listing PVCs with details: phase, access modes, storage class, capacity, and volume. "
+            "Supports filtering by PVC name using a partial match via the 'search' parameter. "
+            "If no PVCs match the search, all PVCs are listed as a fallback. "
+            "Use show_all=True to include all PVC details regardless of search."
         ),
         "parameters":  {
-            "namespace":      {"type": "string", "default": "all",
-                               "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "show_all":       {"type": "boolean", "default": False,
-                               "description": "Include detailed info for all PVCs in the output."},
-            "phase_filter":   {"type": "string", "default": None,
-                               "description": "Filter PVCs by phase: 'bound' or 'non-bound'. The LLM maps semantic queries like 'attached', 'not bound', etc. to this filter automatically."}
+            "namespace": {"type": "string", "default": "all",
+                          "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
+            "show_all":  {"type": "boolean", "default": False,
+                          "description": "Include detailed info for all PVCs in the output."},
+            "search":    {"type": "string",
+                          "description": "Optional keyword to filter PVCs by name (partial match). If no match, all PVCs are shown."}
         },
     },
     
@@ -570,15 +569,17 @@ K8S_TOOL_METADATA: dict = {
         "fn":          get_pod_tolerations,
         "description": (
             "Show Kubernetes pod tolerations used for scheduling onto tainted nodes. "
-            "Returns toleration key, operator, value, and effect for each pod. "
+            "Returns a Markdown table with combined toleration details (key, operator, value, effect) in a single column. "
+            "Supports filtering by pod name or partial toleration key. "
             "Use for: 'which pods tolerate taints', 'show tolerations for pod X', "
-            "'pods that tolerate NoSchedule or NoExecute'. "
-            "Helps diagnose why pods can run on tainted nodes."
+            "'pods that tolerate NoSchedule or NoExecute', or 'which pod has cde toleration'. "
+            "Helps diagnose why pods can run on tainted nodes. "
+            "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
         ),
         "parameters":  {
-            "namespace":  {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces."},
-            "pod_name":   {"type": "string", "description": "Optional pod name filter."},
-            "raw_output": {"type": "boolean", "default": False, "description": "Return kubectl-style table output."},
+            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
+            "pod_name":  {"type": "string", "description": "Optional pod name filter."},
+            "search":    {"type": "string", "description": "Optional keyword to filter tolerations by partial match on key/operator/value/effect."},
         },
     },
     

@@ -114,7 +114,7 @@ def _is_high_restart(pod, restart_count: int) -> bool:
 
 def get_pod_tolerations(namespace: str = "all",
                         pod_name: str | None = None,
-                        raw_output: bool = False) -> str:
+                        search: str | None = None) -> str:
     try:
         if namespace != "all":
             try:
@@ -138,23 +138,14 @@ def get_pod_tolerations(namespace: str = "all",
         if not pods.items:
             return f"No pods matching '{pod_name}' found in namespace '{namespace}'."
 
-        if raw_output:
-            hdr = f"{'NAMESPACE':<22} {'POD':<55} {'KEY':<35} {'OP':<10} {'VALUE':<20} {'EFFECT':<12}"
-            rows = [hdr, "-" * len(hdr)]
-
-        lines = []
-
+        table_rows = []
         for pod in sorted(pods.items, key=lambda p: (p.metadata.namespace, p.metadata.name)):
             ns = pod.metadata.namespace
             name = pod.metadata.name
-
             tolerations = pod.spec.tolerations or []
 
             if not tolerations:
-                if raw_output:
-                    rows.append(f"{ns:<22} {name:<55} {'<none>':<35} {'-':<10} {'-':<20} {'-':<12}")
-                else:
-                    lines.append(f"{ns}/{name}: no tolerations")
+                table_rows.append((ns, name, "<none>"))
                 continue
 
             for t in tolerations:
@@ -163,20 +154,37 @@ def get_pod_tolerations(namespace: str = "all",
                 val = t.value or "-"
                 eff = t.effect or "Any"
 
-                if raw_output:
-                    rows.append(
-                        f"{ns:<22} {name:<55} {key:<35} {op:<10} {val:<20} {eff:<12}"
-                    )
-                else:
-                    lines.append(
-                        f"{ns}/{name} | key:{key} op:{op} value:{val} effect:{eff}"
-                    )
+                tol_str = f"key:{key} op:{op} value:{val} effect:{eff}"
+                if search and search.lower() not in tol_str.lower():
+                    continue
 
-        if raw_output:
-            rows.append(f"\nTotal pods inspected: {len(pods.items)}")
-            return "\n".join(rows)
+                table_rows.append((ns, name, tol_str))
 
-        return "\n".join(lines)
+        # fallback: if search applied but no matches, show all tolerations
+        if search and not table_rows:
+            for pod in sorted(pods.items, key=lambda p: (p.metadata.namespace, p.metadata.name)):
+                ns = pod.metadata.namespace
+                name = pod.metadata.name
+                tolerations = pod.spec.tolerations or []
+
+                if not tolerations:
+                    table_rows.append((ns, name, "<none>"))
+                    continue
+
+                for t in tolerations:
+                    key = t.key or "<any>"
+                    op = t.operator or "Equal"
+                    val = t.value or "-"
+                    eff = t.effect or "Any"
+                    tol_str = f"key:{key} op:{op} value:{val} effect:{eff}"
+                    table_rows.append((ns, name, tol_str))
+
+        md_lines = ["| NAMESPACE | POD | TOLERATION |",
+                    "|---|---|---|"]
+        for ns, name, tol_str in table_rows:
+            md_lines.append(f"| `{ns}` | `{name}` | {tol_str} |")
+
+        return "\n".join(md_lines)
 
     except ApiException as e:
         return f"K8s API error: {e.reason}"
@@ -753,17 +761,17 @@ def get_storage_classes() -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_endpoints(namespace: str = "all", search: str = None) -> str:
+def get_endpoints(namespace: str = "all", search: str | None = None) -> str:
     try:
-        eps = (_core.list_endpoints_for_all_namespaces()
-               if namespace == "all"
-               else _core.list_namespaced_endpoints(namespace=namespace))
+        eps_list = (_core.list_endpoints_for_all_namespaces().items
+                    if namespace == "all"
+                    else _core.list_namespaced_endpoints(namespace=namespace).items)
 
-        if not eps.items:
+        if not eps_list:
             return f"No endpoints found in '{namespace}'."
 
         table_rows = []
-        for ep in eps.items:
+        for ep in eps_list:
             if search and search.lower() not in ep.metadata.name.lower():
                 continue
 
@@ -784,9 +792,8 @@ def get_endpoints(namespace: str = "all", search: str = None) -> str:
 
         fallback_msg = ""
         if search and not table_rows:
-            #fallback_msg = f"No matches for '{search}'. Showing all endpoints:\n"
             fallback_msg = f"No matches. Showing all endpoints:\n"
-            for ep in eps.items:
+            for ep in eps_list:
                 ns_name = ep.metadata.namespace
                 name = ep.metadata.name
 
@@ -805,9 +812,10 @@ def get_endpoints(namespace: str = "all", search: str = None) -> str:
         if not table_rows:
             return "No active Endpoints (no addresses) found."
 
-        md_lines = [fallback_msg] if fallback_msg else []
+        md_lines = []
 
         if namespace == "all":
+            md_lines.append("§NS_PREFIX§As no namespace was mentioned, I checked across all namespaces.§END_NS§")
             md_lines.append("| NAMESPACE | NAME | ADDRESS |")
             md_lines.append("|---|---|---|")
             for ns, name, addr in table_rows:
@@ -1634,7 +1642,7 @@ def get_hpa_status(namespace: str = "all") -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_pvc_status(namespace: str = "all", show_all: bool = False, phase_filter: str | None = None) -> str:
+def get_pvc_status(namespace: str = "all", show_all: bool = False, search: str | None = None) -> str:
     _AM = {"ReadWriteOnce": "RWO", "ReadWriteMany": "RWX"}
 
     def _access(pvc):
@@ -1652,9 +1660,7 @@ def get_pvc_status(namespace: str = "all", show_all: bool = False, phase_filter:
         if not pvcs.items:
             return f"No PVCs found in namespace '{namespace}'."
 
-        summary_counts = {"Bound": 0, "Pending": 0, "Lost": 0, "Unknown": 0}
-        detail_lines = []
-
+        table_rows = []
         for pvc in sorted(pvcs.items, key=lambda x: (x.metadata.namespace, x.metadata.name)):
             ns = pvc.metadata.namespace
             name = pvc.metadata.name
@@ -1664,29 +1670,40 @@ def get_pvc_status(namespace: str = "all", show_all: bool = False, phase_filter:
             vol = pvc.spec.volume_name or "<unbound>"
             am = _access(pvc)
 
-            summary_counts[phase] = summary_counts.get(phase, 0) + 1
+            if search and search.lower() not in name.lower():
+                continue
 
-            # Apply phase filter
-            if show_all or (phase_filter == "bound" and phase == "Bound") or (phase_filter == "non-bound" and phase != "Bound"):
-                detail_lines.append(
-                    f"{ns}/{name}: {phase} | access:{am} | class:{sc} | capacity:{cap} | volume:{vol}"
-                )
+            table_rows.append((ns, name, phase, am, sc, cap, vol))
 
-        # Details first
-        lines = []
-        if detail_lines:
-            lines.append("Details:")
-            lines.extend(detail_lines)
+        # fallback if search applied but nothing matched
+        if search and not table_rows:
+            for pvc in sorted(pvcs.items, key=lambda x: (x.metadata.namespace, x.metadata.name)):
+                ns = pvc.metadata.namespace
+                name = pvc.metadata.name
+                phase = pvc.status.phase or "Unknown"
+                sc = pvc.spec.storage_class_name or "default"
+                cap = (pvc.status.capacity or {}).get("storage", "?")
+                vol = pvc.spec.volume_name or "<unbound>"
+                am = _access(pvc)
+                table_rows.append((ns, name, phase, am, sc, cap, vol))
 
-        # Then summary
-        lines.append(
-            f"\nPVC summary for namespace '{namespace}': "
-            f"Total PVCs: {len(pvcs.items)} | Bound: {summary_counts.get('Bound',0)} | "
-            f"Pending: {summary_counts.get('Pending',0)} | Lost: {summary_counts.get('Lost',0)} | "
-            f"Unknown: {summary_counts.get('Unknown',0)}"
-        )
+        if not table_rows:
+            return "No PVCs to display."
 
-        return "\n".join(lines)
+        md_lines = []
+        if namespace == "all":
+            md_lines.append("§NS_PREFIX§As no namespace was mentioned, I checked across all namespaces.§END_NS§")
+            md_lines.append("| NAMESPACE | PVC | PHASE | ACCESS | CLASS | CAPACITY | VOLUME |")
+            md_lines.append("|---|---|---|---|---|---|---|")
+            for ns, name, phase, am, sc, cap, vol in table_rows:
+                md_lines.append(f"| `{ns}` | `{name}` | {phase} | {am} | {sc} | {cap} | {vol} |")
+        else:
+            md_lines.append("| PVC | PHASE | ACCESS | CLASS | CAPACITY | VOLUME |")
+            md_lines.append("|---|---|---|---|---|---|")
+            for _, name, phase, am, sc, cap, vol in table_rows:
+                md_lines.append(f"| `{name}` | {phase} | {am} | {sc} | {cap} | {vol} |")
+
+        return "\n".join(md_lines)
 
     except ApiException as e:
         return f"K8s API error (PVC listing): {e.reason}"
