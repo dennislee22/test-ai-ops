@@ -923,7 +923,6 @@ def get_node_labels(search: str = None) -> str:
         if not nodes:
             return "No nodes found."
 
-        # ✅ Normalize "non-filter" keywords
         if search:
             search_lower = search.lower().strip()
             if search_lower in ("*", "all", "label", "labels", "node", "nodes"):
@@ -935,31 +934,26 @@ def get_node_labels(search: str = None) -> str:
             labels = node.metadata.labels or {}
             node_name = node.metadata.name
 
-            # Standard markdown bullets - clean in UI, clean in CLI
             label_lines = [f"  - {k}={v}" for k, v in labels.items()] or ["  - <none>"]
 
-            # ✅ No filtering → show all
             if not search:
-                results.append(f"**Node: {node_name}**\n" + "\n".join(label_lines))
+                results.append(f"**Node: {node_name}**\n" + "\n".join(label_lines) + "\n")
                 continue
 
             search_lower = search.lower()
 
-            # Match node name → show all labels
             if search_lower in node_name.lower():
-                results.append(f"**Node: {node_name}**\n" + "\n".join(label_lines))
+                results.append(f"**Node: {node_name}**\n" + "\n".join(label_lines) + "\n")
                 continue
 
-            # Match label content
             filtered = [l for l in label_lines if search_lower in l.lower()]
             if filtered:
-                results.append(f"**Node: {node_name}**\n" + "\n".join(filtered))
+                results.append(f"**Node: {node_name}**\n" + "\n".join(filtered) + "\n")
 
         if not results:
             return f"No nodes or labels found matching '{search}'."
 
-        # Join nodes with a double newline so there is a blank line between each node block
-        return "\n\n".join(results)
+        return "\n".join(results)
 
     except ApiException as e:
         return f"K8s API error: {e.reason}"
