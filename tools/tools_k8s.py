@@ -519,7 +519,7 @@ def get_pod_logs(pod_name: str, namespace: str = "default",
         return (f"Pod '{pod_name}' not found."
                 if e.status == 404 else f"K8s error: {e.reason}")
 
-def describe_pod(pod_name: str, namespace: str = "default") -> str:
+def describe_pod(pod_name: str, namespace: str = "all") -> str:
 
     if "/" in pod_name:
         parts = pod_name.split("/", 1)

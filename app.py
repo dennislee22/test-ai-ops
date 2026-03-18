@@ -301,17 +301,12 @@ def build_agent():
 
         else:
             synthesis_prompt = (
+                f"Question: {original_question}\n\n"
+                f"Tool Results:\n{combined}\n"
                 "EVALUATE the tool results above. Do they contain the correct data to answer the user's question?\n"
                 "- If YES: Write the final plain-text answer right now.\n"
-                "- If NO (e.g., the resource wasn't found, or you used the wrong tool): DO NOT answer the user.\n"
-                "Output a new `<tool_call>` tag to try a different tool or search a different namespace."
-         #       "Answer the question using only the tool results above. "
-         #       "Be specific — name exact pods, nodes, or resources. "
-         #       "If the results contain a list, reproduce it in full. "
-         #       "If the question asks for a count, state the number directly. "
-         #       "CRITICAL INSTRUCTION: You already have all the data required. "
-         #       "DO NOT output any <tool_call> tags. DO NOT call any more tools. "
-         #       "Write the final plain-text answer to the user right now."
+                "- If NO: Output a new <tool_call> to try a different tool.\n"
+                "CRITICAL: NEVER call a tool that you have already used. If you have already used the necessary tools, you MUST synthesize the final answer immediately."
             )
 
         return [HumanMessage(content=_ns_prefix + synthesis_prompt)]
