@@ -2740,7 +2740,8 @@ def get_secret_list(namespace: str = "all", name: str = "", pod_name: str = None
                         data = s.data or {}
                         lines.append(f"    {sname} [type={s.type}]")
                         for k, v in data.items():
-                            lines.append(f"      {k}: {_decode(v) if decode else '<hidden>'}")
+                            # Fix 1: Updated with your specific UI instructions
+                            lines.append(f"      {k}: {_decode(v) if decode else '<hidden> — enable \\'Show Secret Values\\' in ⚙ Settings → Security to decode.'}")
                     except ApiException:
                         lines.append(f"    {sname}: <fetch error>")
             else:
@@ -2772,7 +2773,8 @@ def get_secret_list(namespace: str = "all", name: str = "", pod_name: str = None
             if data:
                 lines.append("  Data:")
                 for k, v in data.items():
-                    lines.append(f"    {k}: {_decode(v) if decode else '<hidden>'}")
+                    # Fix 2: Updated with your specific UI instructions
+                    lines.append(f"    {k}: {_decode(v) if decode else '<hidden> — enable \\'Show Secret Values\\' in ⚙ Settings → Security to decode.'}")
             else:
                 lines.append("  Data: None")
             return "\n".join(lines)
