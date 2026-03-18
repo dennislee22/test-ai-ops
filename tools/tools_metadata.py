@@ -597,7 +597,7 @@ K8S_TOOL_METADATA: dict = {
         ),
         "parameters":  {
             "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "pod_name":  {"type": "string", "description": "Name of the pod to inspect."}
+            "pod_name":  {"type": "string", "description": "Name of the pod to inspect (supports partial matches)."}
         },
     },
 

@@ -9,6 +9,7 @@ NEVER_BYPASS = {
 
 BYPASSABLE_TOOLS = {
     "get_namespace_status",
+    "get_namespace_resource_summary",
     "get_persistent_volumes",
     "get_pv_usage",
     "get_cluster_role_bindings",
@@ -28,6 +29,7 @@ BYPASSABLE_TOOLS = {
 
 LIST_INTENTS = (
     r"\blist all\b", r"\bshow all\b", r"\bget all\b", r"\bdisplay all\b",
+    r"\ball pods\b", r"\ball services\b", r"\ball svc\b", r"\ball pv\b", r"\ball persistent volume\b",
     r"\blist entire\b", r"\bshow entire\b", r"\bget entire\b", r"\bdisplay entire\b",
 )
 

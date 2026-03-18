@@ -189,31 +189,26 @@ def get_pod_tolerations(namespace: str = "all",
     except ApiException as e:
         return f"K8s API error: {e.reason}"
         
-def get_pod_resource_requests(namespace: str = "all",
-                              pod_name: str | None = None,
-                              raw_output: bool = False) -> str:
+def get_pod_resource_requests(namespace: str = "all", search: str | None = None) -> str:
     try:
-        if namespace != "all":
-            try:
-                _core.read_namespace(name=namespace)
-            except ApiException as e:
-                if e.status == 404:
-                    return (f"Namespace '{namespace}' does not exist in this cluster. "
-                            f"Cannot report pod resources for a non-existent namespace.")
-                raise
-
-        pods = (_core.list_pod_for_all_namespaces()
+        pods = (_core.list_pod_for_all_namespaces().items
                 if namespace == "all"
-                else _core.list_namespaced_pod(namespace=namespace))
+                else _core.list_namespaced_pod(namespace=namespace).items)
 
-        if not pods.items:
+        if not pods:
             return f"No pods found in namespace '{namespace}'."
 
-        if pod_name:
-            pods.items = [p for p in pods.items if pod_name in p.metadata.name]
+        filtered_pods = []
+        if search:
+            search_lower = search.lower()
+            for pod in pods:
+                if search_lower in pod.metadata.name.lower() or (namespace != "all" and search_lower in pod.metadata.namespace.lower()):
+                    filtered_pods.append(pod)
+        else:
+            filtered_pods = pods
 
-        if not pods.items:
-            return f"No pods matching '{pod_name}' found in namespace '{namespace}'."
+        if search and not filtered_pods:
+            filtered_pods = pods
 
         def _parse_cpu(v):
             if not v:
@@ -231,13 +226,12 @@ def get_pod_resource_requests(namespace: str = "all",
                     return float(v[:-len(u)]) * m
             return float(v)
 
-        lines = []
+        md_lines = []
+        md_lines.append("As no namespace was mentioned, I checked across all namespaces.")
+        md_lines.append("| NAMESPACE | POD | CONTAINER | CPU_REQ | CPU_LIM | MEM_REQ | MEM_LIM | ATTACHED GPU |")
+        md_lines.append("|---|---|---|---|---|---|---|---|")
 
-        if raw_output:
-            hdr = f"{'NAMESPACE':<22} {'POD':<45} {'CONTAINER':<30} {'CPU_REQ':<10} {'CPU_LIM':<10} {'MEM_REQ':<10} {'MEM_LIM':<10}"
-            rows = [hdr, "-" * len(hdr)]
-
-        for pod in sorted(pods.items, key=lambda p: (p.metadata.namespace, p.metadata.name)):
+        for pod in sorted(filtered_pods, key=lambda p: (p.metadata.namespace, p.metadata.name)):
             ns = pod.metadata.namespace
             podn = pod.metadata.name
 
@@ -246,7 +240,16 @@ def get_pod_resource_requests(namespace: str = "all",
             mem_req_total = 0.0
             mem_lim_total = 0.0
 
-            for c in pod.spec.containers:
+            # Detect GPU requests
+            gpu_reqs = []
+            for c in pod.spec.containers or []:
+                req = c.resources.requests or {}
+                for k, v in req.items():
+                    if "gpu" in k.lower():
+                        gpu_reqs.append(f"{c.name}:{v}")
+            attached_gpu = ", ".join(gpu_reqs) if gpu_reqs else "-"
+
+            for c in pod.spec.containers or []:
                 req = c.resources.requests or {}
                 lim = c.resources.limits or {}
 
@@ -260,31 +263,15 @@ def get_pod_resource_requests(namespace: str = "all",
                 mem_req_total += _parse_mem(mem_req)
                 mem_lim_total += _parse_mem(mem_lim)
 
-                if raw_output:
-                    rows.append(
-                        f"{ns:<22} {podn:<45} {c.name:<30} "
-                        f"{cpu_req:<10} {cpu_lim:<10} {mem_req:<10} {mem_lim:<10}"
-                    )
-                else:
-                    lines.append(
-                        f"{ns}/{podn} | container:{c.name} "
-                        f"| cpu_req:{cpu_req} cpu_lim:{cpu_lim} "
-                        f"| mem_req:{mem_req} mem_lim:{mem_lim}"
-                    )
-
-            if not raw_output:
-                lines.append(
-                    f"  → TOTAL | cpu_req:{cpu_req_total:.3f} cores "
-                    f"| cpu_lim:{cpu_lim_total:.3f} cores "
-                    f"| mem_req:{mem_req_total:.2f}Gi "
-                    f"| mem_lim:{mem_lim_total:.2f}Gi"
+                md_lines.append(
+                    f"| `{ns}` | `{podn}` | `{c.name}` | {cpu_req} | {cpu_lim} | {mem_req} | {mem_lim} | {attached_gpu} |"
                 )
 
-        if raw_output:
-            rows.append(f"\nTotal pods inspected: {len(pods.items)}")
-            return "\n".join(rows)
+            md_lines.append(
+                f"| `{ns}` | `{podn}` | **TOTAL** | {cpu_req_total:.3f} cores | {cpu_lim_total:.3f} cores | {mem_req_total:.2f}Gi | {mem_lim_total:.2f}Gi | {attached_gpu} |"
+            )
 
-        return "\n".join(lines)
+        return "\n".join(md_lines)
 
     except ApiException as e:
         return f"K8s API error: {e.reason}"
