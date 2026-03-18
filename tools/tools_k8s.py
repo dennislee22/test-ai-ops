@@ -210,22 +210,6 @@ def get_pod_resource_requests(namespace: str = "all", search: str | None = None)
         if search and not filtered_pods:
             filtered_pods = pods
 
-        def _parse_cpu(v):
-            if not v:
-                return 0
-            if v.endswith("m"):
-                return float(v[:-1]) / 1000
-            return float(v)
-
-        def _parse_mem(v):
-            if not v:
-                return 0
-            units = {"Ki": 1/1024/1024, "Mi": 1/1024, "Gi": 1, "Ti": 1024}
-            for u, m in units.items():
-                if v.endswith(u):
-                    return float(v[:-len(u)]) * m
-            return float(v)
-
         md_lines = []
         md_lines.append("As no namespace was mentioned, I checked across all namespaces.")
         md_lines.append("| NAMESPACE | POD | CONTAINER | CPU_REQ | CPU_LIM | MEM_REQ | MEM_LIM | ATTACHED GPU |")
@@ -235,12 +219,11 @@ def get_pod_resource_requests(namespace: str = "all", search: str | None = None)
             ns = pod.metadata.namespace
             podn = pod.metadata.name
 
-            cpu_req_total = 0.0
-            cpu_lim_total = 0.0
-            mem_req_total = 0.0
-            mem_lim_total = 0.0
+            cpu_req_total_m = 0
+            cpu_lim_total_m = 0
+            mem_req_total_mi = 0
+            mem_lim_total_mi = 0
 
-            # Detect GPU requests
             gpu_reqs = []
             for c in pod.spec.containers or []:
                 req = c.resources.requests or {}
@@ -258,24 +241,108 @@ def get_pod_resource_requests(namespace: str = "all", search: str | None = None)
                 mem_req = req.get("memory", "0")
                 mem_lim = lim.get("memory", "0")
 
-                cpu_req_total += _parse_cpu(cpu_req)
-                cpu_lim_total += _parse_cpu(cpu_lim)
-                mem_req_total += _parse_mem(mem_req)
-                mem_lim_total += _parse_mem(mem_lim)
+                cpu_req_m = cpu_req if cpu_req.endswith("m") else f"{int(float(cpu_req)*1000)}m"
+                cpu_lim_m = cpu_lim if cpu_lim.endswith("m") else f"{int(float(cpu_lim)*1000)}m"
+
+                def to_mi(val):
+                    if val.endswith("Ki"):
+                        return f"{int(int(val[:-2])/1024)}Mi"
+                    if val.endswith("Gi"):
+                        return f"{int(float(val[:-2])*1024)}Mi"
+                    if val.endswith("Ti"):
+                        return f"{int(float(val[:-2])*1024*1024)}Mi"
+                    if val.endswith("Mi"):
+                        return val
+                    return f"{int(int(val)/1024/1024)}Mi"
+
+                mem_req_mi = to_mi(mem_req)
+                mem_lim_mi = to_mi(mem_lim)
+
+                cpu_req_total_m += int(cpu_req_m.rstrip("m"))
+                cpu_lim_total_m += int(cpu_lim_m.rstrip("m"))
+                mem_req_total_mi += int(mem_req_mi.rstrip("Mi"))
+                mem_lim_total_mi += int(mem_lim_mi.rstrip("Mi"))
 
                 md_lines.append(
-                    f"| `{ns}` | `{podn}` | `{c.name}` | {cpu_req} | {cpu_lim} | {mem_req} | {mem_lim} | {attached_gpu} |"
+                    f"| `{ns}` | `{podn}` | `{c.name}` | {cpu_req_m} | {cpu_lim_m} | {mem_req_mi} | {mem_lim_mi} | {attached_gpu} |"
                 )
 
             md_lines.append(
-                f"| `{ns}` | `{podn}` | **TOTAL** | {cpu_req_total:.3f} cores | {cpu_lim_total:.3f} cores | {mem_req_total:.2f}Gi | {mem_lim_total:.2f}Gi | {attached_gpu} |"
+                f"| `{ns}` | `{podn}` | **TOTAL** | {cpu_req_total_m}m | {cpu_lim_total_m}m | {mem_req_total_mi}Mi | {mem_lim_total_mi}Mi | {attached_gpu} |"
             )
 
         return "\n".join(md_lines)
 
     except ApiException as e:
         return f"K8s API error: {e.reason}"
-        
+
+def get_pod_containers_resources(namespace: str = "all", search: str | None = None) -> str:
+    try:
+        pods = (_core.list_pod_for_all_namespaces().items
+                if namespace == "all"
+                else _core.list_namespaced_pod(namespace=namespace).items)
+
+        if not pods:
+            return f"No pods found in namespace '{namespace}'."
+
+        filtered_pods = []
+        if search:
+            search_lower = search.lower()
+            for pod in pods:
+                if search_lower in pod.metadata.name.lower() or (namespace != "all" and search_lower in pod.metadata.namespace.lower()):
+                    filtered_pods.append(pod)
+        else:
+            filtered_pods = pods
+
+        if search and not filtered_pods:
+            filtered_pods = pods
+
+        md_lines = []
+        md_lines.append("As no namespace was mentioned, I checked across all namespaces.")
+        md_lines.append("| NAMESPACE | POD | CONTAINER | IMAGE | CPU_REQ | CPU_LIM | MEM_REQ | MEM_LIM | ATTACHED GPU |")
+        md_lines.append("|---|---|---|---|---|---|---|---|---|")
+
+        def _parse_cpu(v):
+            if not v:
+                return "0m"
+            return v
+
+        def _parse_mem(v):
+            if not v:
+                return "0Mi"
+            return v
+
+        for pod in sorted(filtered_pods, key=lambda p: (p.metadata.namespace, p.metadata.name)):
+            ns = pod.metadata.namespace
+            podn = pod.metadata.name
+
+            gpu_reqs = []
+            for c in pod.spec.containers or []:
+                req = c.resources.requests or {}
+                for k, v in req.items():
+                    if "gpu" in k.lower():
+                        gpu_reqs.append(f"{c.name}:{v}")
+            attached_gpu = ", ".join(gpu_reqs) if gpu_reqs else "-"
+
+            for c in pod.spec.containers or []:
+                req = c.resources.requests or {}
+                lim = c.resources.limits or {}
+
+                cpu_req = _parse_cpu(req.get("cpu", "0m"))
+                cpu_lim = _parse_cpu(lim.get("cpu", "0m"))
+                mem_req = _parse_mem(req.get("memory", "0Mi"))
+                mem_lim = _parse_mem(lim.get("memory", "0Mi"))
+                image   = c.image or "<none>"
+
+                md_lines.append(
+                    f"| `{ns}` | `{podn}` | `{c.name}` | `{image}` | {cpu_req} | {cpu_lim} | {mem_req} | {mem_lim} | {attached_gpu} |"
+                )
+
+        return "\n".join(md_lines)
+
+    except ApiException as e:
+        return f"K8s API error: {e.reason}"
+    
 def get_pod_status(namespace: str = "all", show_all: bool = False, raw_output: bool = False, phase_only: bool = False) -> str:
     try:
         if namespace != "all":

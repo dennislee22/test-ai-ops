@@ -8,7 +8,7 @@ from tools.tools_k8s import (
     get_service_accounts, get_cluster_role_bindings, get_namespace_status,
     get_pod_tolerations, get_pod_resource_requests, run_cluster_health, get_replicaset,
     get_namespace_resource_summary, get_pod_images, get_unhealthy_pods_detail,
-    get_coredns_health, get_pv_usage, find_resource,
+    get_coredns_health, get_pv_usage, find_resource, get_pod_containers_resources,
     query_prometheus_metrics, kubectl_exec, exec_db_query, get_pod_storage,
 )
 
@@ -49,6 +49,22 @@ K8S_TOOL_METADATA: dict = {
                 "default": None,
                 "description": "Optional namespace to restrict the search. Defaults to all namespaces."
             },
+        },
+    },
+
+    "get_pod_containers_resources": {
+        "fn":          get_pod_containers_resources,
+        "description": (
+            "List all containers in pods across a namespace (or all namespaces). "
+            "Shows container name, image, CPU and memory requests/limits, and attached GPUs if any. "
+            "Supports partial matching on pod names or namespaces using the `search` parameter. "
+            "Use for queries like: 'list all containers in pod X', "
+            "'what images are running in namespace Y', or 'show CPU/memory allocated for containers'. "
+            "Always includes requested CPU in m and memory in Mi, as defined in pod.spec.resources."
+        ),
+        "parameters":  {
+            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to all namespaces — only override when the user explicitly names a namespace."},
+            "search":    {"type": "string", "description": "Partial pod name or namespace to filter results. Leave empty to show all pods."}
         },
     },
 
