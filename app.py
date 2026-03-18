@@ -276,6 +276,20 @@ def build_agent():
                 "Only after providing the totals should you list the per-pod breakdown. "
                 "Do NOT just list the pods—the total is the answer to a calculate question."
             ),
+            "get_node_capacity": (
+                "EVALUATE the tool results. IF the user is asking to fit a specific pod with requested CPU/Memory,"
+                "You MUST evaluate node capacity using STRICT BOOLEAN logic and copy this EXACT output format:"
+                "Node: [Node Name]"
+                "--------------------------------------------------"
+                "CPU: [Available] >= [Requested] -> [TRUE/FALSE]"
+                "RAM: [Available] >= [Requested] -> [TRUE/FALSE]"
+                "Fits on node: [TRUE/FALSE]"
+                "(Repeat the block above for each node evaluated)"
+                "Explanation: [Briefly explain the math results in plain English.]"
+                "Conclusion: [Write your final statement on whether the pod can be scheduled and where.]"
+                "IF the user is just asking a general question about capacity (e.g., how much capacity is available):"
+                "Do NOT use the boolean format. Just provide a helpful summary of the current capacity based on the table."
+            ),
         }
 
         _ENUMERATION_TOOLS = { # Unique common prompt
