@@ -19,6 +19,8 @@ CRITICAL: Do NOT use the abbreviation as a resource name argument (e.g., if a us
 - "ns" = Namespaces -> Call the `get_namespace_status` tool.
 - "pv" = Persistent Volumes -> Call the `get_persistent_volumes` tool.
 - "pvc" = Persistent Volume Claims -> Call the `get_pvc_status` tool.
+- "rwo" = ReadWriteOnce
+- "rwx" = ReadWriteMany
 
 ## MULTI-TOOL ORCHESTRATION & LOGIC CHAINS
 When diagnosing, chain your tools together logically without asking the user for permission:
