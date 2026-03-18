@@ -278,15 +278,19 @@ def build_agent():
             ),
             "get_node_capacity": (
                 "EVALUATE the tool results. IF the user is asking to fit a specific pod with requested CPU/Memory,"
-                "You MUST evaluate node capacity using STRICT BOOLEAN logic and copy this EXACT output format:"
+                "You MUST evaluate node capacity using STRICT BOOLEAN logic and use this EXACT output format:"
                 "Node: [Node Name]"
                 "--------------------------------------------------"
-                "CPU: [Available] >= [Requested] -> [TRUE/FALSE]"
-                "RAM: [Available] >= [Requested] -> [TRUE/FALSE]"
+                "CPU: [Available] >= or <= [Requested] -> [TRUE/FALSE]"
+                "RAM: [Available] >= or <= [Requested] -> [TRUE/FALSE]"
                 "Fits on node: [TRUE/FALSE]"
                 "(Repeat the block above for each node evaluated)"
                 "Explanation: [Briefly explain the math results in plain English.]"
                 "Conclusion: [Write your final statement on whether the pod can be scheduled and where.]"
+                "For example if user asks if a pod with 100CPU and 500GB"
+                "CPU: [50] <= [100] -> FALSE"
+                "RAM: [50] <= [500] -> FALSE"
+                "Fits on node: FALSE"
                 "IF the user is just asking a general question about capacity (e.g., how much capacity is available):"
                 "Do NOT use the boolean format. Just provide a helpful summary of the current capacity based on the table."
             ),
