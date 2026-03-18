@@ -267,14 +267,10 @@ def build_agent():
                 "Reproduce the log output EXACTLY as returned by the tool. "
                 "Include every log line with its full timestamp. Do NOT summarise."
             ),
-        #    "get_unhealthy_pods_detail": (
-        #        "List EVERY pod from the tool results. One bullet per pod. "
-        #        "Format: `namespace/pod-name`: <phase> | Restarts: <N> | Cause: <reason>. Do NOT skip any pod."
+        #    "get_pv_usage": (
+        #        "Reproduce the storage usage report in full — do NOT summarise. "
+        #        "Include every PVC entry: those nearing capacity, within capacity, AND skipped."
         #    ),
-            "get_pv_usage": (
-                "Reproduce the storage usage report in full — do NOT summarise. "
-                "Include every PVC entry: those nearing capacity, within capacity, AND skipped."
-            ),
             "describe_pod": (
                 "Report the pod details from the tool results. "
                 "Include: phase, conditions, container states, restarts, resource requests/limits, "
@@ -284,10 +280,10 @@ def build_agent():
                 "Present the metrics exactly as returned. "
                 "List each series with its last value. Do not round or omit any series."
             ),
-            "get_pod_images": (
-                "List every pod from the results. "
-                "Format: 'namespace/pod-name' [container]: registry/image:tag."
-            ),
+        #    "get_pod_images": (
+        #        "List every pod from the results. "
+        #        "Format: 'namespace/pod-name' [container]: registry/image:tag."
+        #    ),
             "kubectl_exec": (
                 "Reproduce the command output VERBATIM. "
                 "Do NOT reformat, summarise, or omit any rows."
