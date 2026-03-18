@@ -1914,7 +1914,7 @@ def get_pv_usage(threshold: int = 80) -> str:
             return ""
         # Added explicit newlines to ensure clean separation from the text above
         lines = [f"\n### {title}\n"]
-        lines.append("| Status | Namespace / PVC | Usage | Used (GiB) | Total (GiB) | Free (GiB) |")
+        lines.append("| Flag | Namespace / PVC | Usage | Used (GiB) | Total (GiB) | Free (GiB) |")
         # Fixed the mismatched columns (now exactly 6 separators)
         lines.append("|---|---|---|---|---|---|")
         for d in data:
@@ -2924,7 +2924,7 @@ def get_cluster_role_bindings() -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_pod_images(namespace: str = "all") -> str:
+def get_pod_images(namespace: str = "all", search: str | None = None) -> str:
     try:
         pods = (_core.list_pod_for_all_namespaces()
                 if namespace == "all"
@@ -2935,49 +2935,40 @@ def get_pod_images(namespace: str = "all") -> str:
     if not pods.items:
         return f"No pods found in namespace '{namespace}'."
 
-    image_id_map = {}
-    for pod in pods.items:
-        for cs in (pod.status.container_statuses or []):
-            if cs.image and cs.image_id:
-                image_id_map[cs.image] = cs.image_id
-
     rows = []
     for pod in sorted(pods.items, key=lambda p: (p.metadata.namespace, p.metadata.name)):
         ns_name  = pod.metadata.namespace
         pod_name = pod.metadata.name
-        phase    = pod.status.phase or "Unknown"
-
-        cs_by_name = {cs.name: cs for cs in (pod.status.container_statuses or [])}
 
         for c in (pod.spec.containers or []):
-            image     = c.image or "?"
-            cs        = cs_by_name.get(c.name)
-            image_id  = (cs.image_id or "") if cs else ""
+            image = c.image or "?"
 
-            digest = ""
-            if "@sha256:" in image_id:
-                digest = "sha256:" + image_id.split("@sha256:")[-1][:12] + "…"
-            elif "@sha256:" in image:
-                digest = "sha256:" + image.split("@sha256:")[-1][:12] + "…"
+            if search and search.lower() not in pod_name.lower() and search.lower() not in image.lower():
+                continue
 
-            tag = ""
-            if ":" in image and "@" not in image:
-                tag = image.split(":")[-1]
-            elif "@" in image:
-                tag = image.split("@")[0].split(":")[-1] if ":" in image.split("@")[0] else "latest"
+            rows.append(f"- `{ns_name}/{pod_name}` [{c.name}]: `{image}`")
 
-            rows.append(
-                f"  {ns_name}/{pod_name}  [{c.name}]  "
-                f"image:{image}"
-                + (f"  digest:{digest}" if digest else "")
-                + f"  phase:{phase}"
-            )
+    # fallback if search yields nothing
+    if search and not rows:
+        for pod in sorted(pods.items, key=lambda p: (p.metadata.namespace, p.metadata.name)):
+            ns_name  = pod.metadata.namespace
+            pod_name = pod.metadata.name
+
+            for c in (pod.spec.containers or []):
+                image = c.image or "?"
+                rows.append(f"- `{ns_name}/{pod_name}` [{c.name}]: `{image}`")
 
     if not rows:
         return f"No containers found in namespace '{namespace}'."
 
-    header = f"Pod images in '{namespace}' ({len(pods.items)} pods):"
-    return header + "\n" + "\n".join(rows)
+    lines = []
+
+    if namespace == "all":
+        lines.append("_As no namespace was specified, showing pod images from all namespaces._\n")
+
+    lines.extend(rows)
+
+    return "\n".join(lines)
 
 def run_cluster_health(namespace: str = "all", show_all: bool = True, raw_output: bool = True) -> str:
     try:

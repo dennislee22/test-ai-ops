@@ -262,35 +262,14 @@ def build_agent():
         
         _log_ag.info(f"[REQ:{req_id}] [prepare_msgs] combining {len(tool_results)} tool result(s) ({len(combined)} chars) for LLM synthesis")
 
-        _TOOL_FORMATS = {
-            "get_pod_logs": (
-                "Reproduce the log output EXACTLY as returned by the tool. "
-                "Include every log line with its full timestamp. Do NOT summarise."
-            ),
-        #    "get_pv_usage": (
-        #        "Reproduce the storage usage report in full — do NOT summarise. "
-        #        "Include every PVC entry: those nearing capacity, within capacity, AND skipped."
-        #    ),
-            "describe_pod": (
-                "Report the pod details from the tool results. "
-                "Include: phase, conditions, container states, restarts, resource requests/limits, "
-                "and volumes (to answer questions about storage types)."
-            ),
+        _TOOL_FORMATS = { # Unique prompt for individual tool
             "query_prometheus_metrics": (
                 "Present the metrics exactly as returned. "
                 "List each series with its last value. Do not round or omit any series."
             ),
-        #    "get_pod_images": (
-        #        "List every pod from the results. "
-        #        "Format: 'namespace/pod-name' [container]: registry/image:tag."
-        #    ),
             "kubectl_exec": (
                 "Reproduce the command output VERBATIM. "
                 "Do NOT reformat, summarise, or omit any rows."
-            ),
-            "get_pod_status": (
-                "Reproduce the pod table VERBATIM — every row, every column. "
-                "Do NOT summarise, count, or describe in prose."
             ),
             "get_namespace_resource_summary": (
                 "ALWAYS calculate and lead with the total figures at the very top of your answer: "
@@ -298,16 +277,10 @@ def build_agent():
                 "Only after providing the totals should you list the per-pod breakdown. "
                 "Do NOT just list the pods—the total is the answer to a calculate question."
             ),
-          #  "get_gpu_info": (
-          #      "Report GPU details from the tool results. "
-          #      "State the exact GPU model, total allocatable count, and how many are in use vs free."
-          #  ),
         }
 
-        _ENUMERATION_TOOLS = {
-            "get_pod_status", "get_deployment_status", "get_daemonset_status",
-            "get_statefulset_status", "get_job_status", "get_hpa_status",
-            "get_service_status", "get_namespace_status",
+        _ENUMERATION_TOOLS = { # Unique common prompt
+             "get_pod_logs", "describe_pod",
         }
 
         _single_tool = next(iter(_tools_used - {""}), None)
@@ -322,24 +295,23 @@ def build_agent():
             synthesis_prompt = (
                 f"Question: {original_question}\n\n"
                 f"Tool Results:\n{combined}\n"
-                "List EVERY item from the tool results. "
-                "One bullet per item. Include namespace, name, and relevant state. "
-                "Do NOT skip or summarise any item. "
-                "If the result is a summary line (e.g. 'All pods healthy'), "
-                "reproduce it exactly without expansion."
+                "List EVERY item from the tool results."
+                "One bullet per item. Do NOT skip or summarise any item."
             )
 
         else:
             synthesis_prompt = (
-                f"Question: {original_question}\n\n"
-                f"Tool Results:\n{combined}\n"
-                "Answer the question using only the tool results above. "
-                "Be specific — name exact pods, nodes, or resources. "
-                "If the results contain a list, reproduce it in full. "
-                "If the question asks for a count, state the number directly. "
-                "CRITICAL INSTRUCTION: You already have all the data required. "
-                "DO NOT output any <tool_call> tags. DO NOT call any more tools. "
-                "Write the final plain-text answer to the user right now."
+                "EVALUATE the tool results above. Do they contain the correct data to answer the user's question?\n"
+                "- If YES: Write the final plain-text answer right now.\n"
+                "- If NO (e.g., the resource wasn't found, or you used the wrong tool): DO NOT answer the user.\n"
+                "Output a new `<tool_call>` tag to try a different tool or search a different namespace."
+         #       "Answer the question using only the tool results above. "
+         #       "Be specific — name exact pods, nodes, or resources. "
+         #       "If the results contain a list, reproduce it in full. "
+         #       "If the question asks for a count, state the number directly. "
+         #       "CRITICAL INSTRUCTION: You already have all the data required. "
+         #       "DO NOT output any <tool_call> tags. DO NOT call any more tools. "
+         #       "Write the final plain-text answer to the user right now."
             )
 
         return [HumanMessage(content=_ns_prefix + synthesis_prompt)]
