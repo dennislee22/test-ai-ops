@@ -303,8 +303,8 @@ def build_agent():
                 f"Question: {original_question}\n\n"
                 f"Tool Results:\n{combined}\n"
                 "EVALUATE the tool results above. Do they contain the correct data to answer the user's question?\n"
-                "- If YES: Write the final plain-text answer right now.\n"
-                "- If NO: Output a new <tool_call> to try a different tool.\n"
+                "- If the data is correct/sufficient: Write the final plain-text answer right now. DO NOT start your response with 'YES' or any preamble. Answer the user directly.\n"
+                "- If the data is missing/incorrect: Output a new <tool_call> to try a different tool.\n"
                 "CRITICAL: NEVER call a tool that you have already used. If you have already used the necessary tools, you MUST synthesize the final answer immediately."
             )
 
