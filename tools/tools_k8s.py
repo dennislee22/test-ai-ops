@@ -1685,8 +1685,9 @@ def get_pvc_status(namespace: str = "all", show_all: bool = False, search: str |
             return "No PVCs to display."
 
         md_lines = []
+
         if namespace == "all":
-            md_lines.append("§NS_PREFIX§As no namespace was mentioned, I checked across all namespaces.§END_NS§")
+            md_lines.append("_As no namespace was specified, showing PVCs from all namespaces._\n")
             md_lines.append("| NAMESPACE | PVC | PHASE | ACCESS | CLASS | CAPACITY | VOLUME |")
             md_lines.append("|---|---|---|---|---|---|---|")
             for ns, name, phase, am, sc, cap, vol in table_rows:
@@ -1701,7 +1702,7 @@ def get_pvc_status(namespace: str = "all", show_all: bool = False, search: str |
 
     except ApiException as e:
         return f"K8s API error (PVC listing): {e.reason}"
-
+    
 def get_persistent_volumes() -> str:
     _AM = {"ReadWriteOnce": "RWO", "ReadWriteMany": "RWX", "ReadOnlyMany": "ROX",
            "ReadWriteOncePod": "RWOP"}
