@@ -1662,6 +1662,33 @@ document.querySelectorAll('.stab').forEach(btn => {
   };
 });
 
+document.querySelectorAll('.info-trigger').forEach(trigger => {
+    trigger.addEventListener('mouseenter', (e) => {
+        const tooltipId = e.target.getAttribute('data-target');
+        const tooltip = document.getElementById(tooltipId);
+        
+        if (tooltip) {
+            // Get the bounding box of the ⓘ icon
+            const rect = e.target.getBoundingClientRect();
+            
+            // Position the tooltip slightly above and to the right of the cursor/icon
+            tooltip.style.left = `${rect.left + 20}px`;
+            tooltip.style.top = `${rect.top - 10}px`;
+            
+            // Show it
+            tooltip.classList.add('visible');
+        }
+    });
+
+    trigger.addEventListener('mouseleave', (e) => {
+        const tooltipId = e.target.getAttribute('data-target');
+        const tooltip = document.getElementById(tooltipId);
+        if (tooltip) {
+            tooltip.classList.remove('visible');
+        }
+    });
+});
+
 // Close buttons are hidden (display:none in CSS) but keep handlers safe
 ['settings-cancel','kb-cancel','output-cancel','security-cancel'].forEach(id => {
   const el = document.getElementById(id);
