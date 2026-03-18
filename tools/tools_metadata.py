@@ -495,16 +495,22 @@ K8S_TOOL_METADATA: dict = {
     "get_secret_list": {
         "fn":          get_secret_list,
         "description": (
-            "List Secrets in a namespace — useful for checking credentials or certificates. "
-            "Supports searching by secret name or by keys using filter_keys "
-            "(e.g., filter_keys=['username','password'] to find credential secrets, "
-            "filter_keys=['tls','cert','ca'] for certificates). "
-            "Values are shown only if the user's Security settings allow decoding."
+            "List or search secrets in a namespace, or attached to a specific pod. "
+            "Use `filter_keys=['username','password','user','pass']` to find secrets containing credential keys, "
+            "or `filter_keys=['tls','cert','ca']` for certificate searches. "
+            "If `name` is provided, returns all keys of that specific secret. "
+            "If `pod_name` is provided, lists all secrets and configmaps attached to that pod, with keys. "
+            "Whether secret values are shown or hidden is controlled by the user's Security settings — do NOT pass a decode argument."
         ),
         "parameters":  {
-            "namespace":   {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "name":        {"type": "string", "default": "", "description": "Optional secret name to fetch. If empty, lists all secrets in the namespace."},
-            "filter_keys": {"type": "array",  "default": None, "description": "Optional list of key name substrings to filter secrets by."},
+            "namespace":   {"type": "string", "default": "all",
+                            "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
+            "name":        {"type": "string", "default": "",
+                            "description": "Optional name of a secret to fetch."},
+            "pod_name":    {"type": "string", "default": None,
+                            "description": "Optional pod name to list all secrets and configmaps attached to that pod."},
+            "filter_keys": {"type": "array",  "default": None,
+                            "description": "Optional list of key name substrings to filter secrets by."},
         },
     },
     
@@ -871,53 +877,40 @@ K8S_TOOL_METADATA: dict = {
         "fn":          exec_db_query,
         "description": (
             "Execute a read-only SQL query inside a running database pod in a Kubernetes namespace. "
-            "Supports MySQL, MariaDB, and PostgreSQL — auto-detected from the container image or name. "
-            "For multi-container pods (e.g. a pod with containers: upgrade-db, k8tz, fluent-bit, db), "
-            "set container='db' to target the correct database container explicitly. "
-            "Credentials (username, password, database name) are automatically discovered from the "
-            "pod's environment variables, Kubernetes Secrets, and ConfigMaps — no manual credential input needed. "
-            "Use this tool for any query involving database contents, user accounts, table data, "
-            "or schema inspection. "
-            "\n\n"
-            "CREDENTIAL QUESTIONS — DO NOT use this tool first. "
-            "For any question about usernames or passwords, ALWAYS call get_secret_list() first. "
-            "Only fall back to exec_db_query if secrets contain no useful credential information. "
-            "\n\n"
-            "ONLY read-only SQL is permitted (SELECT, SHOW, DESCRIBE, EXPLAIN). "
-            "INSERT / UPDATE / DELETE / DROP / ALTER / TRUNCATE are blocked. "
-            "\n\n"
-            "WORKFLOW for 'access db-0 of cmlwb1 and find tables in database sense': "
-            "  exec_db_query(namespace='cmlwb1', pod_name='db-0', container='db', database='sense', "
+            "Supports MySQL, MariaDB, and PostgreSQL, auto-detected from the container image or name. "
+            "For multi-container pods (e.g., 'upgrade-db', 'k8tz', 'fluent-bit', 'db'), "
+            "set container='db' to target the correct database container. "
+            "Credentials (username, password, database) are automatically discovered from the pod's environment, "
+            "Secrets, and ConfigMaps. No manual input required. "
+            "Use for querying database contents, user accounts, table data, or schema inspection. "
+            "CREDENTIAL SAFETY: Always call get_secret_list() first for questions about usernames or passwords. "
+            "Only use exec_db_query if secrets contain no useful credentials. "
+            "READ-ONLY ENFORCEMENT: Only SELECT, SHOW, DESCRIBE, EXPLAIN are allowed. "
+            "INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE are blocked. "
+            "WORKFLOW EXAMPLE: To access 'db-0' in namespace 'cmlwb1' and find tables in database 'sense': "
+            "exec_db_query(namespace='cmlwb1', pod_name='db-0', container='db', database='sense', "
             "sql=\"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'\") "
-            "If the tool returns an error listing available containers, re-call with the correct container= value. "
-            "\n\n"
-            "RESULT READING — CRITICAL: "
-            "Results include a header row showing column names (e.g. 'user|host|password'). "
-            "Always read the header to identify which value is which. "
-            "The 'host' column is a connection restriction (e.g. 'localhost') — it is NOT a password. "
-            "The 'password' or 'passwd' column contains the credential hash. "
-            "Never report 'host' as the password. "
-            "\n\n"
-            "MANDATORY DIALECT RETRY — this is not optional: "
-            "If the error contains 'does not exist' or 'relation' or 'unknown table', "
-            "the dialect guess was wrong. You MUST immediately call this tool again with the other dialect. "
-            "MySQL error → call again with PostgreSQL SQL (SELECT usename, passwd FROM pg_shadow). "
-            "PostgreSQL error → call again with MySQL SQL (SELECT user, password FROM mysql.user). "
-            "Do NOT explain to the user what SQL to run. Do NOT ask for clarification. "
-            "Just call the tool again immediately with the corrected SQL. "
-            "\n\n"
-            "PostgreSQL SQL examples (NEVER use DATABASE() — that is MySQL-only): "
+            "If an error lists available containers, re-call with the correct container. "
+            "RESULT INTERPRETATION: The output includes a header row showing column names (e.g., 'user|host|password'). "
+            "'host' is a connection restriction, not a password. "
+            "'password' or 'passwd' contains the credential hash. Do not confuse these. "
+            "MANDATORY DIALECT RETRY: If the error mentions 'does not exist', 'relation', or 'unknown table', "
+            "retry immediately with the other SQL dialect. "
+            "MySQL error → retry with PostgreSQL SQL (SELECT usename, passwd FROM pg_shadow). "
+            "PostgreSQL error → retry with MySQL SQL (SELECT user, password FROM mysql.user). "
+            "Do not ask the user for clarification. "
+            "PostgreSQL examples: "
             "\"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'\", "
             "\"SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name\", "
             "\"SELECT usename, passwd FROM pg_shadow WHERE usename='x'\", "
             "\"SELECT datname FROM pg_database\" "
-            "MySQL/MariaDB SQL examples: "
+            "MySQL/MariaDB examples: "
             "\"SHOW TABLES\", \"SELECT user, host FROM mysql.user\", \"SHOW DATABASES\""
         ),
         "parameters": {
             "namespace": {
                 "type": "string",
-                "description": "Kubernetes namespace where the database pod runs.",
+                "description": "Kubernetes namespace where the database pod runs."
             },
             "sql": {
                 "type": "string",
@@ -925,33 +918,33 @@ K8S_TOOL_METADATA: dict = {
                     "Read-only SQL query to execute. "
                     "Examples: \"SHOW TABLES\", \"SELECT user, host FROM mysql.user\", "
                     "\"SELECT usename FROM pg_catalog.pg_user\", \"DESCRIBE my_table\""
-                ),
+                )
             },
             "pod_name": {
                 "type": "string",
                 "default": "",
                 "description": (
-                    "Optional: specific DB pod name (e.g. 'db-0'). "
+                    "Optional: specific DB pod name (e.g., 'db-0'). "
                     "Leave empty to auto-detect the first running DB pod in the namespace."
-                ),
+                )
             },
             "database": {
                 "type": "string",
                 "default": "",
                 "description": (
-                    "Optional: database/schema name to connect to. "
+                    "Optional: database/schema name. "
                     "Leave empty to use the value auto-discovered from the pod's environment."
-                ),
+                )
             },
             "container": {
                 "type": "string",
                 "default": "",
                 "description": (
-                    "Optional: container name inside the pod (e.g. 'db'). "
-                    "Required for multi-container pods where the DB container is not the first one. "
+                    "Optional: container name inside the pod (e.g., 'db'). "
+                    "Required for multi-container pods if the DB container is not the first. "
                     "If the tool errors with 'available containers: ...', set this to the DB container name."
-                ),
-            },
+                )
+            }
         },
     },
 }
