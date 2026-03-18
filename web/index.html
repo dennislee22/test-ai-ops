@@ -10,6 +10,26 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
 <script src="/static/marked.min.js"></script>
 <style>
+.section-tooltip { 
+    display: none; /* Hides it by default */
+    position: fixed; 
+    z-index: 9999; 
+    background: #1a2035; 
+    border: 1px solid var(--accent2); 
+    border-radius: 8px; 
+    padding: 10px 13px; 
+    width: 320px; 
+    box-shadow: 0 8px 28px rgba(0,0,0,0.7), 0 0 0 1px rgba(88,166,255,0.15); 
+    pointer-events: none; 
+    text-transform: none; 
+    font-family: 'IBM Plex Sans', sans-serif; 
+    font-weight: 400; 
+    letter-spacing: 0; 
+}
+.section-tooltip.visible { 
+    display: block; /* Shows it when hovered */
+}
+
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden}
 body{font-family:'IBM Plex Sans',sans-serif}
@@ -795,13 +815,6 @@ button{cursor:pointer;font-family:inherit}
                 title="Maximum tokens the LLM can generate per response."/>
               <span style="font-size:10px;color:var(--panelDim)">512 — 8192</span>
             </div>
-          </div>
-        </div>
-
-        <div id="tooltip-skip-synthesis" class="section-tooltip">
-          <div style="font-weight: 600; margin-bottom: 4px; color: #fff;">Skip Synthesis</div>
-          <div style="font-size: 13px; color: #cbd5e1; line-height: 1.4;">
-            Bypasses the AI's final reasoning step to output raw data directly from the cluster tools (e.g., tables, logs). This is significantly faster and prevents the LLM from summarizing or omitting details.
           </div>
         </div>
         
@@ -2774,5 +2787,11 @@ window.glCopy = function(btn, text) {
 // ═════════════════════════════════════════════════════════
 })();
 </script>
+<div id="tooltip-skip-synthesis" class="section-tooltip">
+  <div style="font-weight: 600; margin-bottom: 4px; color: #fff;">Skip Synthesis</div>
+  <div style="font-size: 13px; color: #cbd5e1; line-height: 1.4;">
+    Bypasses the AI's final reasoning step to output raw data directly from the cluster tools (e.g., tables, logs). This is significantly faster and prevents the LLM from summarizing or omitting details.
+  </div>
+</div>
 </body>
 </html>
