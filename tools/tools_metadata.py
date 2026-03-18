@@ -194,7 +194,7 @@ K8S_TOOL_METADATA: dict = {
             "to get ALL labels for that specific node, OR pass a label keyword (e.g., 'gpu', 'cde') "
             "to find which nodes have that specific label. "
             "IMPORTANT: If the user asks for 'labels', 'label', 'all', or similar general terms, do NOT pass these words as the search term. Leave the search parameter empty (null). "
-            "CRITICAL: You must output the exact text returned by this tool. Do NOT try to convert this list into a table, modify the formatting, summarize the data, or omit ANY labels."
+            "CRITICAL: You must output the exact text returned by this tool. Use bulleted list. Do NOT try to convert this list into a table, modify the formatting, summarize the data, or omit ANY labels."
         ),
         "parameters":  {
             "search": {
