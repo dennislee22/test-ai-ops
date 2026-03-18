@@ -1967,7 +1967,7 @@ const EXAMPLES = [
   'What can you do?',
   'Is the Vault doing ok?',
   'show the last 10 lines of log for cdp-embedded-db-0',
-  'Show me all the nodes\' status',
+  'list all the nodes',
   'Any pod is currently not Running?',
   'What storage class is Vault using?',
   'How much capacity is available to be requested for each node?',
@@ -1978,6 +1978,7 @@ const EXAMPLES = [
   'Which node has GPU?',
   'List all pv that consume more than 80\% of the allocated disk capacity',
   'What\'s the cpu and ram request for cdp-embedded-db pod in cdp namespace?',
+  'I want to create a pod with 800CPU & 12GB memory, does the cluster have enough available capacity? If yes, which node?',
 ];
 const exBtns = document.getElementById('ex-btns');
 EXAMPLES.forEach(ex=>{
