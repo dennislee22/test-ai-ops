@@ -4398,79 +4398,100 @@ def _discover_mysql_database(pod_name: str, namespace: str,
             return db
     return ""
 
-def exec_db_query(namespace: str, sql: str, pod_name: str = "", database: str = "", container: str = "", _core=None, _find_db_pod=None, _detect_db_type=None, _find_db_container=None) -> str:
+def exec_db_query(namespace: str, sql: str, pod_name: str = "", database: str = "", container: str = "") -> str:
+    import base64, re, logging
+    from kubernetes import client
+    _log = logging.getLogger(__name__)
     _SQL_WRITE_RE = re.compile(r"^\s*(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE)\b", re.IGNORECASE)
     _KUBECTL_MAX_OUT = 10000
+
+    _core = client.CoreV1Api()
+
+    def _default_find_db_pod(ns):
+        pods = _core.list_namespaced_pod(ns).items
+        for p in pods:
+            if any(c in p.metadata.name.lower() for c in ("db", "mysql", "postgres")):
+                return p.metadata.name, None
+        return None, None
+
+    def _default_detect_db_type(pod, ns, container_hint=""):
+        try:
+            pod_obj = _core.read_namespaced_pod(pod, ns)
+            for c in pod_obj.spec.containers:
+                cname = c.name.lower()
+                if "mysql" in cname: return "mysql"
+                if "postgres" in cname or "postgresql" in cname: return "postgres"
+            return None
+        except: return None
+
+    def _default_find_db_container(pod, ns, db_type):
+        try:
+            pod_obj = _core.read_namespaced_pod(pod, ns)
+            for c in pod_obj.spec.containers:
+                cname = c.name.lower()
+                if db_type in cname: return c.name
+            return pod_obj.spec.containers[0].name
+        except: return ""
+
     if not sql.strip():
         return "[ERROR] Empty SQL query."
     if _SQL_WRITE_RE.match(sql):
         return "[BLOCKED] Write operations are not permitted. Only SELECT/read queries allowed."
-    if _core is None:
-        return "[ERROR] Kubernetes CoreV1Api object (_core) not provided."
-    if _find_db_pod is None:
-        return "[ERROR] _find_db_pod helper function not provided."
-    if _detect_db_type is None:
-        return "[ERROR] _detect_db_type helper function not provided."
-    if _find_db_container is None:
-        return "[ERROR] _find_db_container helper function not provided."
+
     if not pod_name:
-        pod_name, db_type = _find_db_pod(namespace)
+        pod_name, _ = _default_find_db_pod(namespace)
         if not pod_name:
             return f"[ERROR] No running DB pod found in namespace '{namespace}'."
+        db_type = _default_detect_db_type(pod_name, namespace)
+        container = _default_find_db_container(pod_name, namespace, db_type)
     else:
-        db_type = _detect_db_type(pod_name, namespace, container_hint=container)
+        db_type = _default_detect_db_type(pod_name, namespace, container)
         if not db_type:
             return f"[ERROR] Could not detect DB type for pod '{pod_name}' in '{namespace}'."
-    if not container:
-        container = _find_db_container(pod_name, namespace, db_type)
         if not container:
-            return f"[ERROR] Could not determine DB container in pod '{pod_name}'."
+            container = _default_find_db_container(pod_name, namespace, db_type)
+
     creds = {}
     try:
         pod = _core.read_namespaced_pod(name=pod_name, namespace=namespace)
     except Exception:
         return f"[ERROR] Could not read pod '{pod_name}' in namespace '{namespace}'."
+
     for vol in pod.spec.volumes or []:
         secret_data = None
         if getattr(vol, 'secret', None):
             try:
                 secret_obj = _core.read_namespaced_secret(vol.secret.secret_name, namespace)
                 secret_data = secret_obj.data
-            except Exception:
-                continue
+            except: continue
         elif getattr(vol, 'config_map', None):
             try:
                 config_obj = _core.read_namespaced_config_map(vol.config_map.name, namespace)
                 secret_data = config_obj.data
-            except Exception:
-                continue
+            except: continue
         if secret_data:
             for k, v in secret_data.items():
                 val = v
                 try:
                     val = base64.b64decode(v).decode() if getattr(vol, 'secret', None) else v
-                except Exception:
-                    pass
+                except: pass
                 k_lower = k.lower()
-                if "user" in k_lower:
-                    creds["user"] = val
-                elif "pass" in k_lower or "pwd" in k_lower:
-                    creds["password"] = val
-                elif "host" in k_lower:
-                    creds["host"] = val
-                elif "port" in k_lower:
-                    creds["port"] = val
-                elif "db" in k_lower or "database" in k_lower:
-                    creds["database"] = val
-            if creds.get("user") and creds.get("password"):
-                break
+                if "user" in k_lower: creds["user"] = val
+                elif "pass" in k_lower or "pwd" in k_lower: creds["password"] = val
+                elif "host" in k_lower: creds["host"] = val
+                elif "port" in k_lower: creds["port"] = val
+                elif "db" in k_lower or "database" in k_lower: creds["database"] = val
+            if creds.get("user") and creds.get("password"): break
+
     if not creds.get("user") or not creds.get("password"):
         return f"[ERROR] Could not retrieve DB credentials from pod '{pod_name}'."
+
     db_name = database or creds.get("database") or ""
     user = creds["user"]
     password = creds["password"]
     host = creds.get("host") or "127.0.0.1"
     port = creds.get("port") or ("5432" if db_type == "postgres" else "3306")
+
     pg_sql = sql
     if db_type == "postgres":
         if re.match(r"^\s*SHOW\s+TABLES\s*$", pg_sql, re.IGNORECASE):
@@ -4481,7 +4502,9 @@ def exec_db_query(namespace: str, sql: str, pod_name: str = "", database: str = 
         if desc_m:
             tbl = desc_m.group(1).strip("`\"'")
             pg_sql = f"SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = '{tbl}' ORDER BY ordinal_position"
+
     safe_sql = pg_sql.replace("'", "'\\''")
+
     if db_type in ("mysql", "mariadb"):
         pass_arg = f"-p'{password}'" if password else ""
         db_arg = db_name if db_name else ""
@@ -4496,6 +4519,7 @@ def exec_db_query(namespace: str, sql: str, pod_name: str = "", database: str = 
             cmd = f"{pg_env}psql {user_flag} {db_flag} --no-password -t -A -c '{safe_sql}'"
     else:
         return f"[ERROR] Unsupported DB type: {db_type}"
+
     exec_cmd = ["/bin/sh", "-c", cmd]
     stream_kwargs = dict(stderr=True, stdin=False, stdout=True, tty=False, _preload_content=True, container=container)
     try:
@@ -4503,10 +4527,11 @@ def exec_db_query(namespace: str, sql: str, pod_name: str = "", database: str = 
         output = resp.strip() if isinstance(resp, str) else str(resp).strip()
     except Exception as exc:
         return f"[ERROR] Exec failed: {exc}"
-    if not output:
-        return "(Query returned no rows.)"
+
+    if not output: return "(Query returned no rows.)"
     if len(output) > _KUBECTL_MAX_OUT:
         output = output[:_KUBECTL_MAX_OUT] + f"\n...[output truncated at {_KUBECTL_MAX_OUT} chars]"
+
     m = re.match(r"^\s*SELECT\s+(.+?)\s+FROM\b", pg_sql, re.IGNORECASE | re.DOTALL)
     cols = []
     if m:
@@ -4522,5 +4547,6 @@ def exec_db_query(namespace: str, sql: str, pod_name: str = "", database: str = 
         col_header = "|".join(cols)
         col_sep = "|".join("-" * max(len(c), 4) for c in cols)
         output = col_header + "\n" + col_sep + "\n" + output
+
     header = f"DB query result [{db_type.upper()} · pod={pod_name} · ns={namespace}" + (f" · db={db_name}" if db_name else "") + "]\n" + "-"*60 + "\n"
     return header + output
