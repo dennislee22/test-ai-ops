@@ -79,17 +79,17 @@ K8S_TOOL_METADATA: dict = {
             "'list all pods in namespace X', "
             "'show pods in longhorn-system', "
             "'how many pods are running', "
-            "'which pods are unhealthy'. "
+            "'which pods are unhealthy', "
+            "'search pods by partial name or namespace'. "
 
-            "Supports namespace filtering and can return either only unhealthy pods (default) "
-            "or ALL pods when show_all=true. "
+            "Supports namespace filtering and search by partial pod or namespace name. "
+            "Returns either only unhealthy pods (default) or ALL pods when show_all=true. "
 
             "Shows pod phase (Running/Pending/Failed/Unknown), container readiness, restart counts, "
             "and unhealthy conditions. "
 
-            "Do NOT use this tool when the user is searching for a specific pod by name "
-            "(e.g., 'where is grafana pod', 'find nginx pod'). "
-            "Use find_resource for name-based lookup instead."
+            "Do NOT use this tool for detailed per-container resource requests or limits — "
+            "use get_pod_resource_requests for that purpose."
         ),
         "parameters":  {
             "namespace":   {
@@ -97,15 +97,14 @@ K8S_TOOL_METADATA: dict = {
                 "default": "all",
                 "description": "Namespace to query. Defaults to 'all' namespaces — set when user specifies a namespace."
             },
+            "search":      {
+                "type": "string",
+                "description": "Optional search string to match pod names or namespaces (supports partial matches)."
+            },
             "show_all":    {
                 "type": "boolean",
                 "default": False,
                 "description": "Set true to include ALL pods (healthy + unhealthy)."
-            },
-            "raw_output":  {
-                "type": "boolean",
-                "default": False,
-                "description": "Return kubectl-style tabular output."
             },
             "phase_only":  {
                 "type": "boolean",

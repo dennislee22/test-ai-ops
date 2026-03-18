@@ -343,197 +343,71 @@ def get_pod_containers_resources(namespace: str = "all", search: str | None = No
     except ApiException as e:
         return f"K8s API error: {e.reason}"
     
-def get_pod_status(namespace: str = "all", show_all: bool = False, raw_output: bool = False, phase_only: bool = False) -> str:
+def get_pod_status(namespace: str = "all", search: str | None = None, show_all: bool = False, phase_only: bool = False) -> str:
     try:
         if namespace != "all":
             try:
                 _core.read_namespace(name=namespace)
             except ApiException as e:
                 if e.status == 404:
-                    return (f"Namespace '{namespace}' does not exist in this cluster. "
-                            f"Cannot report pod count for a non-existent namespace.")
+                    return f"Namespace '{namespace}' does not exist in this cluster. Cannot report pod status."
                 raise
 
-        if not show_all and not raw_output:
-            non_running_phases = []
-            for phase in ("Pending", "Failed", "Unknown"):
-                try:
-                    result = (_core.list_pod_for_all_namespaces(
-                                  field_selector=f"status.phase={phase}")
-                              if namespace == "all"
-                              else _core.list_namespaced_pod(
-                                  namespace=namespace,
-                                  field_selector=f"status.phase={phase}"))
-                    non_running_phases.extend(result.items)
-                except ApiException:
-                    pass
+        pods = (_core.list_pod_for_all_namespaces().items
+                if namespace == "all"
+                else _core.list_namespaced_pod(namespace=namespace).items)
 
-            if not phase_only:
-                _cont = None
-                while True:
-                    try:
-                        kw = {"field_selector": "status.phase=Running", "limit": 100}
-                        if namespace != "all":
-                            kw["namespace"] = namespace
-                        if _cont:
-                            kw["_continue"] = _cont
-                        page = (_core.list_pod_for_all_namespaces(**kw)
-                                if namespace == "all"
-                                else _core.list_namespaced_pod(**kw))
-                        for pod in page.items:
-                            restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
-                            ready    = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
-                            tot      = len(pod.spec.containers)
-                            if ready < tot or _is_high_restart(pod, restarts):
-                                non_running_phases.append(pod)
-                        _cont = (page.metadata._continue
-                                 if page.metadata and page.metadata._continue else None)
-                        if not _cont:
-                            break
-                    except ApiException:
-                        break
+        if not pods:
+            return f"No pods found in namespace '{namespace}'."
 
-            if not non_running_phases:
-                msg = "All pods are in Running phase" if phase_only else "All pods are healthy and Running"
-                return f"{msg} in namespace '{namespace}'."
+        filtered_pods = []
+        if search:
+            search_lower = search.lower()
+            for pod in pods:
+                if search_lower in pod.metadata.name.lower() or (namespace != "all" and search_lower in pod.metadata.namespace.lower()):
+                    filtered_pods.append(pod)
+        else:
+            filtered_pods = pods
 
-            label = "Non-Running pods" if phase_only else "Unhealthy/non-Running pods"
-            out_lines = [f"### {label} in '{namespace}'\n"]
-            if namespace == "all":
-                out_lines.extend(["| NAMESPACE | NAME | STATUS | READY | RESTARTS | CONDITIONS |", "|---|---|---|---|---|---|"])
-            else:
-                out_lines.extend(["| NAME | STATUS | READY | RESTARTS | CONDITIONS |", "|---|---|---|---|---|"])
-            
-            for pod in non_running_phases:
-                phase    = pod.status.phase or "Unknown"
+        if search and not filtered_pods:
+            filtered_pods = pods
+
+        non_running = []
+        if not show_all:
+            for pod in filtered_pods:
+                phase = pod.status.phase or "Unknown"
                 restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
-                ready    = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
-                tot      = len(pod.spec.containers)
-                bad      = [f"{c.type}={c.status}" for c in (pod.status.conditions or []) if c.status != "True"]
-                bad_str  = ", ".join(bad) if bad else "-"
-                
-                if namespace == "all":
-                    out_lines.append(f"| {pod.metadata.namespace} | {pod.metadata.name} | {phase} | {ready}/{tot} | {restarts} | {bad_str} |")
-                else:
-                    out_lines.append(f"| {pod.metadata.name} | {phase} | {ready}/{tot} | {restarts} | {bad_str} |")
-            return "\n".join(out_lines)
+                ready = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
+                tot = len(pod.spec.containers)
+                if phase not in ("Running", "Succeeded") or ready < tot or _is_high_restart(pod, restarts):
+                    non_running.append(pod)
 
-        if show_all and not raw_output and namespace == "all":
-            unhealthy = []
-            healthy_by_ns: dict = {}
+        if phase_only:
+            display_pods = non_running if non_running else filtered_pods
+        elif show_all:
+            display_pods = filtered_pods
+        else:
+            display_pods = non_running if non_running else filtered_pods
 
-            for phase in ("Pending", "Failed", "Unknown"):
-                try:
-                    result = _core.list_pod_for_all_namespaces(field_selector=f"status.phase={phase}")
-                    for pod in result.items:
-                        restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
-                        ready    = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
-                        tot      = len(pod.spec.containers)
-                        bad      = [f"{c.type}={c.status}" for c in (pod.status.conditions or []) if c.status != "True"]
-                        bad_str  = ", ".join(bad) if bad else "-"
-                        unhealthy.append(f"| {pod.metadata.namespace} | {pod.metadata.name} | {phase} | {ready}/{tot} | {restarts} | {bad_str} |")
-                except ApiException:
-                    pass
-
-            _cont = None
-            while True:
-                try:
-                    kw = {"field_selector": "status.phase=Running", "limit": 100}
-                    if _cont:
-                        kw["_continue"] = _cont
-                    page = _core.list_pod_for_all_namespaces(**kw)
-                    for pod in page.items:
-                        restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
-                        ready    = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
-                        tot      = len(pod.spec.containers)
-                        ns_k     = pod.metadata.namespace
-                        if ready < tot or _is_high_restart(pod, restarts):
-                            bad = [f"{c.type}={c.status}" for c in (pod.status.conditions or []) if c.status != "True"]
-                            bad_str = ", ".join(bad) if bad else "-"
-                            unhealthy.append(f"| {ns_k} | {pod.metadata.name} | Running | {ready}/{tot} | {restarts} | {bad_str} |")
-                        else:
-                            healthy_by_ns[ns_k] = healthy_by_ns.get(ns_k, 0) + 1
-                    _cont = (page.metadata._continue if page.metadata and page.metadata._continue else None)
-                    if not _cont:
-                        break
-                except ApiException:
-                    break
-
-            healthy_total = sum(healthy_by_ns.values())
-            total = healthy_total + len(unhealthy)
-            lines = [f"### Pods across all namespaces: {total} total ({healthy_total} healthy, {len(unhealthy)} unhealthy)\n"]
-            if unhealthy:
-                lines.append(f"**Unhealthy pods ({len(unhealthy)}):**\n")
-                lines.extend(["| NAMESPACE | NAME | STATUS | READY | RESTARTS | CONDITIONS |", "|---|---|---|---|---|---|"])
-                lines.extend(unhealthy)
-                lines.append("\n")
-            lines.append(f"**Healthy Running pods by namespace ({healthy_total} total):**\n")
-            lines.extend(["| NAMESPACE | HEALTHY PODS |", "|---|---|"])
-            for ns_key, count in sorted(healthy_by_ns.items()):
-                lines.append(f"| {ns_key} | {count} |")
-            return "\n".join(lines)
-
-        pods = (_core.list_pod_for_all_namespaces() if namespace == "all"
-                else _core.list_namespaced_pod(namespace=namespace))
-
-        if not pods.items:
-            return f"Namespace '{namespace}' exists but has 0 pods."
-
-        total = len(pods.items)
-
-        if raw_output:
-            if namespace == "all":
-                hdr = "| NAMESPACE | NAME | READY | STATUS | RESTARTS | AGE |"
-                sep = "|---|---|---|---|---|---|"
-            else:
-                hdr = "| NAME | READY | STATUS | RESTARTS | AGE |"
-                sep = "|---|---|---|---|---|"
-            
-            rows = [hdr, sep]
-            
-            import datetime as dt
-            from datetime import timezone
-            for pod in sorted(pods.items, key=lambda p: (p.metadata.namespace, p.metadata.name)):
-                phase    = pod.status.phase or "Unknown"
-                restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
-                ready    = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
-                tot      = len(pod.spec.containers)
-                created  = pod.metadata.creation_timestamp
-                if created:
-                    age_s = int((dt.datetime.now(timezone.utc) - created).total_seconds())
-                    if age_s < 3600:    age_str = f"{age_s//60}m"
-                    elif age_s < 86400: age_str = f"{age_s//3600}h"
-                    else:               age_str = f"{age_s//86400}d"
-                else:
-                    age_str = "<unknown>"
-                
-                if namespace == "all":
-                    rows.append(f"| {pod.metadata.namespace} | {pod.metadata.name} | {ready}/{tot} | {phase} | {restarts} | {age_str} |")
-                else:
-                    rows.append(f"| {pod.metadata.name} | {ready}/{tot} | {phase} | {restarts} | {age_str} |")
-            
-            rows.append(f"\n**Total: {total} pod(s) in namespace '{namespace}'.**")
-            return "\n".join(rows)
-
-        # Updated block: Standard output now consistently outputs as a Markdown table
+        total = len(display_pods)
         lines = [f"### Pods in '{namespace}' ({total} total)\n"]
         if namespace == "all":
             lines.extend(["| NAMESPACE | NAME | STATUS | READY | RESTARTS | CONDITIONS |", "|---|---|---|---|---|---|"])
         else:
             lines.extend(["| NAME | STATUS | READY | RESTARTS | CONDITIONS |", "|---|---|---|---|---|"])
 
-        for pod in pods.items:
-            phase    = pod.status.phase or "Unknown"
+        for pod in display_pods:
+            phase = pod.status.phase or "Unknown"
             restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
-            ready    = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
-            tot      = len(pod.spec.containers)
-            bad      = [f"{c.type}={c.status}" for c in (pod.status.conditions or []) if c.status != "True"]
-            bad_str  = ", ".join(bad) if bad else "-"
-            
+            ready = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
+            tot = len(pod.spec.containers)
+            bad = [f"{c.type}={c.status}" for c in (pod.status.conditions or []) if c.status != "True"]
+            bad_str = ", ".join(bad) if bad else "-"
             if namespace == "all":
                 lines.append(f"| {pod.metadata.namespace} | {pod.metadata.name} | {phase} | {ready}/{tot} | {restarts} | {bad_str} |")
             else:
                 lines.append(f"| {pod.metadata.name} | {phase} | {ready}/{tot} | {restarts} | {bad_str} |")
+
         return "\n".join(lines)
 
     except ApiException as e:
