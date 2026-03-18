@@ -3044,7 +3044,7 @@ def get_pod_storage(namespace: str = "all", search: str | None = None) -> str:
         pvc_pods = []
 
         for pod in pods:
-            pod_pvcs = []
+            pod_entries = []
 
             for vol in pod.spec.volumes or []:
                 if vol.persistent_volume_claim:
@@ -3060,10 +3060,10 @@ def get_pod_storage(namespace: str = "all", search: str | None = None) -> str:
 
                     storage_class = pvc.spec.storage_class_name or "Unknown"
 
-                    pod_pvcs.append(f"{pvc_name}({mode_str}, {storage_class})")
+                    pod_entries.append((pvc_name, mode_str, storage_class))
 
-            if pod_pvcs:
-                pvc_pods.append((pod, pod_pvcs))
+            if pod_entries:
+                pvc_pods.append((pod, pod_entries))
 
         if not pvc_pods:
             return f"No pods with PVCs found in namespace '{namespace}'."
@@ -3071,11 +3071,11 @@ def get_pod_storage(namespace: str = "all", search: str | None = None) -> str:
         filtered = []
         if search:
             s = search.lower()
-            for pod, pvcs in pvc_pods:
+            for pod, entries in pvc_pods:
                 if s in pod.metadata.name.lower() or (
                     namespace != "all" and s in pod.metadata.namespace.lower()
                 ):
-                    filtered.append((pod, pvcs))
+                    filtered.append((pod, entries))
         else:
             filtered = pvc_pods
 
@@ -3083,13 +3083,14 @@ def get_pod_storage(namespace: str = "all", search: str | None = None) -> str:
             filtered = pvc_pods
 
         lines = []
-        lines.append("| NAMESPACE | POD | PVC(s) |")
-        lines.append("|---|---|---|")
+        lines.append("| NAMESPACE | POD | PVC | ACCESS MODE | STORAGE CLASS |")
+        lines.append("|---|---|---|---|---|")
 
-        for pod, pvcs in sorted(filtered, key=lambda x: (x[0].metadata.namespace, x[0].metadata.name)):
-            lines.append(
-                f"| `{pod.metadata.namespace}` | `{pod.metadata.name}` | {', '.join(pvcs)} |"
-            )
+        for pod, entries in sorted(filtered, key=lambda x: (x[0].metadata.namespace, x[0].metadata.name)):
+            for pvc_name, mode_str, storage_class in entries:
+                lines.append(
+                    f"| `{pod.metadata.namespace}` | `{pod.metadata.name}` | `{pvc_name}` | {mode_str} | {storage_class} |"
+                )
 
         return "\n".join(lines)
 
