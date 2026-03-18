@@ -772,7 +772,10 @@ button{cursor:pointer;font-family:inherit}
         <div id="chat-token-row">
           <div style="display:flex;align-items:center;justify-content:flex-end;gap:16px;font-family:'IBM Plex Mono',monospace">
             
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer" title="Skip LLM synthesis and show raw tool output directly">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              
+              <span class="info-trigger" data-target="tooltip-skip-synthesis" style="cursor:help;color:var(--accent2);font-size:13px;font-family:sans-serif;">ⓘ</span>
+              
               <span style="font-size:11px;color:var(--dimText);white-space:nowrap;font-weight:600;letter-spacing:0.02em">Skip Synthesise</span>
               <div style="position:relative;width:36px;height:20px;flex-shrink:0">
                 <input type="checkbox" id="skip-synth-toggle" style="opacity:0;width:0;height:0;position:absolute">
@@ -792,6 +795,13 @@ button{cursor:pointer;font-family:inherit}
                 title="Maximum tokens the LLM can generate per response."/>
               <span style="font-size:10px;color:var(--panelDim)">512 — 8192</span>
             </div>
+          </div>
+        </div>
+
+        <div id="tooltip-skip-synthesis" class="section-tooltip">
+          <div style="font-weight: 600; margin-bottom: 4px; color: #fff;">Skip Synthesis</div>
+          <div style="font-size: 13px; color: #cbd5e1; line-height: 1.4;">
+            Bypasses the AI's final reasoning step to output raw data directly from the cluster tools (e.g., tables, logs). This is significantly faster and prevents the LLM from summarizing or omitting details.
           </div>
         </div>
         
