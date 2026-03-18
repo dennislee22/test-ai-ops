@@ -20,7 +20,7 @@ from rag import init_db, get_doc_stats, RAG_TOOLS, rag_retrieve, ingest_director
 from rag.retrieve import _MSG_NO_INGEST
 from tools.tools_k8s import reload_kubeconfig, _core as _k8s_core
 from tools.tools_metadata import K8S_TOOL_METADATA
-from agent.bypass import should_bypass_llm, build_direct_answer
+from agent.bypass import should_bypass_llm
 
 _HERE = Path(__file__).resolve().parent
 _decode_secrets_ctx: ContextVar[bool] = ContextVar("decode_secrets", default=False)
@@ -28,6 +28,19 @@ _decode_secrets_ctx: ContextVar[bool] = ContextVar("decode_secrets", default=Fal
 _log_ag = config._log_ag
 _log_rag = config._log_rag
 logger = config.logger
+
+LOCAL_NS_MAP = {
+    "vault": "vault-system",
+    "longhorn": "longhorn-system",
+    "cdp": "cdp",
+}
+
+IGNORE_NS = {
+    "all", "the", "any", "which", "what", "my", "this", "that", "a", "some", "in",
+    "for", "of", "to", "is", "not", "are", "and", "or", "pvc", "pvcs", "pod", "pods", 
+    "node", "nodes", "deployment", "deployments", "status", "health", "check", "get",
+    "show", "has", "have", "had", "with", "without", "using", "uses", "does", "do"
+}
 
 # ── 1. SCHEMAS ───────────────────────────────────────────────────────────────
 
@@ -159,20 +172,6 @@ def _build_llm_gguf():
     _log_ag.info(f"[LLM/GGUF] Model loaded (CPU, {n_threads} threads, ctx={n_ctx})")
     return None, model, is_qwen3
 
-# --- Namespace Interceptor
-_LOCAL_NS_MAP = {
-    "vault": "vault-system",
-    "longhorn": "longhorn-system",
-    "cdp": "cdp"
-}
-
-_IGNORE_NS = {
-    "all", "the", "any", "which", "what", "my", "this", "that", "a", "some", "in",
-    "for", "of", "to", "is", "not", "are", "and", "or", "pvc", "pvcs", "pod", "pods", 
-    "node", "nodes", "deployment", "deployments", "status", "health", "check", "get",
-    "show", "has", "have", "had", "with", "without", "using", "uses", "does", "do"
-}
-
 def _extract_namespace(text: str) -> str:
     text = text.lower()
     
@@ -181,7 +180,7 @@ def _extract_namespace(text: str) -> str:
         return "all"
     
     # 1. Map known hardcoded keywords
-    for keyword, actual_ns in _LOCAL_NS_MAP.items():
+    for keyword, actual_ns in LOCAL_NS_MAP.items():
         if re.search(rf'\b{keyword}\b', text):
             return actual_ns
 
@@ -197,13 +196,13 @@ def _extract_namespace(text: str) -> str:
     # 4. Forward shorthand "namespace xyz" (ignores punctuation & typos)
     for match in re.finditer(r'\b(?:namespace|namespaces|namespac|namespcs|ns)\b[^a-z0-9-]+([a-z0-9-]+)\b', text):
         extracted = match.group(1)
-        if extracted not in _IGNORE_NS and len(extracted) > 1:
+        if extracted not in IGNORE_NS and len(extracted) > 1:
             return extracted
     
     # 5. Reverse shorthand "xyz namespace"
     for match in re.finditer(r'\b([a-z0-9-]+)[^a-z0-9-]+\b(?:namespace|namespaces|namespac|namespcs|ns)\b', text):
         extracted = match.group(1)
-        if extracted not in _IGNORE_NS and len(extracted) > 1:
+        if extracted not in IGNORE_NS and len(extracted) > 1:
             return extracted
         
     return "all"
@@ -419,7 +418,7 @@ def build_agent():
                 pass # Delaying to handle combined tools below
             elif len(tcs) == 1 and should_bypass_llm(name, args, out, user_q, req_id=state.get("req_id", "")):
                 updates.append("⚡ Direct output (LLM synthesis skipped)")
-                direct_answer = build_direct_answer(name, out, user_q, req_id=state.get("req_id", ""))
+                direct_answer = out
                 
         # --- SKIP SYNTHESISE OVERRIDE LOGIC ---
         if forced_skip and direct_answer is None and results:
