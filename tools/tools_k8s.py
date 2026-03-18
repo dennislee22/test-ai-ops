@@ -715,11 +715,10 @@ def get_storage_classes() -> str:
         for sc in scs.items:
             name = sc.metadata.name
             provisioner = getattr(sc, "provisioner", "unknown")
-            reclaim = getattr(sc, "reclaim_policy", "Delete") # Delete is the K8s default
+            reclaim = getattr(sc, "reclaim_policy", "Delete")
             allow_expand = getattr(sc, "allow_volume_expansion", False)
             expand_str = "✓ Yes" if allow_expand else "No"
             
-            # Check for the default-class annotation
             annotations = sc.metadata.annotations or {}
             is_default = annotations.get("storageclass.kubernetes.io/is-default-class") == "true"
             default_str = "★ Yes" if is_default else ""
@@ -802,7 +801,6 @@ def get_endpoints(namespace: str = "all", search: str | None = None) -> str:
         return f"K8s API error: {e.reason}"
     
 def get_node_capacity() -> str:
-    # Helper to parse Kubernetes CPU strings (e.g., "100m", "0.5", "2")
     def _parse_cpu(val) -> float:
         if not val: return 0.0
         val_str = str(val)
@@ -810,7 +808,6 @@ def get_node_capacity() -> str:
             return float(val_str[:-1]) / 1000.0
         return float(val_str)
 
-    # Helper to parse Kubernetes Memory strings to GiB safely
     def _parse_mem_gib(val) -> float:
         if not val: return 0.0
         val_str = str(val)
@@ -828,7 +825,6 @@ def get_node_capacity() -> str:
 
         lines = ["### Node Capacity Overview\n"]
 
-        # Flattened into a single header row for valid Markdown
         headers = ["NODE", "CPU ALLOC", "CPU REQ", "CPU AVAIL", "RAM ALLOC (Gi)", "RAM REQ (Gi)", "RAM AVAIL (Gi)", "GPU"]
         lines.append("| " + " | ".join(headers) + " |")
         lines.append("|" + "|".join(["---"] * len(headers)) + "|")
@@ -839,7 +835,6 @@ def get_node_capacity() -> str:
             cpu_alloc = _parse_cpu(alloc.get("cpu", 0))
             mem_alloc_gib = _parse_mem_gib(alloc.get("memory", "0Ki"))
 
-            # Count GPU
             gpu = 0
             for key in alloc:
                 if "nvidia.com/gpu" in key or "amd.com/gpu" in key:
@@ -848,13 +843,11 @@ def get_node_capacity() -> str:
                     except (ValueError, TypeError):
                         pass
 
-            # Calculate requested resources from pods on this node
             cpu_req_total = 0.0
             mem_req_total_gib = 0.0
             pods = _core.list_pod_for_all_namespaces(field_selector=f"spec.nodeName={node.metadata.name}")
             
             for pod in pods.items:
-                # Optionally: skip Succeeded/Failed pods here so they don't count against requests
                 for c in pod.spec.containers or []:
                     if c.resources and c.resources.requests:
                         cpu_req_total += _parse_cpu(c.resources.requests.get("cpu", 0))
@@ -863,14 +856,12 @@ def get_node_capacity() -> str:
             cpu_avail = round(cpu_alloc - cpu_req_total, 2)
             mem_avail = round(mem_alloc_gib - mem_req_total_gib, 2)
 
-            # Calculate percentages safely
             cpu_req_pct = f"({round((cpu_req_total / cpu_alloc) * 100, 1)}%)" if cpu_alloc > 0 else "(0%)"
             cpu_avail_pct = f"({round((cpu_avail / cpu_alloc) * 100, 1)}%)" if cpu_alloc > 0 else "(0%)"
             
             mem_req_pct = f"({round((mem_req_total_gib / mem_alloc_gib) * 100, 1)}%)" if mem_alloc_gib > 0 else "(0%)"
             mem_avail_pct = f"({round((mem_avail / mem_alloc_gib) * 100, 1)}%)" if mem_alloc_gib > 0 else "(0%)"
 
-            # Format the output row
             lines.append(
                 f"| {node.metadata.name} "
                 f"| {round(cpu_alloc, 2)} "
@@ -3876,12 +3867,6 @@ def _handle_version() -> str:
         )
     except ApiException as e:
         return f"[ERROR] version: {e.reason}"
-
-#try:
-#    config.load_incluster_config()
-#except config.ConfigException:
-#    config.load_kubeconfig()
-
 
 def _parse_kubectl(command: str) -> dict:
     """
