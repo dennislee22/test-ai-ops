@@ -2711,11 +2711,7 @@ def get_configmap_list(namespace: str = "all", filter_keys: list = None) -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_secret_list(namespace: str = "all",
-                    name: str = "",
-                    search: str | None = None,
-                    decode: bool = False,
-                    filter_keys: list = None) -> str:
+def get_pod_secrets(namespace: str = "all", pod_name: str = "", decode: bool = False, filter_keys: list = None) -> str:
     import base64 as _b64
 
     def _decode(val: str) -> str:
@@ -2725,104 +2721,95 @@ def get_secret_list(namespace: str = "all",
             return "<decode error>"
 
     try:
-        if search:
-            pods = _core.list_namespaced_pod(namespace=namespace).items
-            matched = [p for p in pods if search.lower() in p.metadata.name.lower()]
-
-            if matched:
-                lines = []
-                for pod in matched:
-                    pod_name = pod.metadata.name
-                    lines.append(f"Pod: {namespace}/{pod_name}")
-
-                    secret_names = set()
-                    configmap_names = set()
-
-                    for c in pod.spec.containers or []:
-                        for e in c.env or []:
-                            if e.value_from:
-                                if e.value_from.secret_key_ref:
-                                    secret_names.add(e.value_from.secret_key_ref.name)
-                                if e.value_from.config_map_key_ref:
-                                    configmap_names.add(e.value_from.config_map_key_ref.name)
-
-                        for ef in c.env_from or []:
-                            if ef.secret_ref:
-                                secret_names.add(ef.secret_ref.name)
-                            if ef.config_map_ref:
-                                configmap_names.add(ef.config_map_ref.name)
-
-                    for v in pod.spec.volumes or []:
-                        if v.secret:
-                            secret_names.add(v.secret.secret_name)
-                        if v.config_map:
-                            configmap_names.add(v.config_map.name)
-
-                    if not secret_names and not configmap_names:
-                        lines.append("  No secrets/configmaps referenced.")
-                        continue
-
-                    if secret_names:
-                        lines.append("  Secrets:")
-                        for sname in sorted(secret_names):
-                            try:
-                                sec = _core.read_namespaced_secret(sname, namespace)
-                                data = sec.data or {}
-                                lines.append(f"    {sname}:")
-                                for k, v in data.items():
-                                    if filter_keys:
-                                        if not any(f in k.lower() for f in filter_keys):
-                                            continue
-                                    val = _decode(v) if decode else "<hidden>"
-                                    lines.append(f"      {k}: {val}")
-                            except ApiException:
-                                lines.append(f"    {sname}: <error fetching>")
-
-                        if not decode:
-                            lines.append("    ❗ Secret values are hidden — enable 'Show Secret Values' in ⚙ Settings → Security to decode.")
-
-                    if configmap_names:
-                        lines.append("  ConfigMaps:")
-                        for cname in sorted(configmap_names):
-                            try:
-                                cm = _core.read_namespaced_config_map(cname, namespace)
-                                data = cm.data or {}
-                                lines.append(f"    {cname}: keys={list(data.keys())}")
-                            except ApiException:
-                                lines.append(f"    {cname}: <error fetching>")
-
-                return "\n".join(lines)
-
-        if name:
+        if pod_name:
             try:
-                secret = _core.read_namespaced_secret(name=name, namespace=namespace)
+                pod = _core.read_namespaced_pod(name=pod_name, namespace=namespace)
             except ApiException as e:
                 if e.status == 404:
-                    return f"Secret '{name}' not found in namespace '{namespace}'."
+                    return f"Pod '{pod_name}' not found in namespace '{namespace}'."
                 raise
 
-            data = secret.data or {}
-            lines = [f"Secret: {namespace}/{name}", f"  Type: {secret.type}"]
+            attached_secrets = set()
+            attached_configmaps = set()
 
-            if data:
-                lines.append("  Data:")
-                for k, v in data.items():
-                    val = _decode(v or "") if decode else "<hidden>"
-                    lines.append(f"    {k}: {val}")
+            for vol in pod.spec.volumes or []:
+                if vol.secret and vol.secret.secret_name:
+                    attached_secrets.add(vol.secret.secret_name)
+                if vol.config_map and vol.config_map.name:
+                    attached_configmaps.add(vol.config_map.name)
 
-            if not decode:
-                lines.append("\n  ❗ Secret values are hidden — enable 'Show Secret Values' in ⚙ Settings → Security to decode.")
+            for c in pod.spec.containers or []:
+                for env in c.env or []:
+                    if env.value_from:
+                        if env.value_from.secret_key_ref:
+                            attached_secrets.add(env.value_from.secret_key_ref.name)
+                        if env.value_from.config_map_key_ref:
+                            attached_configmaps.add(env.value_from.config_map_key_ref.name)
+
+            if not attached_secrets and not attached_configmaps:
+                return f"No Secrets or ConfigMaps attached to pod '{namespace}/{pod_name}'."
+
+            lines = [f"Secrets and ConfigMaps attached to pod '{namespace}/{pod_name}':"]
+
+            if attached_secrets:
+                lines.append("### Secrets:")
+                for sname in sorted(attached_secrets):
+                    try:
+                        secret = _core.read_namespaced_secret(sname, namespace)
+                        keys = list((secret.data or {}).keys())
+                        lines.append(f"  - {sname}: keys={keys}")
+                        if decode and keys:
+                            for k in keys:
+                                val = _decode(secret.data.get(k) or "")
+                                lines.append(f"      {k}: {val}")
+                    except ApiException:
+                        lines.append(f"  - {sname}: <fetch error>")
+
+            if attached_configmaps:
+                lines.append("### ConfigMaps:")
+                for cname in sorted(attached_configmaps):
+                    try:
+                        cm = _core.read_namespaced_config_map(cname, namespace)
+                        keys = list((cm.data or {}).keys())
+                        lines.append(f"  - {cname}: keys={keys}")
+                    except ApiException:
+                        lines.append(f"  - {cname}: <fetch error>")
 
             return "\n".join(lines)
 
+        # fallback: list secrets in the namespace with optional filter_keys
         secrets = _core.list_namespaced_secret(namespace=namespace)
         if not secrets.items:
             return f"No secrets in namespace '{namespace}'."
 
-        lines = [f"Secrets in '{namespace}':"]
+        _fk_lower = [f.lower() for f in filter_keys] if filter_keys else None
+        matched_secrets = []
+
         for s in secrets.items:
-            keys = list((s.data or {}).keys())
-            lines.append(f"  {s.metadata.name}: keys={keys}")
+            data = s.data or {}
+            keys = list(data.keys())
+            if _fk_lower:
+                hit_keys = [k for k in keys if any(f in k.lower() for f in _fk_lower)]
+                if not hit_keys:
+                    continue
+                keys = hit_keys
+            matched_secrets.append((s.metadata.name, s.type or "Opaque", keys))
+
+        if not matched_secrets:
+            return f"No secrets in '{namespace}' match filter_keys={filter_keys or []}."
+
+        lines = [f"Secrets in namespace '{namespace}' matching filter_keys={filter_keys or 'ALL'}:"]
+        for name, stype, keys in sorted(matched_secrets):
+            lines.append(f"  - {name} [type={stype}]: keys={keys}")
+            if decode:
+                try:
+                    secret = _core.read_namespaced_secret(name, namespace)
+                    for k in keys:
+                        val = _decode(secret.data.get(k) or "")
+                        lines.append(f"      {k}: {val}")
+                except ApiException:
+                    for k in keys:
+                        lines.append(f"      {k}: <fetch error>")
 
         return "\n".join(lines)
 
@@ -4417,255 +4404,135 @@ def _discover_mysql_database(pod_name: str, namespace: str,
             return db
     return ""
 
-def exec_db_query(namespace: str, sql: str,
-                  pod_name: str = "", database: str = "",
-                  container: str = "") -> str:
-    if not _ALLOW_DB_EXEC:
-        return "[ERROR] DB query execution is disabled. Set ALLOW_DB_EXEC=true to enable."
+def exec_db_query(namespace: str, sql: str, pod_name: str = "", database: str = "", container: str = "", _core=None, _find_db_pod=None, _detect_db_type=None, _find_db_container=None) -> str:
+    import base64, re, logging
+    _log = logging.getLogger(__name__)
+    _SQL_WRITE_RE = re.compile(r"^\s*(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE)\b", re.IGNORECASE)
+    _KUBECTL_MAX_OUT = 10000
 
-    sql = sql.strip().rstrip(";")
-    if not sql:
+    if not sql.strip():
         return "[ERROR] Empty SQL query."
-
     if _SQL_WRITE_RE.match(sql):
-        return (
-            "[BLOCKED] Write operations are not permitted. "
-            "Only SELECT and read-only queries are allowed."
-        )
+        return "[BLOCKED] Write operations are not permitted. Only SELECT/read queries allowed."
 
-    if pod_name:
-
-        if "/" in pod_name:
-            pod_name = pod_name.split("/", 1)[1]
-        db_type = _detect_db_type(pod_name, namespace, container_hint=container)
-        if not db_type:
-
-            try:
-                pod = _core.read_namespaced_pod(name=pod_name, namespace=namespace)
-                cnames = [c.name for c in (pod.spec.containers or [])]
-                return (f"[ERROR] Could not detect DB type for pod '{pod_name}' in '{namespace}'. "
-                        f"Available containers: {', '.join(cnames)}. "
-                        f"Re-call with container='<name>' set to the DB container.")
-            except ApiException:
-                return (f"[ERROR] Pod '{pod_name}' not found in namespace '{namespace}'.")
-    else:
+    if not pod_name:
         pod_name, db_type = _find_db_pod(namespace)
         if not pod_name:
-            return (f"[ERROR] No running MySQL/MariaDB or PostgreSQL pod found "
-                    f"in namespace '{namespace}'.")
-
-    _log.info(f"[exec_db_query] pod={namespace}/{pod_name}  db_type={db_type}")
-
-    if container:
-        container_name = container
+            return f"[ERROR] No running DB pod found in namespace '{namespace}'."
     else:
-        container_name = _find_db_container(pod_name, namespace, db_type)
-    _log.info(f"[exec_db_query] container={container_name!r}")
+        db_type = _detect_db_type(pod_name, namespace, container_hint=container)
+        if not db_type:
+            return f"[ERROR] Could not detect DB type for pod '{pod_name}' in '{namespace}'."
 
-    creds = _find_db_credentials(namespace, pod_name)
+    if not container:
+        container = _find_db_container(pod_name, namespace, db_type)
+
+    creds = {}
+    try:
+        pod = _core.read_namespaced_pod(name=pod_name, namespace=namespace)
+    except Exception:
+        return f"[ERROR] Could not read pod '{pod_name}' in namespace '{namespace}'."
+
+    for vol in pod.spec.volumes or []:
+        secret_data = None
+        if getattr(vol, 'secret', None):
+            try:
+                secret_obj = _core.read_namespaced_secret(vol.secret.secret_name, namespace)
+                secret_data = secret_obj.data
+            except Exception:
+                continue
+        elif getattr(vol, 'config_map', None):
+            try:
+                config_obj = _core.read_namespaced_config_map(vol.config_map.name, namespace)
+                secret_data = config_obj.data
+            except Exception:
+                continue
+        if secret_data:
+            for k, v in secret_data.items():
+                val = v
+                try:
+                    val = base64.b64decode(v).decode() if getattr(vol, 'secret', None) else v
+                except Exception:
+                    pass
+                k_lower = k.lower()
+                if "user" in k_lower:
+                    creds["user"] = val
+                elif "pass" in k_lower or "pwd" in k_lower:
+                    creds["password"] = val
+                elif "host" in k_lower:
+                    creds["host"] = val
+                elif "port" in k_lower:
+                    creds["port"] = val
+                elif "db" in k_lower or "database" in k_lower:
+                    creds["database"] = val
+            if creds.get("user") and creds.get("password"):
+                break
+
+    if not creds.get("user") or not creds.get("password"):
+        return f"[ERROR] Could not retrieve DB credentials from pod '{pod_name}'."
 
     db_name = database or creds.get("database") or ""
+    user = creds["user"]
+    password = creds["password"]
+    host = creds.get("host") or "127.0.0.1"
+    port = creds.get("port") or ("5432" if db_type == "postgres" else "3306")
 
-    _log.debug(f"[exec_db_query] creds found: user={creds['user']}  "
-               f"db={db_name!r}  host={creds['host']}")
-
-    from kubernetes.stream import stream as _k8s_stream
-
-    safe_sql = sql.replace("'", "'\\''")
-
-    if db_type == "mysql":
-        user     = creds["user"] or "root"
-        password = creds["password"] or ""
-        host     = creds["host"] or "127.0.0.1"
-        port     = creds["port"] or "3306"
-
-        if not db_name:
-            db_name = _discover_mysql_database(
-                pod_name, namespace, container_name, user, password, host, port)
-            _log.info(f"[exec_db_query] mysql db auto-discovered: {db_name!r}")
-
-        pass_arg = f"-p'{password}'" if password else ""
-        db_arg   = db_name if db_name else ""
-        cmd = (
-            f"mysql -u{user} {pass_arg} -h{host} -P{port} "
-            f"--connect-timeout=10 --batch --silent "
-            f"{db_arg} -e '{safe_sql}'"
-        )
-        _final_sql = sql   # original SQL — used later for column-header extraction
-        exec_cmd = ["/bin/sh", "-c", cmd]
-
-    elif db_type == "postgres":
-        user     = creds["user"] or "postgres"
-        password = creds["password"] or ""
-
-        if not db_name:
-            db_name = _discover_pg_database(
-                pod_name, namespace, container_name, user, password)
-            _log.info(f"[exec_db_query] postgres db auto-discovered: {db_name!r}")
-
-        pg_sql = re.sub(
-            r"table_schema\s*=\s*DATABASE\s*\(\s*\)",
-            "table_schema NOT IN ('information_schema','pg_catalog','pg_toast')",
-            safe_sql,
-            flags=re.IGNORECASE,
-        )
-
-        pg_sql = re.sub(
-            r"'performance_schema'\s*,\s*'sys'\s*",
-            "",
-            pg_sql,
-            flags=re.IGNORECASE,
-        )
-
+    pg_sql = sql
+    if db_type == "postgres":
         if re.match(r"^\s*SHOW\s+TABLES\s*$", pg_sql, re.IGNORECASE):
-            pg_sql = (
-                "SELECT schemaname, tablename "
-                "FROM pg_tables "
-                "WHERE schemaname NOT IN ('information_schema','pg_catalog','pg_toast') "
-                "ORDER BY schemaname, tablename"
-            )
-
-        if re.match(r"^\s*SHOW\s+DATABASES\s*$", pg_sql, re.IGNORECASE):
+            pg_sql = "SELECT schemaname, tablename FROM pg_tables WHERE schemaname NOT IN ('information_schema','pg_catalog','pg_toast') ORDER BY schemaname, tablename"
+        elif re.match(r"^\s*SHOW\s+DATABASES\s*$", pg_sql, re.IGNORECASE):
             pg_sql = "SELECT datname FROM pg_database ORDER BY datname"
+        desc_m = re.match(r"^\s*DESCRIBE\s+(\S+)\s*$", pg_sql, re.IGNORECASE)
+        if desc_m:
+            tbl = desc_m.group(1).strip("`\"'")
+            pg_sql = f"SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = '{tbl}' ORDER BY ordinal_position"
 
-        _desc = re.match(r"^\s*DESCRIBE\s+(\S+)\s*$", pg_sql, re.IGNORECASE)
-        if _desc:
-            tbl = _desc.group(1).strip("`\"'")
-            pg_sql = (
-                f"SELECT column_name, data_type, is_nullable, column_default "
-                f"FROM information_schema.columns "
-                f"WHERE table_name = '{tbl}' ORDER BY ordinal_position"
-            )
+    safe_sql = pg_sql.replace("'", "'\\''")
 
-        # Translate MySQL user queries to PostgreSQL equivalents.
-        #
-        # IMPORTANT: mysql.user has columns (user, host, password).
-        # PostgreSQL equivalents:
-        #   user     → pg_shadow.usename
-        #   host     → pg_shadow has no per-user host restriction; use 'localhost' literal
-        #   password → pg_shadow.passwd  (hashed, but present — do NOT omit)
-        #
-        # Always rewrite to pg_shadow (not pg_user) so the password hash column is
-        # available.  Alias column names back to match the MySQL column names so the
-        # LLM can read them correctly without confusion.
-        if re.search(r"mysql\.user", pg_sql, re.IGNORECASE):
-            # Pattern: SELECT user, host FROM mysql.user  (the exact query that broke)
-            pg_sql = re.sub(
-                r"SELECT\s+user\s*,\s*host\s+FROM\s+mysql\.user",
-                "SELECT usename AS user, 'localhost' AS host, passwd AS password FROM pg_catalog.pg_shadow",
-                pg_sql, flags=re.IGNORECASE
-            )
-            # Pattern: SELECT user, host, password FROM mysql.user
-            pg_sql = re.sub(
-                r"SELECT\s+user\s*,\s*host\s*,\s*password\s+FROM\s+mysql\.user",
-                "SELECT usename AS user, 'localhost' AS host, passwd AS password FROM pg_catalog.pg_shadow",
-                pg_sql, flags=re.IGNORECASE
-            )
-            # Fallback: any remaining FROM mysql.user → pg_shadow
-            pg_sql = re.sub(
-                r"FROM\s+mysql\.user",
-                "FROM pg_catalog.pg_shadow",
-                pg_sql, flags=re.IGNORECASE
-            )
-            # Rewrite bare column name references that weren't caught above
-            pg_sql = re.sub(r"\buser\b(?!\s+AS)", "usename", pg_sql, flags=re.IGNORECASE)
-            pg_sql = re.sub(r"\bpassword\b(?!\s+AS)", "passwd", pg_sql, flags=re.IGNORECASE)
-
-        # Translate SELECT user() / SELECT current_user()
-        if re.match(r"^\s*SELECT\s+(current_user|user)\s*\(\s*\)\s*$", pg_sql, re.IGNORECASE):
-            pg_sql = "SELECT current_user"
-
-        safe_sql = pg_sql.replace("'", "'\\''")
-
-        host = creds.get("host") or ""
-        port = creds.get("port") or "5432"
-
-        pg_env    = f"PGPASSWORD='{password}' " if password else ""
-        db_flag   = f"-d {db_name}" if db_name else ""
+    if db_type in ("mysql", "mariadb"):
+        pass_arg = f"-p'{password}'" if password else ""
+        db_arg = db_name if db_name else ""
+        cmd = f"mysql -u{user} {pass_arg} -h{host} -P{port} --batch --silent {db_arg} -e '{safe_sql}'"
+    elif db_type == "postgres":
+        pg_env = f"PGPASSWORD='{password}' " if password else ""
+        db_flag = f"-d {db_name}" if db_name else ""
         user_flag = f"-U {user}" if user else ""
-
-        if host and host not in ("localhost", "127.0.0.1", "::1"):
-
-            cmd = (
-                f"{pg_env}psql {user_flag} -h {host} -p {port} "
-                f"{db_flag} --no-password -t -A -c '{safe_sql}'"
-            )
+        if host not in ("localhost", "127.0.0.1", "::1"):
+            cmd = f"{pg_env}psql {user_flag} -h {host} -p {port} {db_flag} --no-password -t -A -c '{safe_sql}'"
         else:
-
-            cmd = (
-                f"{pg_env}psql {user_flag} {db_flag} "
-                f"--no-password -t -A -c '{safe_sql}' 2>&1 || "
-
-                f"psql {db_flag} -t -A -c '{safe_sql}' 2>&1 || "
-
-                f"psql -U postgres {db_flag} -t -A -c '{safe_sql}'"
-            )
-        _final_sql = pg_sql   # translated SQL — used later for column-header extraction
-        exec_cmd = ["/bin/sh", "-c", cmd]
-
+            cmd = f"{pg_env}psql {user_flag} {db_flag} --no-password -t -A -c '{safe_sql}'"
     else:
         return f"[ERROR] Unsupported DB type: {db_type}"
 
-    stream_kwargs = dict(
-        stderr=True,
-        stdin=False,
-        stdout=True,
-        tty=False,
-        _preload_content=True,
-    )
-
-    if container_name:
-        stream_kwargs["container"] = container_name
-
+    exec_cmd = ["/bin/sh", "-c", cmd]
+    stream_kwargs = dict(stderr=True, stdin=False, stdout=True, tty=False, _preload_content=True, container=container)
     try:
-        resp = _k8s_stream(
-            _core.connect_get_namespaced_pod_exec,
-            pod_name,
-            namespace,
-            command=exec_cmd,
-            **stream_kwargs,
-        )
+        resp = k8s_stream = _core.connect_get_namespaced_pod_exec(pod_name, namespace, command=exec_cmd, **stream_kwargs)
         output = resp.strip() if isinstance(resp, str) else str(resp).strip()
-    except ApiException as e:
-        return f"[ERROR] K8s exec failed (pod={pod_name}, container={container_name}): {_safe_reason(e)}"
     except Exception as exc:
-        return f"[ERROR] Unexpected exec error: {exc}"
+        return f"[ERROR] Exec failed: {exc}"
 
     if not output:
         return "(Query returned no rows.)"
-
     if len(output) > _KUBECTL_MAX_OUT:
         output = output[:_KUBECTL_MAX_OUT] + f"\n...[output truncated at {_KUBECTL_MAX_OUT} chars]"
 
-    def _extract_columns(sql_text: str) -> list[str]:
-        """Best-effort extraction of SELECT column aliases or names."""
-        m = re.match(r"^\s*SELECT\s+(.+?)\s+FROM\b", sql_text, re.IGNORECASE | re.DOTALL)
-        if not m:
-            return []
-        cols_raw = m.group(1)
-        cols = []
-        for col in cols_raw.split(","):
+    m = re.match(r"^\s*SELECT\s+(.+?)\s+FROM\b", pg_sql, re.IGNORECASE | re.DOTALL)
+    cols = []
+    if m:
+        for col in m.group(1).split(","):
             col = col.strip()
-            # Prefer AS alias
             alias_m = re.search(r"\bAS\s+(\w+)\s*$", col, re.IGNORECASE)
             if alias_m:
                 cols.append(alias_m.group(1))
-                continue
-            # Use last token (function calls, table.col, etc.)
-            token = re.split(r"[\s.(]", col)[-1].strip(")'\"")
-            cols.append(token if token else col)
-        return cols
-
-    # Use the final translated SQL for column extraction
-    _sql_for_cols = _final_sql
-    _cols = _extract_columns(_sql_for_cols)
-
-    if _cols:
-        col_header = "|".join(_cols)
-        col_sep    = "|".join("-" * max(len(c), 4) for c in _cols)
+            else:
+                token = re.split(r"[\s.(]", col)[-1].strip(")'\"")
+                cols.append(token if token else col)
+    if cols:
+        col_header = "|".join(cols)
+        col_sep = "|".join("-" * max(len(c), 4) for c in cols)
         output = col_header + "\n" + col_sep + "\n" + output
 
-    header = (f"DB query result  [{db_type.upper()} · pod={pod_name} · ns={namespace}"
-              + (f" · db={db_name}" if db_name else "") + "]\n"
-              + "-" * 60 + "\n")
+    header = f"DB query result [{db_type.upper()} · pod={pod_name} · ns={namespace}" + (f" · db={db_name}" if db_name else "") + "]\n" + "-"*60 + "\n"
     return header + output
