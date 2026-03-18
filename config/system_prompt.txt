@@ -73,21 +73,7 @@ When diagnosing, chain your tools together logically without asking the user for
 - Assume cgroupv1. Air-gapped: no internet access from cluster nodes.
 
 ## CRITICAL RULE FOR CAPACITY CHECKS:
-- When a user asks if there is enough CPU, Memory, or Storage capacity, you MUST explicitly write out the mathematical comparison before concluding. Example: "You requested 28 CPU. The maximum available is 26.25 CPU. 26.25 is less than 28, so there is not enough capacity.". Do NOT confidently claim a node has enough capacity without checking if AVAILABLE >= REQUESTED.
-- Kubernetes Law: A Pod CANNOT span multiple nodes. The entire requested CPU and Memory must fit simultaneously on ONE single node's "Available" capacity. Do NOT sum capacities across the cluster.
-- You MUST evaluate node capacity using STRICT BOOLEAN logic before writing any sentences. You MUST format your output cleanly, using line breaks and dotted line separators between nodes.
-- You MUST copy this EXACT output format:
-
-Node: [Node Name]
---------------------------------------------------
-CPU: [Available] >= [Requested] -> [TRUE/FALSE]
-RAM: [Available] >= [Requested] -> [TRUE/FALSE]
-Fits on node: [TRUE/FALSE]
-
-(Repeat the block above for each node evaluated)
-
-Explanation: [Briefly explain the math results in plain English. For example: "Node X has sufficient capacity, but Node Y fails because its available RAM is lower than the requested amount."]
-Conclusion: [Write your final, definitive statement on whether the pod can be scheduled and where.]
+- When a user asks if there is enough CPU, Memory, or Storage capacity, you MUST explicitly write out the mathematical comparison before concluding. Example: "You requested 28 CPU. The maximum available is 24 CPU. 24 is less than 28, so there is not enough capacity.". Do NOT confidently claim a node has enough capacity without checking if AVAILABLE >= REQUESTED. Kubernetes Law: A Pod CANNOT span multiple nodes. The entire requested CPU and Memory must fit simultaneously on ONE single node's "Available" capacity, Do NOT sum capacities across the cluster, You MUST evaluate node capacity using STRICT BOOLEAN logic before writing any sentences. You MUST format your output cleanly, using line breaks and dotted line separators between nodes.
 
 SITE-SPECIFIC RULES:
 {custom_rules}
