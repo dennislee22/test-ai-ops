@@ -3030,7 +3030,7 @@ def run_cluster_health(namespace: str = "all", show_all: bool = True, raw_output
     except Exception as e:
         return f"[ERROR] Unexpected error: {str(e)}"
 
-def get_pod_storage(namespace: str = "all", search: str | None = None) -> str:
+def get_pod_storage(namespace: str = "all", show_all: bool = False) -> str:
     try:
         pods = (
             _core.list_namespaced_pod(namespace=namespace).items
@@ -3040,25 +3040,11 @@ def get_pod_storage(namespace: str = "all", search: str | None = None) -> str:
         if not pods:
             return f"No pods found in namespace '{namespace}'."
 
-        filtered_pods = []
-        if search:
-            search_lower = search.lower()
-            for pod in pods:
-                if search_lower in pod.metadata.name.lower() or (namespace != "all" and search_lower in pod.metadata.namespace.lower()):
-                    filtered_pods.append(pod)
-        else:
-            filtered_pods = pods
-
-        if search and not filtered_pods:
-            filtered_pods = pods
-
         storage_summary = {}
-        md_lines = []
-        md_lines.append(f"### Pods in namespace '{namespace}' with their storage\n")
-        md_lines.append("| NAMESPACE | POD | PVC(s) |")
-        md_lines.append("|---|---|---|")
+        storageclass_summary = {}
+        lines = []
 
-        for pod in sorted(filtered_pods, key=lambda p: (p.metadata.namespace, p.metadata.name)):
+        for pod in pods:
             pod_name = pod.metadata.name
             pod_ns   = pod.metadata.namespace
             pod_pvcs = []
@@ -3068,20 +3054,29 @@ def get_pod_storage(namespace: str = "all", search: str | None = None) -> str:
                     pvc_name = vol.persistent_volume_claim.claim_name
                     pvc = _core.read_namespaced_persistent_volume_claim(pvc_name, pod_ns)
                     modes = pvc.spec.access_modes or []
-                    amodes = [m for m in modes if m in ["ReadWriteOnce", "ReadWriteMany"]]
-                    mode_str = ",".join(amodes) if amodes else "Unknown"
-                    pod_pvcs.append(f"{pvc_name}({mode_str})")
+                    mode_str = ",".join([m for m in modes if m in ["ReadWriteOnce", "ReadWriteMany"]]) or "Unknown"
+                    storage_class = pvc.spec.storage_class_name or "Unknown"
+                    pod_pvcs.append(f"{pvc_name}({mode_str}, {storage_class})")
                     storage_summary[mode_str] = storage_summary.get(mode_str, 0) + 1
+                    storageclass_summary[storage_class] = storageclass_summary.get(storage_class, 0) + 1
 
-            md_lines.append(
-                f"| `{pod_ns}` | `{pod_name}` | {', '.join(pod_pvcs) if pod_pvcs else 'No PVCs'} |"
-            )
+            if show_all:
+                lines.append(f"{pod_ns}/{pod_name}: " + (", ".join(pod_pvcs) if pod_pvcs else "No PVCs"))
 
-        md_lines.append("\n### Storage types used across pods")
+        summary_lines = [f"In namespace '{namespace}': {len(pods)} pods."]
+        summary_lines.append("Storage types used across pods:")
         for stype, count in storage_summary.items():
-            md_lines.append(f"- {stype}: {count} pod(s)")
+            summary_lines.append(f"  {stype}: {count} pod(s)")
 
-        return "\n".join(md_lines)
+        summary_lines.append("Storage classes used across pods:")
+        for sc, count in storageclass_summary.items():
+            summary_lines.append(f"  {sc}: {count} pod(s)")
+
+        if show_all:
+            summary_lines.append("\nPer-pod storage:")
+            summary_lines.extend(lines)
+
+        return "\n".join(summary_lines)
 
     except ApiException as e:
         return f"K8s API error: {e.reason}"
