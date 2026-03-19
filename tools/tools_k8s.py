@@ -111,6 +111,28 @@ def _api_error(e: ApiException) -> str:
     return f"[K8s API error {e.status}] {e.reason}"
 
 
+# Namespace-scope header — prepended to every tool output so Claude and the
+# user always know exactly what was searched, regardless of what was typed.
+def _ns_header(kind: str, namespace: str, search: str | None = None) -> str:
+    """
+    Returns a single plain sentence describing the query scope.
+
+    Examples:
+        _ns_header("Pods", "all")
+            → "Showing all Pods across all namespaces."
+        _ns_header("Pods", "production")
+            → "Showing Pods in namespace `production`."
+        _ns_header("Pods", "all", search="nginx")
+            → "Showing all Pods across all namespaces (filter: `nginx`)."
+        _ns_header("Pods", "production", search="nginx")
+            → "Showing Pods in namespace `production` (filter: `nginx`)."
+    """
+    scope  = "all namespaces" if namespace == "all" else f"namespace `{namespace}`"
+    prefix = "all " if namespace == "all" else ""
+    filt   = f" (filter: `{search}`)" if search else ""
+    return f"Showing {prefix}{kind} in {scope}{filt}."
+
+
 # #1 – extracted pod-listing helper
 def _list_pods(namespace: str = "all") -> list:
     return (_core.list_pod_for_all_namespaces().items
@@ -382,7 +404,8 @@ def get_pod_tolerations(namespace: str = "all", pod_name: str | None = None,
         rows = _build_rows(pods, apply_search=True)
         if search and not rows:
             rows = _build_rows(pods, apply_search=False)
-        lines = ["| NAMESPACE | POD | TOLERATION |", "|---|---|---|"]
+        lines = [_ns_header("Pod Tolerations", namespace, search),
+                 "| NAMESPACE | POD | TOLERATION |", "|---|---|---|"]
         for ns, name, tol_str in rows:
             lines.append(f"| `{ns}` | `{name}` | {tol_str} |")
         return "\n".join(lines)
@@ -397,7 +420,7 @@ def get_pod_resource_requests(namespace: str = "all", search: str | None = None)
             return f"No pods found in namespace '{namespace}'."
         filtered = _filter_pods(pods, search)  # #2
         lines = [
-            "As no namespace was mentioned, I checked across all namespaces.",
+            _ns_header("Pod Resource Requests", namespace, search),
             "| NAMESPACE | POD | CONTAINER | CPU_REQ | CPU_LIM | MEM_REQ | MEM_LIM | ATTACHED GPU |",
             "|---|---|---|---|---|---|---|---|",
         ]
@@ -435,7 +458,7 @@ def get_pod_containers_resources(namespace: str = "all", search: str | None = No
             return f"No pods found in namespace '{namespace}'."
         filtered = _filter_pods(pods, search)
         lines = [
-            "As no namespace was mentioned, I checked across all namespaces.",
+            _ns_header("Pod Container Resources", namespace, search),
             "| NAMESPACE | POD | CONTAINER | IMAGE | CPU_REQ | CPU_LIM | MEM_REQ | MEM_LIM | ATTACHED GPU |",
             "|---|---|---|---|---|---|---|---|---|",
         ]
@@ -471,7 +494,7 @@ def get_pod_status(namespace: str = "all", search: str | None = None) -> str:
             conds    = [f"{c.type}={c.status}" for c in (pod.status.conditions or []) if c.status != "True"]
             rows.append((pod.metadata.namespace, pod.metadata.name, phase,
                          f"{ready}/{total}", restarts, ", ".join(conds) if conds else "-"))
-        lines = []
+        lines = [_ns_header("Pods", namespace, search)]
         if namespace == "all":
             lines += ["| NAMESPACE | NAME | STATUS | READY | RESTARTS | CONDITIONS |", "|---|---|---|---|---|---|"]
             for ns, nm, ph, rd, rs, cd in rows:
@@ -518,7 +541,7 @@ def get_pod_logs(namespace: str = "all", search: str | None = None,
             except ApiException as e:
                 entry = f"### `{ns_name}/{pod_name}`\n_Error fetching logs: {e.reason}_"
             log_entries.append(entry)
-        header = ("As no namespace was specified, I searched all namespaces and below is the result.\n\n"
+        header = (_ns_header("Pod Logs", namespace, search) + "\n\n"
                   if namespace == "all" else "")
         return header + "\n\n".join(log_entries)
     except ApiException as e:
@@ -636,9 +659,7 @@ def get_pod_images(namespace: str = "all", search: str | None = None) -> str:
                 for c in (p.spec.containers or [])]
     if not rows:
         return f"No containers found in namespace '{namespace}'."
-    lines = []
-    if namespace == "all":
-        lines.append("As no namespace was specified, showing pod images from all namespaces.\n")
+    lines = [_ns_header("Pod Images", namespace, search)]
     lines.extend(rows)
     return "\n".join(lines)
 
@@ -665,7 +686,8 @@ def get_pod_storage(namespace: str = "all", search: str | None = None) -> str:
         all_pods = [p for p, _ in pvc_pods]
         filtered_names = {p.metadata.name for p in _filter_pods(all_pods, search)}
         pvc_pods = [(p, e) for p, e in pvc_pods if p.metadata.name in filtered_names]
-        lines = ["| NAMESPACE | POD | PVC | ACCESS MODE | STORAGE CLASS |", "|---|---|---|---|---|"]
+        lines = [_ns_header("Pod Storage", namespace, search),
+                 "| NAMESPACE | POD | PVC | ACCESS MODE | STORAGE CLASS |", "|---|---|---|---|---|"]
         for pod, entries in sorted(pvc_pods, key=lambda x: (x[0].metadata.namespace, x[0].metadata.name)):
             for pvc_name, mode_str, sc in entries:
                 lines.append(f"| `{pod.metadata.namespace}` | `{pod.metadata.name}` "
@@ -777,7 +799,7 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
         scope = f"namespace '{namespace}'" if namespace != "all" else "all namespaces"
         return f"No unhealthy pods found in {scope}."
 
-    out = ["### Unhealthy Pods Summary", "",
+    out = [_ns_header("Unhealthy Pods", namespace), "",
            "| Namespace | Pod | Phase | Ready | Restarts |", "|---|---|---|---|---|"]
     for pod in unhealthy:
         phase    = pod.status.phase or "Unknown"
@@ -990,9 +1012,8 @@ def get_pvc_status(namespace: str = "all", show_all: bool = False,
                     for pvc in sorted(pvcs.items, key=lambda x: (x.metadata.namespace, x.metadata.name))]
         if not rows:
             return "No PVCs to display."
-        md_lines = []
+        md_lines = [_ns_header("PersistentVolumeClaims", namespace, search)]
         if namespace == "all":
-            md_lines.append("_As no namespace was specified, showing PVCs from all namespaces._\n")
             md_lines += ["| NAMESPACE | PVC | PHASE | ACCESS | CLASS | CAPACITY | VOLUME |",
                          "|---|---|---|---|---|---|---|"]
             for ns, nm, ph, am, sc, cap, vol in rows:
@@ -1151,7 +1172,7 @@ def get_pdb_status(namespace: str = "all") -> str:
                 else policy_api.list_namespaced_pod_disruption_budget(namespace=namespace).items)
         if not pdbs:
             return f"No PodDisruptionBudgets found in '{namespace}'."
-        lines = [f"### PodDisruptionBudgets in '{namespace}'\n",
+        lines = [_ns_header("PodDisruptionBudgets", namespace),
                  "| NAMESPACE | NAME | MIN AVAILABLE | MAX UNAVAIL | ALLOWED DISRUPTIONS | HEALTHY (CUR/DES) | STATUS |",
                  "|---|---|---|---|---|---|---|"]
         for pdb in pdbs:
@@ -1195,10 +1216,9 @@ def get_endpoints(namespace: str = "all", search: str | None = None) -> str:
             table_rows = _ep_rows(eps_list, False)
         if not table_rows:
             return "No active Endpoints (no addresses) found."
-        md_lines = []
+        md_lines = [_ns_header("Endpoints", namespace, search)]
         if namespace == "all":
-            md_lines += ["As no namespace was mentioned, I checked across all namespaces.",
-                         "| NAMESPACE | NAME | ADDRESS |", "|---|---|---|"]
+            md_lines += ["| NAMESPACE | NAME | ADDRESS |", "|---|---|---|"]
             for ns, nm, addr in table_rows:
                 md_lines.append(f"| `{ns}` | `{nm}` | `{addr}` |")
         else:
@@ -1230,10 +1250,9 @@ def get_service(namespace: str = "all", search: str = None) -> str:
         rows = _rows(svcs.items, True)
         if search and not rows:
             rows = _rows(svcs.items, False)
-        md_lines = []
+        md_lines = [_ns_header("Services", namespace, search)]
         if namespace == "all":
-            md_lines += ["As no namespace was mentioned, I checked across all namespaces.",
-                         "| NAMESPACE | NAME | TYPE | PORTS | SELECTOR STATUS |", "|---|---|---|---|---|"]
+            md_lines += ["| NAMESPACE | NAME | TYPE | PORTS | SELECTOR STATUS |", "|---|---|---|---|---|"]
             for ns, nm, st, pts, flag in rows:
                 md_lines.append(f"| `{ns}` | `{nm}` | {st} | {pts} | {flag} |")
         else:
@@ -1322,7 +1341,7 @@ def get_ingress(namespace: str = "all", name: str = "", port: int = 0) -> str:
             pool = [i for i in pool if i.metadata.namespace == namespace]
         if not pool:
             return f"No Ingresses found in '{namespace}'."
-        out = [f"### Ingresses in '{namespace}'\n"]
+        out = [_ns_header("Ingresses", namespace)]
         if namespace == "all":
             out += ["| NAMESPACE | NAME | HOSTS | PORTS | LOAD BALANCER |", "|---|---|---|---|---|"]
         else:
@@ -1353,7 +1372,7 @@ def get_network_policy_status(namespace: str = "all") -> str:
                else _net.list_namespaced_network_policy(namespace=namespace).items)
         if not nps:
             return f"No NetworkPolicies found in '{namespace}'. ⚠️ Cluster may be completely open to lateral movement."
-        lines = [f"### NetworkPolicies in '{namespace}'\n",
+        lines = [_ns_header("NetworkPolicies", namespace),
                  "| NAMESPACE | NAME | POD SELECTOR | POLICY TYPES |", "|---|---|---|---|"]
         covered = set()
         for np in nps:
@@ -1385,7 +1404,7 @@ def get_node_capacity() -> str:
         if not nodes.items:
             return "No nodes found."
         headers = ["NODE","CPU ALLOC","CPU REQ","CPU AVAIL","RAM ALLOC (Gi)","RAM REQ (Gi)","RAM AVAIL (Gi)","GPU"]
-        lines   = ["### Node Capacity Overview\n",
+        lines   = ["Showing Node Capacity across all nodes.",
                    "| " + " | ".join(headers) + " |",
                    "|" + "|".join(["---"]*len(headers)) + "|"]
         for node in sorted(nodes.items, key=lambda n: n.metadata.name):
@@ -1504,7 +1523,7 @@ def _workload_table(namespace, kind, items, desired_fn, ready_fn, avail_fn, sear
     filtered = [i for i in items if not search or search.lower() in i.metadata.name.lower()]
     if search and not filtered:
         return f"No {kind}s matching '{search}' found in '{namespace}'."
-    lines = ["### " + kind + "s in '" + namespace + "'" + (f" (matching '{search}')" if search else "") + "\n",
+    lines = [_ns_header(f"{kind}s", namespace, search),
              "| NAMESPACE | NAME | STATUS | DESIRED | READY | AVAILABLE |",
              "|---|---|---|---|---|---|"]
     for item in filtered:
@@ -1573,7 +1592,8 @@ def get_hpa_status(namespace: str = "all") -> str:
                 else _autoscaling.list_namespaced_horizontal_pod_autoscaler(namespace=namespace))
         if not hpas.items:
             return f"No HPAs in '{namespace}'."
-        lines = ["| Namespace | HPA Name | Current | Desired | Min | Max | Status |",
+        lines = [_ns_header("HorizontalPodAutoscalers", namespace),
+                 "| Namespace | HPA Name | Current | Desired | Min | Max | Status |",
                  "|-----------|----------|---------|---------|-----|-----|--------|"]
         for h in hpas.items:
             cur    = h.status.current_replicas or 0
@@ -1611,7 +1631,7 @@ def get_adhoc_job_status(namespace: str = "all", show_all: bool = False,
 
         if raw_output:
             hdr  = f"{'NAMESPACE':<22} {'NAME':<55} {'STATUS':<12} {'ACTIVE':<7} {'SUCCEEDED':<9} {'FAILED':<7}"
-            rows = [hdr, "-"*len(hdr)]
+            rows = [_ns_header("Jobs", namespace), hdr, "-"*len(hdr)]
             for j in sorted(filtered, key=lambda j: (j.metadata.namespace, j.metadata.name)):
                 status, active, succeeded, failed = _classify(j)
                 if running_only and active == 0: continue
@@ -1631,7 +1651,8 @@ def get_adhoc_job_status(namespace: str = "all", show_all: bool = False,
             else:
                 (failed_jobs if status == "⚠ Failed" else healthy_jobs).append(entry)
 
-        header = (f"Standalone Jobs in '{namespace}': {len(filtered)} total"
+        header = (f"{_ns_header('Jobs', namespace)}\n"
+                  f"Standalone Jobs: {len(filtered)} total"
                   + (" (CronJob spawns hidden)." if exclude_cronjobs else "."))
         lines = [header]
         if running_only:
@@ -1652,7 +1673,7 @@ def get_cronjob_status(namespace: str = "all", search: str = None) -> str:
                else _batch.list_namespaced_cron_job(namespace=namespace).items)
         if not cjs:
             return f"No CronJobs found in '{namespace}'."
-        lines = [f"### CronJobs in '{namespace}'\n",
+        lines = [_ns_header("CronJobs", namespace, search),
                  "| NAMESPACE | NAME | SCHEDULE | SUSPENDED | ACTIVE JOBS | LAST RUN |",
                  "|---|---|---|---|---|---|"]
         for cj in cjs:
@@ -1719,7 +1740,8 @@ def get_namespace_status(namespace: str = "all", show_all: bool = False,
         sorted_ns = sorted(ns_pod_info.items(), key=sort_map.get(sort_by, lambda x: x[0]))
         if limit:
             sorted_ns = sorted_ns[:limit]
-        lines = ["| Namespace | Total Pods | Running | Other State |",
+        lines = [_ns_header("Namespace Status", namespace),
+                 "| Namespace | Total Pods | Running | Other State |",
                  "|-----------|------------|---------|--------------|"]
         pod_totals = {}
         for ns_name, info in sorted_ns:
@@ -1753,7 +1775,7 @@ def get_events(namespace: str = "all", search: str | None = None, type: str = "A
         if not matching:
             return f"`No events matching '{search}' found in namespace '{namespace}'.`"
         sorted_evs = sorted(matching, key=lambda e: e.last_timestamp or e.event_time or "", reverse=True)
-        lines = ["```"]
+        lines = [_ns_header("Events", namespace, search), "```"]
         shown = suppressed = 0
         for e in sorted_evs:
             if shown >= 20: break
@@ -1784,7 +1806,7 @@ def get_gpu_info() -> str:
         if not nodes:
             return "No nodes found."
         pods  = _core.list_pod_for_all_namespaces().items
-        lines = ["### GPU Node Overview\n",
+        lines = ["Showing all GPU Nodes across all namespaces.",
                  "| NODE | PRODUCT | COUNT | VRAM/GRAM | ALLOCATABLE | ATTACHED PODS |",
                  "|---|---|---|---|---|---|"]
         has_gpu = False
@@ -1817,31 +1839,71 @@ def get_gpu_info() -> str:
 def find_resource(name_substring: str, resource_type: str = None, namespace: str = None) -> str:
     try:
         resource_type = resource_type.lower() if resource_type else None
+
+        # Treat vague intent words as "no filter" so "show me all" works the same
+        # as passing an empty name_substring.
+        _INTENT_WORDS = {"all", "any", "everything", "anything", "every", "show", "list"}
+        if name_substring and name_substring.strip().lower() in _INTENT_WORDS:
+            name_substring = ""
+
         results = []
-        def add(kind, items, details_fn):
+
+        def add(kind, items, details_fn, force: bool = False):
+            """Append matching rows. force=True bypasses the name filter (used in fallback)."""
             for item in items:
-                if not name_substring or name_substring.lower() in item.metadata.name.lower():
-                    results.append(f"| {kind} | {item.metadata.namespace} | {item.metadata.name} | {details_fn(item)} |")
+                if force or not name_substring or name_substring.lower() in item.metadata.name.lower():
+                    results.append(
+                        f"| {kind} | {item.metadata.namespace or '-'} "
+                        f"| {item.metadata.name} | {details_fn(item)} |"
+                    )
+
         resources = []
         if not resource_type or resource_type == "pod":
-            pods = _core.list_namespaced_pod(namespace).items if namespace else _core.list_pod_for_all_namespaces().items
-            resources.append(("Pod", pods, lambda p: f"{p.status.phase or 'Unknown'} on {p.spec.node_name or 'n/a'}"))
-        if not resource_type or resource_type in ("svc","service"):
-            svcs = _core.list_namespaced_service(namespace).items if namespace else _core.list_service_for_all_namespaces().items
-            resources.append(("Service", svcs, lambda s: f"{s.spec.type} {s.spec.cluster_ip}"))
+            pods = (_core.list_namespaced_pod(namespace).items if namespace
+                    else _core.list_pod_for_all_namespaces().items)
+            resources.append(("Pod", pods,
+                               lambda p: f"{p.status.phase or 'Unknown'} on {p.spec.node_name or 'n/a'}"))
+        if not resource_type or resource_type in ("svc", "service"):
+            svcs = (_core.list_namespaced_service(namespace).items if namespace
+                    else _core.list_service_for_all_namespaces().items)
+            resources.append(("Service", svcs,
+                               lambda s: f"{s.spec.type} {s.spec.cluster_ip}"))
         if not resource_type or resource_type == "ingress":
-            ings = _net.list_namespaced_ingress(namespace).items if namespace else _net.list_ingress_for_all_namespaces().items
-            resources.append(("Ingress", ings, lambda i: ", ".join([h.host for h in i.spec.rules or []])))
+            ings = (_net.list_namespaced_ingress(namespace).items if namespace
+                    else _net.list_ingress_for_all_namespaces().items)
+            resources.append(("Ingress", ings,
+                               lambda i: ", ".join(h.host for h in (i.spec.rules or []) if h.host) or "-"))
         if not resource_type or resource_type == "pvc":
-            pvcs = _core.list_namespaced_persistent_volume_claim(namespace).items if namespace else _core.list_persistent_volume_claim_for_all_namespaces().items
-            resources.append(("PVC", pvcs, lambda p: f"{p.status.phase or 'Unknown'} {(p.spec.resources.requests or {}).get('storage','n/a') if p.spec.resources else 'n/a'}"))
+            pvcs = (_core.list_namespaced_persistent_volume_claim(namespace).items if namespace
+                    else _core.list_persistent_volume_claim_for_all_namespaces().items)
+            resources.append(("PVC", pvcs,
+                               lambda p: (f"{p.status.phase or 'Unknown'} "
+                                          f"{(p.spec.resources.requests or {}).get('storage', 'n/a') if p.spec.resources else 'n/a'}")))
+
+        # First pass — filtered by name_substring
         for kind, items, fn in resources:
             add(kind, items, fn)
-        if not results:
+
+        # Fallback — if nothing matched, show everything (force=True bypasses name filter)
+        if not results and name_substring:
             for kind, items, fn in resources:
-                add(kind, items, fn)
-        lines = ["| Resource Type | Namespace | Name | Status/Details |", "|---------------|----------|------|----------------|"]
+                add(kind, items, fn, force=True)
+            # Prepend a note so Claude knows we fell back
+            fallback_note = (f"No resources found matching `{name_substring}`. "
+                             f"Showing all resources instead.")
+            lines = [fallback_note,
+                     "| Resource Type | Namespace | Name | Status/Details |",
+                     "|---|---|---|---|"]
+            return "\n".join(lines + results)
+
+        scope = f"namespace `{namespace}`" if namespace else "all namespaces"
+        filter_note = f" matching `{name_substring}`" if name_substring else ""
+        header = f"Showing resources{filter_note} in {scope}."
+        lines = [header,
+                 "| Resource Type | Namespace | Name | Status/Details |",
+                 "|---|---|---|---|"]
         return "\n".join(lines + results)
+
     except Exception as e:
         return f"Unexpected error: {e}"
 
@@ -1968,7 +2030,7 @@ def get_certificate_status(namespace: str = "all") -> str:
             raise
         if not certs:
             return f"No cert-manager Certificates found in '{namespace}'."
-        lines = [f"### Cert-Manager Certificates in '{namespace}'\n",
+        lines = [_ns_header("cert-manager Certificates", namespace),
                  "| NAMESPACE | NAME | READY | SECRET NAME | EXPIRATION (NOT AFTER) |",
                  "|---|---|---|---|---|"]
         for cert in certs:
@@ -2021,7 +2083,8 @@ def get_configmap_list(namespace: str = "all", search: str | None = None,
         if not items:
             return "No ConfigMaps found."
         filtered = _search_filter(items, search)
-        lines = ["| NAMESPACE | CONFIGMAP | KEYS | TYPE |", "|---|---|---|---|"]
+        lines = [_ns_header("ConfigMaps", namespace, search),
+                 "| NAMESPACE | CONFIGMAP | KEYS | TYPE |", "|---|---|---|---|"]
         for cm in sorted(filtered, key=lambda x: (x.metadata.namespace, x.metadata.name)):
             data = cm.data or {}
             keys = list(data.keys())
@@ -2126,7 +2189,8 @@ def get_resource_quotas(namespace: str = "all", search: str | None = None) -> st
         if not items:
             return "No ResourceQuotas found."
         filtered = _search_filter(items, search)
-        lines = ["| NAMESPACE | QUOTA | RESOURCE | USED | HARD |", "|---|---|---|---|---|"]
+        lines = [_ns_header("ResourceQuotas", namespace, search),
+                 "| NAMESPACE | QUOTA | RESOURCE | USED | HARD |", "|---|---|---|---|---|"]
         for q in sorted(filtered, key=lambda x: (x.metadata.namespace, x.metadata.name)):
             hard = q.status.hard or {}
             used = q.status.used or {}
@@ -2148,7 +2212,8 @@ def get_limit_ranges(namespace: str = "all", search: str | None = None) -> str:
         filtered = _search_filter(items, search)
         def _get(v, key):
             return (v or {}).get(key, "-")
-        lines = ["| NAMESPACE | LIMITRANGE | TYPE | CPU_MAX | CPU_MIN | CPU_DEFAULT | MEM_MAX | MEM_MIN | MEM_DEFAULT |",
+        lines = [_ns_header("LimitRanges", namespace, search),
+                 "| NAMESPACE | LIMITRANGE | TYPE | CPU_MAX | CPU_MIN | CPU_DEFAULT | MEM_MAX | MEM_MIN | MEM_DEFAULT |",
                  "|---|---|---|---|---|---|---|---|---|"]
         for lr in sorted(filtered, key=lambda x: (x.metadata.namespace, x.metadata.name)):
             for item in (lr.spec.limits or []):
@@ -2171,7 +2236,8 @@ def get_serviceaccounts(namespace: str = "all", search: str | None = None) -> st
         filtered  = _search_filter(items, search)
         rb_items  = _rbac.list_role_binding_for_all_namespaces().items
         crb_items = _rbac.list_cluster_role_binding().items
-        lines = ["| NAMESPACE | SERVICEACCOUNT | ROLES | CLUSTER ROLES |", "|---|---|---|---|"]
+        lines = [_ns_header("ServiceAccounts", namespace, search),
+                 "| NAMESPACE | SERVICEACCOUNT | ROLES | CLUSTER ROLES |", "|---|---|---|---|"]
         for sa in sorted(filtered, key=lambda x: (x.metadata.namespace, x.metadata.name)):
             ns   = sa.metadata.namespace
             name = sa.metadata.name
