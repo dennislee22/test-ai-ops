@@ -188,8 +188,8 @@ def _build_llm_gguf():
     model_path = config.LLM_MODEL
     #n_ctx      = int(os.environ.get("GGUF_N_CTX", "8192"))
     n_ctx      = int(os.environ.get("GGUF_N_CTX", "40960")) #n_ctx_train (40960)
-    #n_threads  = int(os.environ.get("GGUF_N_THREADS", str(os.cpu_count() or 4)))
-    n_threads  = 4  # Hardcoded to 48 to prevent segmentation faults
+    n_threads  = int(os.environ.get("GGUF_N_THREADS", str(os.cpu_count() or 4)))
+    #n_threads  = 4
 
     _log_ag.info(f"[LLM/GGUF] Loading {model_path} | ctx={n_ctx} threads={n_threads}")
     if not os.path.isfile(model_path):
