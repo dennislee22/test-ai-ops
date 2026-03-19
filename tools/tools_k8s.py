@@ -161,7 +161,6 @@ def get_pod_tolerations(namespace: str = "all",
 
                 table_rows.append((ns, name, tol_str))
 
-        # fallback: if search applied but no matches, show all tolerations
         if search and not table_rows:
             for pod in sorted(pods.items, key=lambda p: (p.metadata.namespace, p.metadata.name)):
                 ns = pod.metadata.namespace
@@ -379,7 +378,6 @@ def get_pod_status(namespace: str = "all", search: str | None = None) -> str:
 
         fallback_msg = ""
         if search and not table_rows:
-            fallback_msg = "No matches. Showing all pods:\n"
             table_rows = []
             for pod in pods:
                 phase = pod.status.phase or "Unknown"
@@ -1037,7 +1035,6 @@ def get_endpoints(namespace: str = "all", search: str | None = None) -> str:
 
         fallback_msg = ""
         if search and not table_rows:
-            fallback_msg = f"No matches. Showing all endpoints:\n"
             for ep in eps_list:
                 ns_name = ep.metadata.namespace
                 name = ep.metadata.name
@@ -2692,8 +2689,6 @@ def get_service(namespace: str = "all", search: str = None) -> str:
 
         fallback_msg = ""
         if search and not table_rows:
-            #fallback_msg = f"No matches for '{search}'. Showing all services:\n"
-            fallback_msg = f"No matches. Showing all services:\n"
             table_rows = []
             for svc in svcs.items:
                 stype    = svc.spec.type or "ClusterIP"
