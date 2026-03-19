@@ -73,19 +73,16 @@ K8S_TOOL_METADATA: dict = {
         "description": (
             "List Kubernetes pods in a namespace or across the cluster. "
             "This is the PRIMARY tool for listing pods. "
-
             "Use this tool for queries like: "
             "'list pods', "
-            "'list all pods in namespace X', "
+            "'list all pods', "
+            "'list pods in namespace X', "
             "'show pods in longhorn-system', "
-            "'search pods by partial name or namespace'. "
-
-            "Supports namespace filtering and partial search on pod name or namespace. "
-            "If a search term is provided and no matches are found, the tool automatically falls back to showing all pods. "
-
+            "Supports filtering by partial pod name match. "
+            "If no matches are found, the tool falls back to showing all pods. "
+            "Namespace defaults to 'all' unless the user explicitly specifies one. "
             "Displays pod phase (Running/Pending/Failed/Unknown), container readiness, restart counts, "
             "and non-ready conditions. "
-
             "Do NOT use this tool for detailed per-container resource requests or limits — "
             "use get_pod_resource_requests for that purpose."
         ),
@@ -93,11 +90,11 @@ K8S_TOOL_METADATA: dict = {
             "namespace": {
                 "type": "string",
                 "default": "all",
-                "description": "Namespace to query. Defaults to 'all' namespaces — set when the user specifies a namespace."
+                "description": "Namespace to query. Defaults to 'all' namespaces — only override when explicitly specified."
             },
             "search": {
                 "type": "string",
-                "description": "Optional search string to match pod names or namespaces (partial match)."
+                "description": "Optional keyword to filter pods by name (partial match)."
             },
         },
     },
