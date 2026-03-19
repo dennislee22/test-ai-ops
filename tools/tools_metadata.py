@@ -1,7 +1,7 @@
 from tools.tools_k8s import (
     get_pod_status, get_pod_logs, describe_pod, get_node_info, get_gpu_info,
     get_node_labels, get_node_taints, get_events, get_deployment, describe_sc,
-    get_daemonset, get_statefulset, get_job_status, get_hpa_status, describe_pvc,
+    get_daemonset, get_statefulset, get_adhoc_job_status, get_hpa_status, describe_pvc,
     get_pvc_status, get_cluster_version, get_storage_classes, get_endpoints,
     get_node_capacity, get_persistent_volumes, get_service, get_ingress, describe_pv,
     get_configmap_list, get_secret_list, get_resource_quotas, get_limit_ranges,
@@ -9,7 +9,8 @@ from tools.tools_k8s import (
     get_pod_tolerations, get_pod_resource_requests, run_cluster_health, get_replicaset,
     get_namespace_resource_summary, get_pod_images, get_unhealthy_pods_detail,
     get_coredns_health, get_pv_usage, find_resource, get_pod_containers_resources,
-    query_prometheus_metrics, kubectl_exec, exec_db_query, get_pod_storage,
+    query_prometheus_metrics, kubectl_exec, exec_db_query, get_pod_storage, get_pdb_status,
+    get_certificate_status, get_control_plane_status, get_network_policy_status, get_webhook_health,
 )
 
 K8S_TOOL_METADATA: dict = {
@@ -357,24 +358,94 @@ K8S_TOOL_METADATA: dict = {
         },
     },
     
-    "get_job_status": {
-        "fn":          get_job_status,
+"get_pdb_status": {
+        "fn":          get_pdb_status,
         "description": (
-            "Check Kubernetes Jobs in a namespace or across all namespaces. "
-            "By default, only FAILED jobs are returned (active jobs with failures). "
-            "Set show_all=true to include all jobs including complete ones. "
-            "Set failed_only=true to return only failed jobs. "
-            "Set running_only=true to return only currently active/running jobs. "
-            "Set raw_output=true for kubectl-style table output. "
-            "NAMESPACE RULE — CRITICAL: if the user does not name a specific namespace, "
-            "ALWAYS use namespace='all'. Only scope to a specific namespace when the user explicitly names one."
+            "List all PodDisruptionBudgets (PDBs) across a namespace (or all namespaces). "
+            "Shows minimum available, maximum unavailable, allowed disruptions, and current/desired healthy counts. "
+            "Flags PDBs that are blocking node evictions or upgrades (Allowed Disruptions = 0). "
+            "Use for queries like: 'show me pod disruption budgets', 'why can't I drain this node', or 'are there any PDBs blocking evictions'."
         ),
         "parameters":  {
-            "namespace":    {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "show_all":     {"type": "boolean", "default": False, "description": "Include all jobs including healthy/complete ones."},
-            "failed_only":  {"type": "boolean", "default": False, "description": "Return only failed jobs (ignores running or complete jobs)."},
-            "running_only": {"type": "boolean", "default": False, "description": "Return only currently active/running jobs (status.active > 0)."},
-            "raw_output":   {"type": "boolean", "default": False, "description": "Return kubectl-style table output."},
+            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to all namespaces — only override when explicitly named."}
+        },
+    },
+
+    "get_webhook_health": {
+        "fn":          get_webhook_health,
+        "description": (
+            "List all Mutating and Validating Admission Webhook Configurations in the cluster. "
+            "Shows webhook name, target service/URL, and explicitly flags webhooks with 'failurePolicy: Fail'. "
+            "Use for queries like: 'check admission webhooks', 'what webhooks are active', or 'are there any webhooks that could break the cluster if they go down'."
+        ),
+        "parameters":  {},
+    },
+
+    "get_cronjob_status": {
+        "fn":          get_cronjob_status,
+        "description": (
+            "List all CronJobs across a namespace (or all namespaces). "
+            "Shows the schedule, whether it is suspended, the number of currently active jobs, and the time since the last run. "
+            "Supports partial matching on CronJob names using the `search` parameter. "
+            "Use for queries like: 'show me cronjobs', 'are any cronjobs suspended', or 'when did my nightly batch last run'."
+        ),
+        "parameters":  {
+            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to all namespaces — only override when explicitly named."},
+            "search":    {"type": "string", "description": "Partial CronJob name to filter results. Leave empty to show all CronJobs."}
+        },
+    },
+
+    "get_network_policy_status": {
+        "fn":          get_network_policy_status,
+        "description": (
+            "Audit NetworkPolicies across a namespace (or all namespaces). "
+            "Shows the policy name, pod selector, and policy types (Ingress/Egress). "
+            "When checking all namespaces, it outputs a critical warning listing namespaces that have zero network policies securing them. "
+            "Use for queries like: 'show network policies', 'audit cluster network security', or 'which namespaces are open to lateral movement'."
+        ),
+        "parameters":  {
+            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to all namespaces — only override when explicitly named."}
+        },
+    },
+
+    "get_control_plane_status": {
+        "fn":          get_control_plane_status,
+        "description": (
+            "Check the health of core Kubernetes control plane components (etcd, kube-apiserver, kube-controller-manager, kube-scheduler). "
+            "Reads ComponentStatuses and inspects core pods running in the kube-system namespace. "
+            "Use for queries like: 'is the control plane healthy', 'check etcd status', or 'is the api server running'."
+        ),
+        "parameters":  {},
+    },
+
+    "get_certificate_status": {
+        "fn":          get_certificate_status,
+        "description": (
+            "List cert-manager Certificates across a namespace (or all namespaces). "
+            "Shows the Certificate's Ready status, target secret name, and exact expiration date (notAfter). "
+            "Requires cert-manager custom resource definitions (CRDs) to be installed on the cluster. "
+            "Use for queries like: 'check certificate expirations', 'are any cert-manager certificates failing', or 'show TLS cert status'."
+        ),
+        "parameters":  {
+            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to all namespaces — only override when explicitly named."}
+        },
+    },
+
+    "get_adhoc_job_status": {
+        "fn":          get_adhoc_job_status,
+        "description": (
+            "List standalone or ad-hoc Jobs across a namespace (or all namespaces). "
+            "By default, this excludes Jobs spawned by CronJobs to prevent log spam. "
+            "Shows active, succeeded, and failed counts for each job. "
+            "Use for queries like: 'show failed jobs', 'list running jobs', or 'check one-off job status'."
+        ),
+        "parameters":  {
+            "namespace":        {"type": "string", "default": "all", "description": "Namespace to query. Defaults to all namespaces — only override when explicitly named."},
+            "show_all":         {"type": "boolean", "default": False, "description": "Set to True to show healthy/completed jobs in the summary output."},
+            "raw_output":       {"type": "boolean", "default": False, "description": "Set to True to get a raw table format instead of a summary."},
+            "failed_only":      {"type": "boolean", "default": False, "description": "Set to True to only return jobs that have failed."},
+            "running_only":     {"type": "boolean", "default": False, "description": "Set to True to only return jobs that are currently running."},
+            "exclude_cronjobs": {"type": "boolean", "default": True, "description": "Set to False to include historical Jobs spawned by CronJobs."}
         },
     },
     

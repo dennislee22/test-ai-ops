@@ -1672,11 +1672,12 @@ def get_statefulset(namespace: str = "all", search: str = None) -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_job_status(namespace: str = "all",
-                   show_all: bool = False,
-                   raw_output: bool = False,
-                   failed_only: bool = False,
-                   running_only: bool = False) -> str:
+def get_adhoc_job_status(namespace: str = "all",
+                         show_all: bool = False,
+                         raw_output: bool = False,
+                         failed_only: bool = False,
+                         running_only: bool = False,
+                         exclude_cronjobs: bool = True) -> str:
     try:
         jobs = (_batch.list_job_for_all_namespaces()
                 if namespace == "all"
@@ -1685,16 +1686,30 @@ def get_job_status(namespace: str = "all",
         if not jobs.items:
             return f"No Jobs in '{namespace}'."
 
+        def _is_cronjob_spawn(job) -> bool:
+            for owner in (job.metadata.owner_references or []):
+                if owner.kind == "CronJob":
+                    return True
+            return False
+
+        filtered_jobs = []
+        for j in jobs.items:
+            if exclude_cronjobs and _is_cronjob_spawn(j):
+                continue
+            filtered_jobs.append(j)
+
+        if not filtered_jobs:
+            return f"No standalone Jobs found in '{namespace}' (CronJob spawns are hidden)."
+
         running_jobs = []
         failed_jobs = []
         healthy_jobs = []
 
-        for j in sorted(jobs.items, key=lambda j: (j.metadata.namespace, j.metadata.name)):
+        for j in sorted(filtered_jobs, key=lambda j: (j.metadata.namespace, j.metadata.name)):
             active    = j.status.active    or 0
             succeeded = j.status.succeeded or 0
             failed    = j.status.failed    or 0
 
-            # Determine status symbol
             if succeeded > 0 and active == 0:
                 status = "✓ Complete"
             elif failed > 0:
@@ -1704,13 +1719,11 @@ def get_job_status(namespace: str = "all",
 
             entry = f"{j.metadata.namespace}/{j.metadata.name}: {status} | Active:{active} Succeeded:{succeeded} Failed:{failed}"
 
-            # Filter for running_only
             if running_only:
                 if active > 0:
                     running_jobs.append(entry)
                 continue
 
-            # Filter for failed_only
             if failed_only:
                 if failed > 0:
                     failed_jobs.append(entry)
@@ -1723,7 +1736,7 @@ def get_job_status(namespace: str = "all",
         if raw_output:
             hdr = f"{'NAMESPACE':<22} {'NAME':<55} {'STATUS':<12} {'ACTIVE':<7} {'SUCCEEDED':<9} {'FAILED':<7}"
             rows = [hdr, "-"*len(hdr)]
-            for j in sorted(jobs.items, key=lambda j: (j.metadata.namespace, j.metadata.name)):
+            for j in sorted(filtered_jobs, key=lambda j: (j.metadata.namespace, j.metadata.name)):
                 active    = j.status.active    or 0
                 succeeded = j.status.succeeded or 0
                 failed    = j.status.failed    or 0
@@ -1739,14 +1752,19 @@ def get_job_status(namespace: str = "all",
                     f"{j.metadata.namespace:<22} {j.metadata.name:<55} {status:<12} "
                     f"{active:<7} {succeeded:<9} {failed:<7}"
                 )
-            if len(rows) == 2:  # only header exists
+            if len(rows) == 2:
                 return "No Jobs are currently running."
             return "\n".join(rows)
 
-        # Human-readable output
         lines = []
-        total_jobs = len(jobs.items)
-        lines.append(f"Jobs in '{namespace}': {total_jobs} total.")
+        total_jobs = len(filtered_jobs)
+        
+        header_text = f"Standalone Jobs in '{namespace}': {total_jobs} total"
+        if exclude_cronjobs:
+            header_text += " (CronJob spawns hidden)."
+        else:
+            header_text += "."
+        lines.append(header_text)
 
         if running_only:
             if running_jobs:
@@ -1770,8 +1788,8 @@ def get_job_status(namespace: str = "all",
 
         return "\n".join(lines)
 
-    except ApiException as e:
-        return f"K8s API error: {e.reason}"
+    except Exception as e:
+        return f"K8s API error: {str(e)}"
 
 def get_hpa_status(namespace: str = "all") -> str:
     try:
@@ -2665,11 +2683,6 @@ def get_coredns_health() -> str:
     return "\n".join(lines)
 
 def get_service(namespace: str = "all", search: str = None) -> str:
-    """
-    List Kubernetes services in a namespace or all namespaces.
-    Optionally filter by a search term in the service name.
-    Always shows a Markdown table, even if fallback to all services.
-    """
     try:
         svcs = (_core.list_service_for_all_namespaces()
                 if namespace == "all"
@@ -3428,7 +3441,258 @@ def get_pod_storage(namespace: str = "all", search: str | None = None) -> str:
 
     except ApiException as e:
         return f"K8s API error: {e.reason}"
-    
+
+def get_pdb_status(namespace: str = "all") -> str:
+    try:
+        policy_api = _k8s.PolicyV1Api()
+        pdbs = (policy_api.list_pod_disruption_budget_for_all_namespaces().items
+                if namespace == "all"
+                else policy_api.list_namespaced_pod_disruption_budget(namespace=namespace).items)
+
+        if not pdbs:
+            return f"No PodDisruptionBudgets found in '{namespace}'."
+
+        lines = [f"### PodDisruptionBudgets in '{namespace}'\n"]
+        lines.extend(["| NAMESPACE | NAME | MIN AVAILABLE | MAX UNAVAIL | ALLOWED DISRUPTIONS | HEALTHY (CUR/DES) | STATUS |",
+                      "|---|---|---|---|---|---|---|"])
+
+        for pdb in pdbs:
+            ns = pdb.metadata.namespace
+            name = pdb.metadata.name
+            min_avail = pdb.spec.min_available if pdb.spec.min_available is not None else "N/A"
+            max_unavail = pdb.spec.max_unavailable if pdb.spec.max_unavailable is not None else "N/A"
+            
+            allowed = pdb.status.disruptions_allowed or 0
+            cur_healthy = pdb.status.current_healthy or 0
+            des_healthy = pdb.status.desired_healthy or 0
+
+            status = "🔴 BLOCKED" if allowed == 0 else "🟢 OK"
+
+            lines.append(f"| `{ns}` | `{name}` | {min_avail} | {max_unavail} | **{allowed}** | {cur_healthy}/{des_healthy} | {status} |")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"K8s API error fetching PDBs: {str(e)}"
+
+ def get_webhook_health() -> str:
+    try:
+        adm_api = _k8s.AdmissionregistrationV1Api()
+        mutating = adm_api.list_mutating_webhook_configuration().items
+        validating = adm_api.list_validating_webhook_configuration().items
+
+        if not mutating and not validating:
+            return "No Mutating or Validating Webhook Configurations found."
+
+        lines = ["### Admission Webhooks\n"]
+        lines.extend(["| TYPE | NAME | WEBHOOK | FAILURE POLICY | TARGET SERVICE/URL |",
+                      "|---|---|---|---|---|"])
+
+        def add_webhooks(config_list, wh_type):
+            for config in config_list:
+                c_name = config.metadata.name
+                for wh in (config.webhooks or []):
+                    wh_name = wh.name
+                    fail_policy = wh.failure_policy or "Unknown"
+                    
+                    target = "Unknown"
+                    if wh.client_config.service:
+                        svc = wh.client_config.service
+                        target = f"svc: {svc.namespace}/{svc.name}:{svc.port or 443}"
+                    elif wh.client_config.url:
+                        target = f"url: {wh.client_config.url}"
+
+                    flag = "⚠️ FAIL" if fail_policy == "Fail" else "IGNORE"
+                    lines.append(f"| {wh_type} | `{c_name}` | `{wh_name}` | **{flag}** | `{target}` |")
+
+        add_webhooks(mutating, "Mutating")
+        add_webhooks(validating, "Validating")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"K8s API error fetching Webhooks: {str(e)}"
+
+def get_cronjob_status(namespace: str = "all", search: str = None) -> str:
+    try:
+        cjs = (_batch.list_cron_job_for_all_namespaces().items
+               if namespace == "all"
+               else _batch.list_namespaced_cron_job(namespace=namespace).items)
+
+        if not cjs:
+            return f"No CronJobs found in '{namespace}'."
+
+        lines = [f"### CronJobs in '{namespace}'\n"]
+        lines.extend(["| NAMESPACE | NAME | SCHEDULE | SUSPENDED | ACTIVE JOBS | LAST RUN |",
+                      "|---|---|---|---|---|---|"])
+
+        for cj in cjs:
+            ns = cj.metadata.namespace
+            name = cj.metadata.name
+            
+            if search and search.lower() not in name.lower():
+                continue
+
+            schedule = cj.spec.schedule
+            suspend = cj.spec.suspend
+            active_jobs = len(cj.status.active) if cj.status.active else 0
+            last_sched = cj.status.last_schedule_time
+            
+            from datetime import datetime, timezone
+            if last_sched:
+                now = datetime.now(timezone.utc)
+                diff = now - last_sched
+                days, seconds = diff.days, diff.seconds
+                hours = seconds // 3600
+                minutes = (seconds % 3600) // 60
+                last_sched_str = f"{days}d {hours}h {minutes}m ago" if days > 0 else f"{hours}h {minutes}m ago"
+            else:
+                last_sched_str = "Never"
+
+            suspend_str = "⏸️ Yes" if suspend else "▶️ No"
+            
+            lines.append(f"| `{ns}` | `{name}` | `{schedule}` | {suspend_str} | {active_jobs} | {last_sched_str} |")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"K8s API error fetching CronJobs: {str(e)}"
+
+def get_network_policy_status(namespace: str = "all") -> str:
+    try:
+        nps = (_net.list_network_policy_for_all_namespaces().items
+               if namespace == "all"
+               else _net.list_namespaced_network_policy(namespace=namespace).items)
+
+        if not nps:
+            return f"No NetworkPolicies found in '{namespace}'. ⚠️ Cluster may be completely open to lateral movement."
+
+        lines = [f"### NetworkPolicies in '{namespace}'\n"]
+        lines.extend(["| NAMESPACE | NAME | POD SELECTOR | POLICY TYPES |",
+                      "|---|---|---|---|"])
+
+        covered_namespaces = set()
+
+        for np in nps:
+            ns = np.metadata.namespace
+            covered_namespaces.add(ns)
+            name = np.metadata.name
+            
+            pod_sel = np.spec.pod_selector.match_labels
+            pod_sel_str = ",".join(f"{k}={v}" for k, v in pod_sel.items()) if pod_sel else "ALL PODS"
+            
+            types = np.spec.policy_types or []
+            types_str = ", ".join(types)
+
+            lines.append(f"| `{ns}` | `{name}` | `{pod_sel_str}` | {types_str} |")
+
+        if namespace == "all":
+            try:
+                all_ns = {n.metadata.name for n in _core.list_namespace().items}
+                missing_ns = all_ns - covered_namespaces
+                if missing_ns:
+                    lines.append(f"\n**⚠️ WARNING: The following namespaces have NO NetworkPolicies:**")
+                    lines.append(f"> `{', '.join(sorted(missing_ns))}`")
+            except:
+                pass
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"K8s API error fetching NetworkPolicies: {str(e)}"
+
+def get_control_plane_status() -> str:
+    try:
+        lines = ["### Control Plane Health\n"]
+        
+        # 1. Attempt to check Component Statuses (Deprecated but works on many bare-metal setups)
+        try:
+            cs = _core.list_component_status().items
+            if cs:
+                lines.extend(["**Component Statuses:**", "| NAME | STATUS | MESSAGE | ERROR |", "|---|---|---|---|"])
+                for c in cs:
+                    condition = c.conditions[0] if c.conditions else None
+                    status = condition.status if condition else "Unknown"
+                    msg = condition.message if condition else "-"
+                    err = condition.error if condition else "-"
+                    flag = "🟢" if status == "True" else "🔴"
+                    lines.append(f"| {c.metadata.name} | {flag} {status} | {msg} | {err} |")
+                lines.append("")
+        except:
+            pass
+
+        # 2. Check kube-system core pods directly
+        pods = _core.list_namespaced_pod(namespace="kube-system").items
+        core_components = ["kube-apiserver", "etcd", "kube-controller-manager", "kube-scheduler"]
+        
+        lines.extend(["**Control Plane Pods (`kube-system`):**", "| COMPONENT | POD NAME | STATUS | READY | RESTARTS |", "|---|---|---|---|---|"])
+        
+        found = False
+        for pod in pods:
+            name = pod.metadata.name
+            if any(comp in name for comp in core_components):
+                found = True
+                phase = pod.status.phase or "Unknown"
+                ready = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
+                total = len(pod.spec.containers)
+                restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
+                
+                flag = "🟢" if phase == "Running" and ready == total else "🔴"
+                lines.append(f"| {name.split('-')[0]} | `{name}` | {flag} {phase} | {ready}/{total} | {restarts} |")
+        
+        if not found:
+            lines.append("| _N/A_ | _No managed control plane pods visible_ | - | - | - |")
+            lines.append("\n_(Note: If you are using a managed service like EKS/GKE/AKS, control plane pods are abstracted and hidden by the cloud provider)._")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"K8s API error fetching Control Plane status: {str(e)}"
+
+def get_certificate_status(namespace: str = "all") -> str:
+    try:
+        custom = _k8s.CustomObjectsApi()
+        group = "cert-manager.io"
+        version = "v1"
+        plural = "certificates"
+        
+        try:
+            if namespace == "all":
+                certs = custom.list_cluster_custom_object(group, version, plural).get("items", [])
+            else:
+                certs = custom.list_namespaced_custom_object(group, version, namespace, plural).get("items", [])
+        except _k8s.rest.ApiException as e:
+            if e.status == 404:
+                return "cert-manager CRDs (certificates.cert-manager.io) are not installed on this cluster."
+            raise
+            
+        if not certs:
+            return f"No cert-manager Certificates found in '{namespace}'."
+
+        lines = [f"### Cert-Manager Certificates in '{namespace}'\n"]
+        lines.extend(["| NAMESPACE | NAME | READY | SECRET NAME | EXPIRATION (NOT AFTER) |",
+                      "|---|---|---|---|---|"])
+
+        for cert in certs:
+            ns = cert.get("metadata", {}).get("namespace", "unknown")
+            name = cert.get("metadata", {}).get("name", "unknown")
+            secret = cert.get("spec", {}).get("secretName", "unknown")
+            
+            status_dict = cert.get("status", {})
+            conditions = status_dict.get("conditions", [])
+            
+            ready_status = "Unknown"
+            flag = "❓"
+            for cond in conditions:
+                if cond.get("type") == "Ready":
+                    ready_status = cond.get("status")
+                    flag = "🟢" if ready_status == "True" else "🔴"
+                    break
+                    
+            not_after = status_dict.get("notAfter", "Unknown")
+            
+            lines.append(f"| `{ns}` | `{name}` | {flag} {ready_status} | `{secret}` | {not_after} |")
+
+        return "\n".join(lines)
+        
+    except Exception as e:
+        return f"K8s API error fetching Certificates: {str(e)}"           
+
 def get_namespace_status(namespace: str = "all", show_all: bool = False, sort_by: str | None = None, limit: int | None = None) -> str:
     try:
         if namespace != "all":
