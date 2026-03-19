@@ -14,41 +14,54 @@ from tools.tools_k8s import (
 )
 
 K8S_TOOL_METADATA: dict = {
-    "find_resource": {
+"find_resource": {
         "fn":          find_resource,
         "description": (
-            "Find and locate Kubernetes resources by NAME (partial match). "
-            "This is the PRIMARY tool for searching resources when the user mentions a specific name. "
-            "Especially useful for locating pods and answering WHERE they are running. "
-
-            "Use this tool when the query includes a resource name, such as: "
-            "'where is grafana pod', "
+            "Search for Kubernetes resources by name (partial, case-insensitive match) across "
+            "pods, services, ingresses, and PVCs. "
+            "Use this as the PRIMARY tool whenever the user mentions a specific resource name or "
+            "asks where something is running. Examples: "
+            "'where is grafana', "
             "'find pod nginx', "
-            "'search for redis', "
-            "'which node is pod X running on', "
-            "'show me grafana', "
-            "'locate service Y'. "
-
-            "Returns matching resources with namespace, name, node (for pods), and status. "
-            "Supports pods, services, ingresses, and PVCs. "
-
-            "If a name or partial name is provided, ALWAYS use this tool instead of get_pod_status. "
-            "If no matches are found, falls back to listing all resources of the specified type."
+            "'which node is redis on', "
+            "'show me the grafana service', "
+            "'locate ingress Y', "
+            "'is there anything named prometheus'. "
+            "Also use this when the user asks to list ALL resources with no specific name — "
+            "pass name_substring='' to show everything. "
+            "Vague intent words like 'all', 'any', 'everything' are automatically treated as "
+            "no filter, so the full resource list is returned. "
+            "If a named search yields no matches, the tool automatically falls back to showing "
+            "all resources of the requested type, with a note explaining the fallback. "
+            "Do NOT use get_pod_status when a specific resource name is mentioned — use this tool. "
+            "Returns: scope header, resource type, namespace, name, and status/details per row."
         ),
         "parameters":  {
             "name_substring": {
-                "type": "string",
-                "description": "Partial name of the resource to search for (e.g., 'grafana', 'nginx')."
+                "type":        "string",
+                "description": (
+                    "Partial name to search for (e.g., 'grafana', 'nginx', 'redis'). "
+                    "Pass an empty string '' to list all resources with no name filter. "
+                    "Do NOT pass intent words like 'all', 'any', or 'everything' — "
+                    "pass '' instead. These words are stripped automatically but '' is cleaner."
+                ),
             },
             "resource_type":  {
-                "type": "string",
-                "default": None,
-                "description": "Optional resource type to filter (pod, svc/service, ingress, pvc). Defaults to all supported types."
+                "type":        "string",
+                "default":     None,
+                "description": (
+                    "Optional resource type to restrict the search. "
+                    "Accepted values: 'pod', 'svc' or 'service', 'ingress', 'pvc'. "
+                    "Omit (None) to search all supported types at once."
+                ),
             },
             "namespace":      {
-                "type": "string",
-                "default": None,
-                "description": "Optional namespace to restrict the search. Defaults to all namespaces."
+                "type":        "string",
+                "default":     None,
+                "description": (
+                    "Optional namespace to restrict the search. "
+                    "Omit (None) to search across all namespaces."
+                ),
             },
         },
     },
