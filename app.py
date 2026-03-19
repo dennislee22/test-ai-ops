@@ -513,8 +513,15 @@ def build_agent():
             
             parts = []
             for r in results:
-                #parts.append(f"**Raw output from tool `{r.name}`**:\n\n{r.content}")
-                parts.append(f"**Raw output from tool `{r.name}`**:\n\n```text\n{r.content}\n```")
+                content_str = str(r.content).strip()
+                
+                # If it looks like a Markdown table, skip the backticks so the UI renders HTML!
+                if "\n|" in content_str or content_str.startswith("|") or "|---" in content_str:
+                    parts.append(f"**Raw output from tool `{r.name}`**:\n\n{content_str}")
+                else:
+                    # Otherwise (logs, JSON, plain text), use backticks to keep it in a safe code block
+                    parts.append(f"**Raw output from tool `{r.name}`**:\n\n```text\n{content_str}\n```")
+                    
             direct_answer = "\n\n".join(parts)
 
         return {"messages": results, "tool_calls_made": tools_called, "iteration": state.get("iteration", 0), "status_updates": updates, "direct_answer": direct_answer}
