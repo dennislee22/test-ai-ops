@@ -1327,16 +1327,16 @@ def get_node_info(node_name: str = None) -> str:
 def find_resource(name_substring: str, resource_type: str = None, namespace: str = None) -> str:
     try:
         resource_type = resource_type.lower() if resource_type else None
-        lines = ["Resource Type\tNamespace\tName\tStatus/Details"]
+        lines = ["| Resource Type | Namespace | Name | Status/Details |",
+                 "|---------------|----------|------|----------------|"]
         results = []
 
         def add_resources(kind: str, items, get_details_fn):
             for item in items:
                 if not name_substring or name_substring.lower() in item.metadata.name.lower():
                     details = get_details_fn(item)
-                    results.append(f"{kind}\t{item.metadata.namespace}\t{item.metadata.name}\t{details}")
+                    results.append(f"| {kind} | {item.metadata.namespace} | {item.metadata.name} | {details} |")
 
-        # Define each resource type with a lambda to extract details
         resources = []
 
         if not resource_type or resource_type == "pod":
@@ -1355,13 +1355,11 @@ def find_resource(name_substring: str, resource_type: str = None, namespace: str
             pvcs = _core.list_namespaced_persistent_volume_claim(namespace).items if namespace else _core.list_persistent_volume_claim_for_all_namespaces().items
             resources.append(("PVC", pvcs, lambda pvc: f"{pvc.status.phase or 'Unknown'} {pvc.spec.resources.requests.get('storage', 'n/a') if pvc.spec.resources and pvc.spec.resources.requests else 'n/a'}"))
 
-        # Add matching resources
         for kind, items, fn in resources:
             add_resources(kind, items, fn)
 
         if not results:
-            # fallback: show all resources of the type with a warning
-            results.append(f"No matches for '{name_substring}'. Showing all resources.")
+            results.append(f"| No matches for '{name_substring}'. Showing all resources. | | | |")
             for kind, items, fn in resources:
                 add_resources(kind, items, fn)
 
@@ -1456,12 +1454,6 @@ def get_events(namespace: str = "all", search: str | None = None, type: str = "A
         field_selector = f"type={type_upper}" if type_upper in ("Warning", "Normal") else ""
         events = fetch_events(namespace, field_selector)
 
-        # fallback: if Warning requested but no events, try Normal
-        if type_upper == "Warning" and not events:
-            field_selector = "type=Normal"
-            events = fetch_events(namespace, field_selector)
-            type_upper = "Normal"
-
         if not events:
             return f"`No {type_upper.lower() if type_upper != 'All' else ''} events in '{namespace}'.`"
 
@@ -1504,14 +1496,8 @@ def get_events(namespace: str = "all", search: str | None = None, type: str = "A
         if shown == 0:
             return f"`No actionable events in '{namespace}' (all were background noise).`"
 
-        header = ""
-        if namespace == "all":
-            header = f"_Showing {type_upper.lower() if type_upper != 'All' else 'all'} events from all namespaces._\n\n"
-        else:
-            header = f"_Showing {type_upper.lower() if type_upper != 'All' else 'all'} events in namespace '{namespace}'._\n\n"
-
         lines.append("```")
-        return header + "\n".join(lines)
+        return "\n".join(lines)
 
     except ApiException as e:
         return f"`K8s API error: {e.reason}`"

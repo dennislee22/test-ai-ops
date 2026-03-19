@@ -52,21 +52,6 @@ K8S_TOOL_METADATA: dict = {
         },
     },
 
-    "describe_pv": {
-        "fn":          describe_pv,
-        "description": (
-            "Get detailed info about a PersistentVolume (PV): status, storage class, "
-            "access modes, capacity, reclaim policy, volume source, node affinity, and events. "
-            "Supports partial PV name search and optional full YAML output. "
-            "Use for: 'what is the status of PV X', 'which PVC is bound to PV X', "
-            "or inspecting PV configuration and events."
-        ),
-        "parameters":  {
-            "name":      {"type": "string",  "description": "Partial or full name of the PersistentVolume to describe."},
-            "show_yaml": {"type": "boolean", "default": False, "description": "If true, returns the full PV object as YAML."},
-        },
-    },
-
     "get_pod_containers_resources": {
         "fn":          get_pod_containers_resources,
         "description": (
@@ -271,7 +256,7 @@ K8S_TOOL_METADATA: dict = {
                            "description": "If true, output full YAML of the StorageClass instead of human-readable summary."},
         },
     },
-
+    
     "describe_pvc": {
         "fn":          describe_pvc,
         "description": (
@@ -285,6 +270,21 @@ K8S_TOOL_METADATA: dict = {
                            "description": "Namespace of the PVC. Defaults to 'all' — only override if a specific namespace is needed."},
             "show_yaml":  {"type": "boolean", "default": False,
                            "description": "If true, output full YAML of the PVC instead of human-readable summary."},
+        },
+    },
+
+    "describe_pv": {
+        "fn":          describe_pv,
+        "description": (
+            "Get detailed info about a PersistentVolume (PV): status, storage class, "
+            "access modes, capacity, reclaim policy, volume source, node affinity, and events. "
+            "Supports partial PV name search and optional full YAML output. "
+            "Use for: 'what is the status of PV X', 'which PVC is bound to PV X', "
+            "or inspecting PV configuration and events."
+        ),
+        "parameters":  {
+            "name":      {"type": "string",  "description": "Partial or full name of the PersistentVolume to describe."},
+            "show_yaml": {"type": "boolean", "default": False, "description": "If true, returns the full PV object as YAML."},
         },
     },
 
