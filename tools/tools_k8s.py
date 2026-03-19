@@ -2931,7 +2931,7 @@ def get_configmap_list(namespace: str = "all", search: str | None = None, filter
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_secret_list(namespace: str = "all", name: str = "", pod_name: str = None, 
+def get_secret_list(namespace: str = "all", name: str = "", pod_name: str = None,
                     filter_keys: list = None, decode: bool = False) -> str:
     import base64 as _b64
 
@@ -2941,8 +2941,9 @@ def get_secret_list(namespace: str = "all", name: str = "", pod_name: str = None
         except Exception:
             return "<decode error>"
 
-    # Define the hidden message once to avoid f-string syntax errors
     hidden_msg = "<hidden> — enable 'Show Secret Values' in ⚙ Settings → Security to decode."
+
+    CERT_KEY_HINTS = {"tls", "cert", "ca", "ssl"}
 
     try:
         if pod_name:
@@ -2963,6 +2964,7 @@ def get_secret_list(namespace: str = "all", name: str = "", pod_name: str = None
                     configmaps.add(vol.config_map.name)
 
             lines = [f"Secrets and ConfigMaps attached to pod '{namespace}/{pod_name}':"]
+
             if secrets:
                 lines.append("  Secrets:")
                 for sname in sorted(secrets):
@@ -2971,7 +2973,11 @@ def get_secret_list(namespace: str = "all", name: str = "", pod_name: str = None
                         data = s.data or {}
                         lines.append(f"    {sname} [type={s.type}]")
                         for k, v in data.items():
-                            val_str = _decode(v) if decode else hidden_msg
+                            if decode:
+                                val_str = _decode(v)
+                            else:
+                                is_cert = any(h in k.lower() for h in CERT_KEY_HINTS)
+                                val_str = _decode(v) if is_cert else hidden_msg
                             lines.append(f"      {k}: {val_str}")
                     except ApiException:
                         lines.append(f"    {sname}: <fetch error>")
@@ -2999,15 +3005,21 @@ def get_secret_list(namespace: str = "all", name: str = "", pod_name: str = None
                 if e.status == 404:
                     return f"Secret '{name}' not found in namespace '{namespace}'."
                 raise
+
             data = secret.data or {}
+
             lines = [f"Secret: {namespace}/{name}", f"  Type: {secret.type}"]
+
             if data:
                 lines.append("  Data:")
                 for k, v in data.items():
-                    val_str = _decode(v) if decode else hidden_msg
+                    is_cert = any(h in k.lower() for h in CERT_KEY_HINTS)
+                    should_decode = decode or is_cert or any(h in name.lower() for h in CERT_KEY_HINTS)
+                    val_str = _decode(v) if should_decode else hidden_msg
                     lines.append(f"    {k}: {val_str}")
             else:
                 lines.append("  Data: None")
+
             return "\n".join(lines)
 
         secrets = _core.list_namespaced_secret(namespace=namespace)
@@ -3015,18 +3027,20 @@ def get_secret_list(namespace: str = "all", name: str = "", pod_name: str = None
             return f"No secrets in namespace '{namespace}'."
 
         _CERT_TYPES = {"kubernetes.io/tls", "helm.sh/release.v1"}
-        _CERT_KEY_HINTS = {"ca.crt", "tls.crt", "tls.key", "ca-bundle", "ca.pem", "cert.pem", "certificate", "ssl.crt"}
 
         by_type: dict = {}
         for s in secrets.items:
             t = s.type or "Opaque"
             keys = list((s.data or {}).keys())
-            is_cert = (t in _CERT_TYPES
-                       or any(k in _CERT_KEY_HINTS for k in keys)
-                       or any(h in k.lower() for k in keys for h in ("cert", "tls", "ssl", "ca.", ".crt", ".pem")))
+            is_cert = (
+                t in _CERT_TYPES
+                or any(k.lower().find(x) != -1 for k in keys for x in CERT_KEY_HINTS)
+                or any(h in k.lower() for k in keys for h in CERT_KEY_HINTS)
+            )
             by_type.setdefault(t, []).append((s.metadata.name, keys, is_cert))
 
         lines = [f"Secrets in '{namespace}' ({len(secrets.items)} total):"]
+
         for stype, entries in sorted(by_type.items()):
             lines.append(f"  [{stype}] ({len(entries)})")
             for n, keys, is_cert in sorted(entries):
@@ -3035,10 +3049,7 @@ def get_secret_list(namespace: str = "all", name: str = "", pod_name: str = None
 
         if filter_keys:
             _fk_lower = [f.lower() for f in filter_keys]
-            filtered_lines = []
-            for line in lines:
-                if any(f in line.lower() for f in _fk_lower):
-                    filtered_lines.append(line)
+            filtered_lines = [line for line in lines if any(f in line.lower() for f in _fk_lower)]
             if filtered_lines:
                 lines = ["Filtered secrets:"] + filtered_lines
             else:
