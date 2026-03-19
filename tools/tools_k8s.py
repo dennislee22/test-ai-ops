@@ -1060,7 +1060,7 @@ def get_endpoints(namespace: str = "all", search: str | None = None) -> str:
         md_lines = []
 
         if namespace == "all":
-            md_lines.append("§NS_PREFIX§As no namespace was mentioned, I checked across all namespaces.§END_NS§")
+            md_lines.append("As no namespace was mentioned, I checked across all namespaces.")
             md_lines.append("| NAMESPACE | NAME | ADDRESS |")
             md_lines.append("|---|---|---|")
             for ns, name, addr in table_rows:
@@ -2690,7 +2690,6 @@ def get_service(namespace: str = "all", search: str = None) -> str:
             flag     = "✓ Present" if selector else "⚠ No selector"
             table_rows.append((svc.metadata.namespace, svc.metadata.name, stype, ports, flag))
 
-        # Fallback: show all services if search applied but no matches
         fallback_msg = ""
         if search and not table_rows:
             #fallback_msg = f"No matches for '{search}'. Showing all services:\n"
@@ -2703,9 +2702,9 @@ def get_service(namespace: str = "all", search: str = None) -> str:
                 flag     = "✓ Present" if selector else "⚠ No selector"
                 table_rows.append((svc.metadata.namespace, svc.metadata.name, stype, ports, flag))
 
-        # Build Markdown table
         md_lines = [fallback_msg] if fallback_msg else []
         if namespace == "all":
+            md_lines.append("As no namespace was mentioned, I checked across all namespaces.")
             md_lines.append("| NAMESPACE | NAME | TYPE | PORTS | SELECTOR STATUS |")
             md_lines.append("|---|---|---|---|---|")
             for ns, name, stype, ports, flag in table_rows:
@@ -3276,7 +3275,7 @@ def get_pod_images(namespace: str = "all", search: str | None = None) -> str:
     lines = []
 
     if namespace == "all":
-        lines.append("_As no namespace was specified, showing pod images from all namespaces._\n")
+        lines.append("As no namespace was specified, showing pod images from all namespaces.\n")
 
     lines.extend(rows)
 
