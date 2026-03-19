@@ -479,6 +479,211 @@ def get_pod_logs(namespace: str = "all", search: str | None = None,
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
+def describe_pv(name: str, show_yaml: bool = False) -> str:
+    try:
+        pvs = _core.list_persistent_volume().items
+        if not pvs:
+            return "`No PVs found.`"
+
+        matching_pvs = [p for p in pvs if name.lower() in p.metadata.name.lower()]
+        if not matching_pvs:
+            return f"`No PV matching '{name}' found.`"
+
+        pv = matching_pvs[0]
+
+        if show_yaml:
+            import yaml
+            return f"`{yaml.safe_dump(pv.to_dict(), sort_keys=False)}`"
+
+        lines = ["`"]
+        lines.append(f"Name:            {pv.metadata.name}")
+
+        if pv.metadata.labels:
+            lines.append("Labels:          " + "\n                 ".join(f"{k}={v}" for k,v in pv.metadata.labels.items()))
+        else:
+            lines.append("Labels:          <none>")
+
+        if pv.metadata.annotations:
+            lines.append("Annotations:     " + "\n                 ".join(f"{k}: {v}" for k,v in pv.metadata.annotations.items()))
+        else:
+            lines.append("Annotations:     <none>")
+
+        lines.append(f"Finalizers:      {pv.metadata.finalizers or []}")
+        lines.append(f"StorageClass:    {pv.spec.storage_class_name or '<none>'}")
+        lines.append(f"Status:          {pv.status.phase}")
+        claim_ref = f"{pv.spec.claim_ref.namespace}/{pv.spec.claim_ref.name}" if pv.spec.claim_ref else "<none>"
+        lines.append(f"Claim:           {claim_ref}")
+        lines.append(f"Reclaim Policy:  {pv.spec.persistent_volume_reclaim_policy}")
+        access_modes = ", ".join(pv.spec.access_modes or [])
+        lines.append(f"Access Modes:    {access_modes or '<none>'}")
+        lines.append(f"VolumeMode:      {pv.spec.volume_mode or '<none>'}")
+        capacity = pv.spec.capacity.get("storage") if pv.spec.capacity else "<none>"
+        lines.append(f"Capacity:        {capacity}")
+        lines.append(f"Node Affinity:   {pv.spec.node_affinity or '<none>'}")
+        lines.append(f"Message:         {pv.status.message or ''}")
+
+        if pv.spec.csi:
+            csi = pv.spec.csi
+            lines.append("Source:")
+            lines.append("    Type:              CSI (a Container Storage Interface (CSI) volume source)")
+            lines.append(f"    Driver:            {csi.driver}")
+            lines.append(f"    FSType:            {csi.fs_type or '<none>'}")
+            lines.append(f"    VolumeHandle:      {csi.volume_handle}")
+            lines.append(f"    ReadOnly:          {csi.read_only}")
+            if csi.volume_attributes:
+                lines.append("    VolumeAttributes:      " + "\n                           ".join(f"{k}={v}" for k,v in csi.volume_attributes.items()))
+        else:
+            lines.append(f"Source:           <unknown>")
+
+        try:
+            events = _core.list_event_for_all_namespaces(limit=500).items
+            pv_events = [e for e in events if getattr(e.involved_object, "name", "") == pv.metadata.name and e.involved_object.kind == "PersistentVolume"]
+            if pv_events:
+                lines.append("Events:                ")
+                for e in sorted(pv_events, key=lambda x: x.last_timestamp or x.event_time or ""):
+                    lines.append(f"  {e.last_timestamp} {e.type} {e.reason} — {e.message} (x{e.count or 1})")
+            else:
+                lines.append("Events:                <none>")
+        except Exception:
+            lines.append("Events:                <error fetching events>")
+
+        lines.append("`")
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"`Error fetching PV: {str(e)}`"
+    
+def describe_pvc(name: str, namespace: str = "all", show_yaml: bool = False) -> str:
+    try:
+        # Fetch PVCs
+        pvcs = (_core.list_persistent_volume_claim_for_all_namespaces().items
+                if namespace == "all"
+                else _core.list_namespaced_persistent_volume_claim(namespace=namespace).items)
+
+        if not pvcs:
+            return f"`No PVCs found in namespace '{namespace}'.`"
+
+        # Match PVC by name (supports partial match)
+        matching_pvcs = [p for p in pvcs if name.lower() in p.metadata.name.lower()]
+        if not matching_pvcs:
+            return f"`No PVC matching '{name}' found in namespace '{namespace}'.`"
+
+        pvc = matching_pvcs[0]
+
+        if show_yaml:
+            import yaml
+            return f"`{yaml.safe_dump(pvc.to_dict(), sort_keys=False)}`"
+
+        lines = ["`"]
+        lines.append(f"Name:          {pvc.metadata.name}")
+        lines.append(f"Namespace:     {pvc.metadata.namespace}")
+        lines.append(f"StorageClass:  {pvc.spec.storage_class_name or '<none>'}")
+        lines.append(f"Status:        {pvc.status.phase}")
+        lines.append(f"Volume:        {pvc.spec.volume_name or '<none>'}")
+
+        # Labels
+        if pvc.metadata.labels:
+            lines.append("Labels:        " + "\n               ".join(f"{k}={v}" for k,v in pvc.metadata.labels.items()))
+        else:
+            lines.append("Labels:        <none>")
+
+        # Annotations
+        if pvc.metadata.annotations:
+            lines.append("Annotations:   " + "\n               ".join(f"{k}: {v}" for k,v in pvc.metadata.annotations.items()))
+        else:
+            lines.append("Annotations:   <none>")
+
+        # Finalizers
+        lines.append(f"Finalizers:    {pvc.metadata.finalizers or []}")
+
+        # Capacity
+        capacity = pvc.status.capacity.get("storage") if pvc.status.capacity else "<none>"
+        lines.append(f"Capacity:      {capacity}")
+
+        # Access Modes
+        access_modes = ", ".join(pvc.status.access_modes or [])
+        lines.append(f"Access Modes:  {access_modes or '<none>'}")
+
+        # Volume Mode
+        lines.append(f"VolumeMode:    {pvc.spec.volume_mode or '<none>'}")
+
+        # Used By (find pods using this PVC)
+        try:
+            if namespace == "all":
+                pods = _core.list_pod_for_all_namespaces().items
+            else:
+                pods = _core.list_namespaced_pod(namespace=namespace).items
+            used_by = []
+            for pod in pods:
+                for c in pod.spec.volumes or []:
+                    if getattr(c, "persistent_volume_claim", None):
+                        claim_name = c.persistent_volume_claim.claim_name
+                        if claim_name == pvc.metadata.name:
+                            used_by.append(pod.metadata.name)
+            lines.append(f"Used By:       {', '.join(used_by) if used_by else '<none>'}")
+        except Exception:
+            lines.append("Used By:       <error fetching pods>")
+
+        # Events
+        try:
+            events = (_core.list_event_for_all_namespaces(limit=500).items
+                      if namespace == "all"
+                      else _core.list_namespaced_event(namespace=namespace, limit=500).items)
+            pvc_events = [e for e in events if getattr(e.involved_object, "name", "") == pvc.metadata.name and e.involved_object.kind == "PersistentVolumeClaim"]
+            if pvc_events:
+                lines.append("Events:")
+                for e in sorted(pvc_events, key=lambda x: x.last_timestamp or x.event_time or ""):
+                    lines.append(f"  {e.last_timestamp} {e.type} {e.reason} — {e.message} (x{e.count or 1})")
+            else:
+                lines.append("Events:        <none>")
+        except Exception:
+            lines.append("Events:        <error fetching events>")
+
+        lines.append("`")
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"`Error fetching PVC: {str(e)}`"
+    
+def describe_sc(name: str, show_yaml: bool = False) -> str:
+    try:
+        sc_list = _storage.list_storage_class().items
+        matching_scs = [sc for sc in sc_list if sc.metadata.name == name]
+
+        if not matching_scs:
+            return f"`No StorageClass named '{name}' found.`"
+
+        sc = matching_scs[0]
+
+        if show_yaml:
+            import yaml
+            return f"`{yaml.safe_dump(sc.to_dict(), sort_keys=False)}`"
+
+        lines = ["`"]
+        lines.append(f"Name:            {sc.metadata.name}")
+        is_default = sc.metadata.annotations.get("storageclass.kubernetes.io/is-default-class", "false") == "true"
+        lines.append(f"IsDefaultClass:  {'Yes' if is_default else 'No'}")
+        if sc.metadata.annotations:
+            lines.append("Annotations:     " +
+                         "\n                  ".join(f"{k}={v}" for k,v in sc.metadata.annotations.items()))
+
+        lines.append(f"Provisioner:           {sc.provisioner}")
+        lines.append("Parameters:            " +
+                     ",".join(f"{k}={v}" for k,v in (sc.parameters or {}).items()))
+        lines.append(f"AllowVolumeExpansion:  {sc.allow_volume_expansion or False}")
+        lines.append(f"MountOptions:          {', '.join(sc.mount_options) if sc.mount_options else '<none>'}")
+        lines.append(f"ReclaimPolicy:         {sc.reclaim_policy or '<none>'}")
+        lines.append(f"VolumeBindingMode:     {sc.volume_binding_mode or '<none>'}")
+
+        # StorageClass events are not usually generated, but placeholder for uniformity
+        lines.append(f"Events:                <none>")
+
+        lines.append("`")
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"`Error fetching StorageClass: {str(e)}`"
+    
 def describe_pod(pod_name: str, namespace: str = "all", search: str | None = None, show_yaml: bool = False) -> str:
     try:
         pods = (_core.list_pod_for_all_namespaces().items
@@ -519,10 +724,13 @@ def describe_pod(pod_name: str, namespace: str = "all", search: str | None = Non
                      "\n                  ".join(f"{k}: {v}" for k,v in (pod.metadata.annotations or {}).items()))
         lines.append(f"Status:           {pod.status.phase}")
         lines.append(f"IP:               {pod.status.pod_ip}")
-        if pod.status.pod_ips:
+
+        pod_ips = getattr(pod.status, "pod_ips", None)
+        if pod_ips:
             lines.append("IPs:")
-            for ip in pod.status.pod_ips:
+            for ip in pod_ips:
                 lines.append(f"  IP:           {ip.ip}")
+
         if pod.metadata.owner_references:
             owner = pod.metadata.owner_references[0]
             lines.append(f"Controlled By:  {owner.kind}/{owner.name}")
@@ -1255,7 +1463,7 @@ def get_events(namespace: str = "all", search: str | None = None, type: str = "A
             type_upper = "Normal"
 
         if not events:
-            return f"No {type_upper.lower() if type_upper != 'All' else ''} events in '{namespace}'."
+            return f"`No {type_upper.lower() if type_upper != 'All' else ''} events in '{namespace}'.`"
 
         search_lower = search.lower() if search else None
         matching_events = []
@@ -1268,7 +1476,7 @@ def get_events(namespace: str = "all", search: str | None = None, type: str = "A
                 matching_events.append(e)
 
         if not matching_events:
-            return f"No events matching '{search}' found in namespace '{namespace}'."
+            return f"`No events matching '{search}' found in namespace '{namespace}'.`"
 
         sorted_events = sorted(
             matching_events,
@@ -1276,7 +1484,7 @@ def get_events(namespace: str = "all", search: str | None = None, type: str = "A
             reverse=True
         )
 
-        lines = []
+        lines = ["`"]
         shown = 0
         suppressed = 0
         for e in sorted_events:
@@ -1287,18 +1495,14 @@ def get_events(namespace: str = "all", search: str | None = None, type: str = "A
                 continue
             obj_kind = getattr(e.involved_object, "kind", "Unknown")
             obj_name = getattr(e.involved_object, "name", "Unknown")
-            lines.append(f"### `{e.metadata.namespace}/{obj_kind}/{obj_name}`\n"
-                         f"- Type: {e.type}\n"
-                         f"- Reason: {e.reason}\n"
-                         f"- Message: {e.message}\n"
-                         f"- Count: {e.count or 1}\n"
-                         f"- Last Seen: {e.last_timestamp or e.event_time or 'N/A'}")
+            lines.append(f"{e.last_timestamp or e.event_time or 'N/A'}  "
+                         f"{e.type:<7}  {e.reason:<18}  {namespace}/{obj_kind}/{obj_name}  {e.message} (x{e.count or 1})")
             shown += 1
 
         if suppressed:
             lines.append(f"_({suppressed} noisy/background event(s) suppressed)_")
         if shown == 0:
-            return f"No actionable events in '{namespace}' (all were background noise)."
+            return f"`No actionable events in '{namespace}' (all were background noise).`"
 
         header = ""
         if namespace == "all":
@@ -1306,11 +1510,14 @@ def get_events(namespace: str = "all", search: str | None = None, type: str = "A
         else:
             header = f"_Showing {type_upper.lower() if type_upper != 'All' else 'all'} events in namespace '{namespace}'._\n\n"
 
-        return header + "\n\n".join(lines)
+        lines.append("`")
+        return header + "\n".join(lines)
 
     except ApiException as e:
-        return f"K8s API error: {e.reason}"
-
+        return f"`K8s API error: {e.reason}`"
+    except Exception as e:
+        return f"`Error fetching events: {str(e)}`"
+    
 def get_deployment(namespace: str = "all", search: str = None) -> str:
     try:
         deps = (_apps.list_deployment_for_all_namespaces()

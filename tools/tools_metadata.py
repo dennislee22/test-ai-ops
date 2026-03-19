@@ -1,9 +1,9 @@
 from tools.tools_k8s import (
     get_pod_status, get_pod_logs, describe_pod, get_node_info, get_gpu_info,
-    get_node_labels, get_node_taints, get_events, get_deployment,
-    get_daemonset, get_statefulset, get_job_status, get_hpa_status,
+    get_node_labels, get_node_taints, get_events, get_deployment, describe_sc,
+    get_daemonset, get_statefulset, get_job_status, get_hpa_status, describe_pvc,
     get_pvc_status, get_cluster_version, get_storage_classes, get_endpoints,
-    get_node_capacity, get_persistent_volumes, get_service, get_ingress,
+    get_node_capacity, get_persistent_volumes, get_service, get_ingress, describe_pv,
     get_configmap_list, get_secret_list, get_resource_quotas, get_limit_ranges,
     get_serviceaccounts, get_cluster_role_bindings, get_namespace_status,
     get_pod_tolerations, get_pod_resource_requests, run_cluster_health, get_replicaset,
@@ -49,6 +49,21 @@ K8S_TOOL_METADATA: dict = {
                 "default": None,
                 "description": "Optional namespace to restrict the search. Defaults to all namespaces."
             },
+        },
+    },
+
+    "describe_pv": {
+        "fn":          describe_pv,
+        "description": (
+            "Get detailed info about a PersistentVolume (PV): status, storage class, "
+            "access modes, capacity, reclaim policy, volume source, node affinity, and events. "
+            "Supports partial PV name search and optional full YAML output. "
+            "Use for: 'what is the status of PV X', 'which PVC is bound to PV X', "
+            "or inspecting PV configuration and events."
+        ),
+        "parameters":  {
+            "name":      {"type": "string",  "description": "Partial or full name of the PersistentVolume to describe."},
+            "show_yaml": {"type": "boolean", "default": False, "description": "If true, returns the full PV object as YAML."},
         },
     },
 
@@ -239,6 +254,37 @@ K8S_TOOL_METADATA: dict = {
         ),
         "parameters":  {
             "search": {"type": "string", "description": "Optional keyword to filter taints (e.g., 'cde')."},
+        },
+    },
+
+    "describe_sc": {
+        "fn":          describe_sc,
+        "description": (
+            "Get detailed info about a Kubernetes StorageClass, including provisioner, parameters, "
+            "volume binding mode, and reclaim policy. Supports partial name search if needed. "
+            "Use for: 'what is the configuration of StorageClass X', 'show me details of my storage class', "
+            "or 'is this the default storage class?'."
+        ),
+        "parameters":  {
+            "name":       {"type": "string", "description": "Name of the StorageClass to describe."},
+            "show_yaml":  {"type": "boolean", "default": False,
+                           "description": "If true, output full YAML of the StorageClass instead of human-readable summary."},
+        },
+    },
+
+    "describe_pvc": {
+        "fn":          describe_pvc,
+        "description": (
+            "Get detailed info about a PersistentVolumeClaim (PVC), including status, storage class, bound volume, "
+            "capacity, access modes, labels, annotations, and finalizers. Supports partial name search and namespace selection. "
+            "Use for: 'show me details of PVC X', 'which pod is using PVC X?', or 'what is the storage class and size of PVC X?'."
+        ),
+        "parameters":  {
+            "name":       {"type": "string", "description": "Name of the PVC to describe."},
+            "namespace":  {"type": "string", "default": "all",
+                           "description": "Namespace of the PVC. Defaults to 'all' — only override if a specific namespace is needed."},
+            "show_yaml":  {"type": "boolean", "default": False,
+                           "description": "If true, output full YAML of the PVC instead of human-readable summary."},
         },
     },
 
