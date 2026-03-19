@@ -373,9 +373,22 @@ def build_agent():
         _max_new = max(512, config.MAX_NEW_TOKENS) if has_tool_results else max(1024, config.MAX_NEW_TOKENS // 2)
 
         if tokenizer is None:
+            format_rules = (
+                "\n\nTo call a tool, you MUST use exactly this JSON format. "
+                "Do not write Python code. Use this syntax:\n"
+                "<tool_call>\n"
+                "{\"name\": \"tool_name\", \"arguments\": {\"arg_name\": \"value\"}}\n"
+                "</tool_call>"
+            )
             tools_json = json.dumps(tool_schemas, indent=2)
-            tool_system = f"{prompt}\n\nAvailable tools:\n{tools_json}"
+            #tool_system = f"{prompt}\n\nAvailable tools:\n{tools_json}"
+            #gguf_msgs = [{"role": "system", "content": tool_system}] + chat_msgs[1:]
+            tool_system = f"{prompt}\n\nAvailable tools:\n{tools_json}{format_rules}"
             gguf_msgs = [{"role": "system", "content": tool_system}] + chat_msgs[1:]
+            
+            resp = model.create_chat_completion(messages=gguf_msgs, max_tokens=_max_new, temperature=0.7, top_p=0.8, top_k=20, repeat_penalty=1.05)
+            raw_text = resp["choices"][0]["message"].get("content", "") or ""
+
             resp = model.create_chat_completion(messages=gguf_msgs, max_tokens=_max_new, temperature=0.7, top_p=0.8, top_k=20, repeat_penalty=1.05)
             raw_text = resp["choices"][0]["message"].get("content", "") or ""
         else:
@@ -451,7 +464,8 @@ def build_agent():
             
             parts = []
             for r in results:
-                parts.append(f"**Raw output from tool `{r.name}`**:\n\n{r.content}")
+                #parts.append(f"**Raw output from tool `{r.name}`**:\n\n{r.content}")
+                parts.append(f"**Raw output from tool `{r.name}`**:\n\n```text\n{r.content}\n```")
             direct_answer = "\n\n".join(parts)
 
         return {"messages": results, "tool_calls_made": tools_called, "iteration": state.get("iteration", 0), "status_updates": updates, "direct_answer": direct_answer}

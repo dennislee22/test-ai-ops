@@ -495,7 +495,7 @@ def describe_pv(name: str, show_yaml: bool = False) -> str:
             import yaml
             return f"`{yaml.safe_dump(pv.to_dict(), sort_keys=False)}`"
 
-        lines = ["`"]
+        lines = ["```"]
         lines.append(f"Name:            {pv.metadata.name}")
 
         if pv.metadata.labels:
@@ -547,7 +547,7 @@ def describe_pv(name: str, show_yaml: bool = False) -> str:
         except Exception:
             lines.append("Events:                <error fetching events>")
 
-        lines.append("`")
+        lines.append("```")
         return "\n".join(lines)
 
     except Exception as e:
@@ -574,7 +574,7 @@ def describe_pvc(name: str, namespace: str = "all", show_yaml: bool = False) -> 
             import yaml
             return f"`{yaml.safe_dump(pvc.to_dict(), sort_keys=False)}`"
 
-        lines = ["`"]
+        lines = ["```"]
         lines.append(f"Name:          {pvc.metadata.name}")
         lines.append(f"Namespace:     {pvc.metadata.namespace}")
         lines.append(f"StorageClass:  {pvc.spec.storage_class_name or '<none>'}")
@@ -639,7 +639,7 @@ def describe_pvc(name: str, namespace: str = "all", show_yaml: bool = False) -> 
         except Exception:
             lines.append("Events:        <error fetching events>")
 
-        lines.append("`")
+        lines.append("```")
         return "\n".join(lines)
 
     except Exception as e:
@@ -659,7 +659,7 @@ def describe_sc(name: str, show_yaml: bool = False) -> str:
             import yaml
             return f"`{yaml.safe_dump(sc.to_dict(), sort_keys=False)}`"
 
-        lines = ["`"]
+        lines = ["```"]
         lines.append(f"Name:            {sc.metadata.name}")
         is_default = sc.metadata.annotations.get("storageclass.kubernetes.io/is-default-class", "false") == "true"
         lines.append(f"IsDefaultClass:  {'Yes' if is_default else 'No'}")
@@ -678,7 +678,7 @@ def describe_sc(name: str, show_yaml: bool = False) -> str:
         # StorageClass events are not usually generated, but placeholder for uniformity
         lines.append(f"Events:                <none>")
 
-        lines.append("`")
+        lines.append("```")
         return "\n".join(lines)
 
     except Exception as e:
@@ -711,7 +711,7 @@ def describe_pod(pod_name: str, namespace: str = "all", search: str | None = Non
             import yaml
             return f"`{yaml.safe_dump(pod.to_dict(), sort_keys=False)}`"
 
-        lines = ["`"]
+        lines = ["```"]
         lines.append(f"Name:             {pod.metadata.name}")
         lines.append(f"Namespace:        {pod.metadata.namespace}")
         lines.append(f"Priority:         {pod.spec.priority or 0}")
@@ -803,7 +803,7 @@ def describe_pod(pod_name: str, namespace: str = "all", search: str | None = Non
         except Exception:
             lines.append("Events:          <error fetching events>")
 
-        lines.append("`")
+        lines.append("```")
         return "\n".join(lines)
 
     except Exception as e:
@@ -1484,7 +1484,7 @@ def get_events(namespace: str = "all", search: str | None = None, type: str = "A
             reverse=True
         )
 
-        lines = ["`"]
+        lines = ["```"]
         shown = 0
         suppressed = 0
         for e in sorted_events:
@@ -1510,7 +1510,7 @@ def get_events(namespace: str = "all", search: str | None = None, type: str = "A
         else:
             header = f"_Showing {type_upper.lower() if type_upper != 'All' else 'all'} events in namespace '{namespace}'._\n\n"
 
-        lines.append("`")
+        lines.append("```")
         return header + "\n".join(lines)
 
     except ApiException as e:

@@ -22,21 +22,24 @@ BYPASSABLE_TOOLS = {
     "get_configmap_list",
     "get_pod_images",
     "kubectl_exec",
-    "query_prometheus_metrics",
-    "describe_pod",
-    "get_events",
     "get_pod_logs",
-}
-
-# Note: They must ALSO be listed in BYPASSABLE_TOOLS above.
-UNCONDITIONAL_BYPASS = {
     "describe_pod",
     "describe_pvc",
     "describe_pv",
     "describe_sc",
     "get_events",
     "query_prometheus_metrics",
+}
+
+# Note: They must ALSO be listed in BYPASSABLE_TOOLS above.
+UNCONDITIONAL_BYPASS = {
     "get_pod_logs",
+    "describe_pod",
+    "describe_pvc",
+    "describe_pv",
+    "describe_sc",
+    "get_events",
+    "query_prometheus_metrics",
 }
 
 LIST_INTENTS = (
