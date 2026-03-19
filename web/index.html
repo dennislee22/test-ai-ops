@@ -1240,10 +1240,6 @@ NUM_GPU=0</code></pre>
 
             </div>
             <div id="output-status" class="stab-status"></div>
-            <div class="modal-btns">
-              <button class="modal-btn modal-btn-cancel" id="output-cancel">Close</button>
-              <button class="modal-btn modal-btn-primary" id="output-apply">Apply</button>
-            </div>
           </div>
 
           <!-- ── Tab: Security ── -->
@@ -1721,108 +1717,139 @@ document.querySelectorAll('.info-trigger').forEach(trigger => {
   if(el) el.onclick = () => {};
 });
 
-// ── Security toggle ───────────────────────────────────────────────────────────
-// Persisted in localStorage so it survives page refreshes.
-// Default: OFF (secure — values hidden until user explicitly enables).
-const _DECODE_KEY = 'ecs_decode_secrets';
-let decodeSecrets = localStorage.getItem(_DECODE_KEY) === 'true';  // false unless explicitly saved as true
+// ═══════════════════════════════════════════════════════════════════════════
+// AUTO-SAVE SETTINGS LOGIC
+// ═══════════════════════════════════════════════════════════════════════════
+let decodeSecrets = false; // Will be set from backend
 
-const secretToggle  = document.getElementById('secret-decode-toggle');
-const toggleTrack   = document.getElementById('secret-toggle-track');
-const toggleThumb   = document.getElementById('secret-toggle-thumb');
-const toggleStatus  = document.getElementById('secret-toggle-status');
+const secretToggle = document.getElementById('secret-decode-toggle');
+const toggleTrack  = document.getElementById('secret-toggle-track');
+const toggleThumb  = document.getElementById('secret-toggle-thumb');
+const toggleStatus = document.getElementById('secret-toggle-status');
 
 function applySecretToggleUI(on){
-  toggleTrack.style.background = on ? 'var(--accent)' : 'var(--border)';
-  toggleThumb.style.transform  = on ? 'translateX(20px)' : 'translateX(0)';
-  toggleStatus.innerHTML = on
-    ? '🔓 <span style="color:#f87171">Secret values will be shown in responses</span>'
-    : '🔒 Secret values are hidden (safe mode)';
+  if(toggleTrack) toggleTrack.style.background = on ? 'var(--accent)' : 'var(--border)';
+  if(toggleThumb) toggleThumb.style.transform  = on ? 'translateX(20px)' : 'translateX(0)';
+  if(toggleStatus) {
+    toggleStatus.innerHTML = on
+      ? '🔓 <span style="color:#f87171">Secret values will be shown in responses</span>'
+      : '🔒 Secret values are hidden (safe mode)';
+  }
 }
 
-// Restore saved state on page load
-secretToggle.checked = decodeSecrets;
-applySecretToggleUI(decodeSecrets);
+// Global save function fired on any 'change' event
+async function saveConfig() {
+  const outputStatus = document.getElementById('output-status');
+  if (outputStatus) {
+    outputStatus.style.color = '#60a5fa';
+    outputStatus.textContent = '⏳ Saving…';
+  }
+  
+  const payload = {};
+  
+  const charsSl = document.getElementById('max-chars-slider');
+  if(charsSl) payload.kubectl_max_chars = parseInt(charsSl.value);
+  
+  const tokensSl = document.getElementById('chat-max-tokens-slider');
+  if(tokensSl) payload.max_new_tokens = parseInt(tokensSl.value);
+  
+  const timeoutSl = document.getElementById('llm-timeout-slider');
+  if(timeoutSl) payload.llm_timeout = parseInt(timeoutSl.value);
+  
+  const dlpToggle = document.getElementById('disable-loop-protection-toggle');
+  if(dlpToggle) payload.disable_loop_protection = dlpToggle.checked;
 
-secretToggle.addEventListener('change', () => {
-  decodeSecrets = secretToggle.checked;
-  localStorage.setItem(_DECODE_KEY, decodeSecrets);
-  applySecretToggleUI(decodeSecrets);
-});
+  const secToggle = document.getElementById('secret-decode-toggle');
+  if(secToggle) payload.show_secret_values = secToggle.checked;
+  
+  try {
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    if(res.ok && outputStatus) {
+      outputStatus.style.color = '#22c55e';
+      outputStatus.textContent = '✓ Saved automatically';
+      setTimeout(() => { if(outputStatus.textContent === '✓ Saved automatically') outputStatus.textContent = ''; }, 2500);
+    }
+  } catch(e) {
+    if (outputStatus) {
+      outputStatus.style.color = '#ef4444';
+      outputStatus.textContent = '✗ Save failed';
+    }
+  }
+}
 
-// load current config when Output tab opens
+// Fetch all settings from backend on load
 async function loadOutputConfig(){
   try {
     const r = await fetch('/api/config');
     if(!r.ok) return;
     const d = await r.json();
-    const v = d.kubectl_max_chars || 20000;
-    const sl = document.getElementById('max-chars-slider');
-    const vl = document.getElementById('max-chars-val');
-    if(sl){ sl.value = v; vl.textContent = v.toLocaleString(); }
-    const t = d.max_new_tokens || 4096;
-    const tsl = document.getElementById('max-tokens-slider');
-    const tvl = document.getElementById('max-tokens-val');
-    if(tsl){ tsl.value = t; tvl.textContent = t.toLocaleString(); }
-    const to = d.llm_timeout || 300;
-    const tosl = document.getElementById('llm-timeout-slider');
-    const tovl = document.getElementById('llm-timeout-val');
-    if(tosl){ tosl.value = to; tovl.textContent = to; }
-    const dlpToggle = document.getElementById('disable-loop-protection-toggle');
-    if (dlpToggle) {
-      dlpToggle.checked = d.disable_loop_protection === true;
-      dlpToggle.dispatchEvent(new Event('change'));
+    
+    if(d.kubectl_max_chars) {
+        const sl = document.getElementById('max-chars-slider');
+        const vl = document.getElementById('max-chars-val');
+        if(sl){ sl.value = d.kubectl_max_chars; vl.textContent = d.kubectl_max_chars.toLocaleString(); }
+    }
+    if(d.max_new_tokens) {
+        const tsl = document.getElementById('chat-max-tokens-slider');
+        const tvl = document.getElementById('chat-max-tokens-val');
+        if(tsl){ tsl.value = d.max_new_tokens; tvl.textContent = d.max_new_tokens.toLocaleString(); }
+    }
+    if(d.llm_timeout) {
+        const tosl = document.getElementById('llm-timeout-slider');
+        const tovl = document.getElementById('llm-timeout-val');
+        if(tosl){ tosl.value = d.llm_timeout; tovl.textContent = d.llm_timeout; }
+    }
+    if(d.disable_loop_protection !== undefined) {
+        const dlpToggle = document.getElementById('disable-loop-protection-toggle');
+        if(dlpToggle) {
+            dlpToggle.checked = d.disable_loop_protection;
+            // Update visual state without triggering 'change' loop
+            dlpToggle.nextElementSibling.style.background = dlpToggle.checked ? 'var(--accent)' : 'var(--border)';
+            dlpToggle.nextElementSibling.nextElementSibling.style.transform = dlpToggle.checked ? 'translateX(20px)' : 'translateX(0)';
+        }
+    }
+    if(d.show_secret_values !== undefined) {
+        const secToggle = document.getElementById('secret-decode-toggle');
+        if(secToggle) {
+            secToggle.checked = d.show_secret_values;
+            decodeSecrets = d.show_secret_values;
+            applySecretToggleUI(decodeSecrets);
+        }
     }
   } catch(_){}
 }
 
-// slider live update
-const maxCharsSlider = document.getElementById('max-chars-slider');
-const maxCharsVal    = document.getElementById('max-chars-val');
-if(maxCharsSlider){
-  maxCharsSlider.oninput = () => {
-    maxCharsVal.textContent = parseInt(maxCharsSlider.value).toLocaleString();
-  };
-}
-const maxTokensSlider = document.getElementById('max-tokens-slider');
-const maxTokensVal    = document.getElementById('max-tokens-val');
-if(maxTokensSlider){
-  maxTokensSlider.oninput = () => {
-    maxTokensVal.textContent = parseInt(maxTokensSlider.value).toLocaleString();
-  };
-}
-const llmTimeoutSlider = document.getElementById('llm-timeout-slider');
-const llmTimeoutVal    = document.getElementById('llm-timeout-val');
-if(llmTimeoutSlider){
-  llmTimeoutSlider.oninput = () => {
-    llmTimeoutVal.textContent = parseInt(llmTimeoutSlider.value);
-  };
+// Attach auto-save listeners
+document.getElementById('max-chars-slider')?.addEventListener('change', saveConfig);
+document.getElementById('chat-max-tokens-slider')?.addEventListener('change', saveConfig);
+document.getElementById('llm-timeout-slider')?.addEventListener('change', saveConfig);
+document.getElementById('disable-loop-protection-toggle')?.addEventListener('change', saveConfig);
+
+if (secretToggle) {
+  secretToggle.addEventListener('change', () => {
+    decodeSecrets = secretToggle.checked;
+    applySecretToggleUI(decodeSecrets);
+    saveConfig();
+  });
 }
 
-// ── Tab 3: Output ─────────────────────────────────────────────────────────
-document.getElementById('output-apply').onclick = async () => {
-  const outputStatus = document.getElementById('output-status');
-  const charsVal   = parseInt(document.getElementById('max-chars-slider').value);
-  const tokensVal  = parseInt(document.getElementById('max-tokens-slider').value);
-  const timeoutVal = parseInt(document.getElementById('llm-timeout-slider').value);
-  outputStatus.style.color = '#60a5fa';
-  outputStatus.textContent = '⏳ Applying…';
-  try {
-    const res  = await fetch('/api/config', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({kubectl_max_chars: charsVal, max_new_tokens: tokensVal, llm_timeout: timeoutVal})
-    });
-    const data = await res.json();
-    if(res.ok && data.ok){
-      outputStatus.style.color = '#22c55e';
-      outputStatus.textContent = `✓ Input: ${charsVal.toLocaleString()} chars · Output: ${tokensVal.toLocaleString()} tokens · Timeout: ${timeoutVal}s`;
-    } else {
-      outputStatus.style.color = '#ef4444';
-      outputStatus.textContent = '✗ ' + (data.error || 'Failed to update config.');
-    }
-  } catch(err){ outputStatus.style.color='#ef4444'; outputStatus.textContent='✗ Network error: '+err.message; }
-};
+// Update slider text values while dragging (does not save until mouse is released)
+document.getElementById('max-chars-slider')?.addEventListener('input', (e) => {
+  document.getElementById('max-chars-val').textContent = parseInt(e.target.value).toLocaleString();
+});
+document.getElementById('chat-max-tokens-slider')?.addEventListener('input', (e) => {
+  document.getElementById('chat-max-tokens-val').textContent = parseInt(e.target.value).toLocaleString();
+});
+document.getElementById('llm-timeout-slider')?.addEventListener('input', (e) => {
+  document.getElementById('llm-timeout-val').textContent = parseInt(e.target.value);
+});
+
+// Initial load
+loadOutputConfig();
 
 // ── Tab 1: Cluster ────────────────────────────────────────────────────────
 const kubeTextarea = document.getElementById('kube-textarea');
@@ -2492,7 +2519,7 @@ async function sendMessage(override){
         if (_elapsedSec >= 20 && !isSkipping && _toolChars > 0) {
           hdr.innerHTML = `AGENT STATUS — processing (${_elapsedSec}s)<br>` +
                           `<span style="color: #ef4444; text-transform: none; letter-spacing: normal; font-size: 11px; display: inline-block; margin-top: 5px; line-height: 1.4;">` +
-                          `LLM is taking a longer time to digest <strong>${_toolChars.toLocaleString()}</strong> chars for synthesis. You can opt to "Skip Synthesise" to see the raw output from the tool or please rephrase your ask 🙏.</span>`;
+                          `LLM is taking a longer time to digest <strong>${_toolChars.toLocaleString()}</strong> chars for synthesis. You can opt to "Skip Synthesis" to see the raw output from the tool or please rephrase your ask 🙏.</span>`;
           hdr.style.color = ''; 
         } else {
           hdr.innerHTML = `AGENT STATUS — processing (${_elapsedSec}s)`;

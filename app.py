@@ -26,6 +26,39 @@ if not hasattr(config, "DISABLE_LOOP_PROTECTION"):
     config.DISABLE_LOOP_PROTECTION = False
 
 _HERE = Path(__file__).resolve().parent
+SETTINGS_FILE = _HERE / "settings.json"
+
+def load_settings():
+    if SETTINGS_FILE.exists():
+        try:
+            import tools.tools_k8s as _tk
+            with open(SETTINGS_FILE, "r") as f:
+                s = json.load(f)
+                if "kubectl_max_chars" in s: _tk._KUBECTL_MAX_OUT = s["kubectl_max_chars"]
+                if "max_new_tokens" in s: config.MAX_NEW_TOKENS = s["max_new_tokens"]
+                if "llm_timeout" in s: config.LLM_TIMEOUT = s["llm_timeout"]
+                if "disable_loop_protection" in s: config.DISABLE_LOOP_PROTECTION = s["disable_loop_protection"]
+                if "show_secret_values" in s: config.SHOW_SECRET_VALUES = s["show_secret_values"]
+        except Exception as e:
+            config.logger.error(f"Failed to load settings.json: {e}")
+
+def save_settings():
+    import tools.tools_k8s as _tk
+    s = {
+        "kubectl_max_chars": _tk._KUBECTL_MAX_OUT,
+        "max_new_tokens": getattr(config, "MAX_NEW_TOKENS", 4096),
+        "llm_timeout": getattr(config, "LLM_TIMEOUT", 300),
+        "disable_loop_protection": getattr(config, "DISABLE_LOOP_PROTECTION", False),
+        "show_secret_values": getattr(config, "SHOW_SECRET_VALUES", False)
+    }
+    try:
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(s, f, indent=2)
+    except Exception as e:
+        config.logger.error(f"Failed to save settings.json: {e}")
+
+load_settings()
+
 _decode_secrets_ctx: ContextVar[bool] = ContextVar("decode_secrets", default=False)
 
 _log_ag = config._log_ag
@@ -1148,7 +1181,8 @@ async def api_get_config():
         "kubectl_max_chars": _tk._KUBECTL_MAX_OUT, 
         "max_new_tokens": config.MAX_NEW_TOKENS, 
         "llm_timeout": config.LLM_TIMEOUT,
-        "disable_loop_protection": getattr(config, "DISABLE_LOOP_PROTECTION", False)
+        "disable_loop_protection": getattr(config, "DISABLE_LOOP_PROTECTION", False),
+        "show_secret_values": getattr(config, "SHOW_SECRET_VALUES", False)
     }
 
 @app.post("/api/config")
@@ -1171,8 +1205,14 @@ async def api_set_config(body: dict):
         val = bool(body["disable_loop_protection"])
         config.DISABLE_LOOP_PROTECTION = val
         updated["disable_loop_protection"] = val
+    if "show_secret_values" in body:
+        val = bool(body["show_secret_values"])
+        config.SHOW_SECRET_VALUES = val
+        updated["show_secret_values"] = val
         
-    if not updated: return _JSONResponse(status_code=400, content={"error": "No recognised config keys in body"})
+    if updated:
+        save_settings() # Persist to settings.json
+        
     return {"ok": True, "updated": updated}
 
 @app.get("/")
