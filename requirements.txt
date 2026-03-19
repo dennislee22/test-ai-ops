@@ -22,5 +22,4 @@ psutil>=5.9
 httpx>=0.27
 python-dotenv>=1.0
 nvidia-ml-py>=12.0
-# Optional — required only for GGUF models (CPU quantised inference)
-# llama-cpp-python>=0.2.90
+llama-cpp-python>=0.2.90

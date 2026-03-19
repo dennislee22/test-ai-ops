@@ -69,7 +69,7 @@ LOCAL_NS_MAP = {
     "vault": "vault-system",
     "longhorn": "longhorn-system",
     "cdp": "cdp",
-    "cdp": "cdp-drs",
+    "cdp-drs": "cdp-drs",
     "cdp-keda": "cdp-keda",
     "cdp-obs": "cdp-obs",
     "cdp-services": "cdp-services",
