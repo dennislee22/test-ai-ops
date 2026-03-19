@@ -847,10 +847,10 @@ async def api_index(request: Request):
             {"method": "POST", "path": "/api/tool",           "description": "Call a specific K8s tool directly",
              "curl": f'curl -s -X POST {base}/api/tool -H "Content-Type: application/json" -d \'{{"name":"get_pod_status","args":{{"namespace":"all","show_all":true}}}}\''},
             {"method": "GET",  "path": "/api/tools",          "description": "List all registered tools and their signatures"},
-             "curl": f"curl -s '{base}/api/pods/raw?ns=longhorn-system'"},
             {"method": "GET",  "path": "/api/rag/stats",      "description": "LanceDB document and Excel row statistics"},
             {"method": "GET",  "path": "/api/rag/files",      "description": "List all previously ingested filenames"},
             {"method": "GET",  "path": "/api/rag/query",      "description": "RAG-only query for Knowledge Bot (no LLM, no truncation)"},
+            {"method": "GET",  "path": "/metrics",            "description": "Live CPU / RAM / GPU metrics"},
         ],
     }
 
