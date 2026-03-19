@@ -216,31 +216,35 @@ def _build_llm_gguf():
 def _extract_namespace(text: str) -> str:
     text = text.lower()
     
-    # 0. Interrogative Short-Circuit: "which namespace", "what ns", "how many namespaces"
+    # 0. Explicit cluster-wide / across cluster handling
+    if re.search(r'\b(across\s+cluster|cluster[- ]wide)\b', text):
+        return "all"
+
+    # 1. Interrogative Short-Circuit: "which namespace", "what ns", "how many namespaces"
     if re.search(r'\b(which|what|how many|list all|show all)\b\s+(?:namespaces|namespace|ns)\b', text):
         return "all"
     
-    # 1. Map known hardcoded keywords
+    # 2. Map known hardcoded keywords
     for keyword, actual_ns in LOCAL_NS_MAP.items():
         if re.search(rf'\b{keyword}\b', text):
             return actual_ns
 
-    # 2. Explicit "all namespaces", "all ns", or "-a" flag
+    # 3. Explicit "all namespaces", "all ns", or "-a" flag
     if re.search(r'\ball\b[^a-z0-9-]+(?:namespace|namespaces|namespac|namespcs|ns)\b', text) or "-a" in text.split():
         return "all"
         
-    # 3. Explicit flag "-n xyz" or "--namespace=xyz"
+    # 4. Explicit flag "-n xyz" or "--namespace=xyz"
     match_flag = re.search(r'\b(?:-n|--namespace)[\s=]+([a-z0-9-]+)\b', text)
     if match_flag:
         return match_flag.group(1)
             
-    # 4. Forward shorthand "namespace xyz" (ignores punctuation & typos)
+    # 5. Forward shorthand "namespace xyz" (ignores punctuation & typos)
     for match in re.finditer(r'\b(?:namespace|namespaces|namespac|namespcs|ns)\b[^a-z0-9-]+([a-z0-9-]+)\b', text):
         extracted = match.group(1)
         if extracted not in IGNORE_NS and len(extracted) > 1:
             return extracted
     
-    # 5. Reverse shorthand "xyz namespace"
+    # 6. Reverse shorthand "xyz namespace"
     for match in re.finditer(r'\b([a-z0-9-]+)[^a-z0-9-]+\b(?:namespace|namespaces|namespac|namespcs|ns)\b', text):
         extracted = match.group(1)
         if extracted not in IGNORE_NS and len(extracted) > 1:
