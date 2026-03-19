@@ -266,9 +266,9 @@ def build_agent():
                 "Present the metrics exactly as returned. "
                 "List each series with its last value. Do not round or omit any series."
             ),
-            "kubectl_exec": (
-                "Reproduce the command output VERBATIM. "
-                "Do NOT reformat, summarise, or omit any rows."
+            "get_gpu_info": (
+                "Available is not equivalent to being used or in use."
+                "If the table does not specify which pod is attached to the GPU, it means the GPU is available to be used, it is not currently in use"
             ),
             "get_namespace_resource_summary": (
                 "ALWAYS calculate and lead with the total figures at the very top of your answer: "
@@ -293,6 +293,10 @@ def build_agent():
                 "Fits on node: FALSE"
                 "IF the user is just asking a general question about capacity (e.g., how much capacity is available):"
                 "Do NOT use the boolean format. Just provide a helpful summary of the current capacity based on the table."
+            ),
+            "kubectl_exec": (
+                "Reproduce the command output VERBATIM. "
+                "Do NOT reformat, summarise, or omit any rows."
             ),
         }
 
@@ -323,7 +327,9 @@ def build_agent():
                 "EVALUATE the tool results above. Do they contain the correct data to answer the user's question?\n"
                 "- If the data is correct/sufficient: Write the final plain-text answer right now. DO NOT start your response with 'YES' or any preamble. Answer the user directly.\n"
                 "- If the data is missing/incorrect: Output a new <tool_call> to try a different tool.\n"
-                "CRITICAL: NEVER call a tool that you have already used. If you have already used the necessary tools, you MUST synthesize the final answer immediately."
+                "CRITICAL GUARDRAILS:\n"
+                "1. If a tool result field is empty, 'None', or '-', it means NO data exists for that specific attribute. Do NOT assume the tool failed or that more data exists elsewhere.\n"
+                "2. NEVER call a tool that you have already used in this conversation. If you have already used the necessary tools, you MUST synthesize the final answer immediately using the data you have, even if some fields are empty."
             )
 
         return [HumanMessage(content=_ns_prefix + synthesis_prompt)]

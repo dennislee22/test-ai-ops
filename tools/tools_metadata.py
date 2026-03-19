@@ -5,7 +5,7 @@ from tools.tools_k8s import (
     get_pvc_status, get_cluster_version, get_storage_classes, get_endpoints,
     get_node_capacity, get_persistent_volumes, get_service, get_ingress,
     get_configmap_list, get_secret_list, get_resource_quotas, get_limit_ranges,
-    get_service_accounts, get_cluster_role_bindings, get_namespace_status,
+    get_serviceaccounts, get_cluster_role_bindings, get_namespace_status,
     get_pod_tolerations, get_pod_resource_requests, run_cluster_health, get_replicaset,
     get_namespace_resource_summary, get_pod_images, get_unhealthy_pods_detail,
     get_coredns_health, get_pv_usage, find_resource, get_pod_containers_resources,
@@ -242,13 +242,18 @@ K8S_TOOL_METADATA: dict = {
     "get_events": {
         "fn":          get_events,
         "description": (
-            "Fetch recent K8s events. Use for diagnosing issues, errors, or warnings. "
-            "warning_only=true (default) returns only Warning events. "
-            "Set warning_only=false to include Normal events too."
+            "Fetch recent Kubernetes events. Use for diagnosing issues, errors, or warnings. "
+            "Supports searching by namespace, involved object, or message content (partial matches). "
+            "warning_only=true (default) returns only Warning events; "
+            "set warning_only=false to include Normal events."
         ),
         "parameters":  {
-            "namespace":    {"type": "string",  "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "warning_only": {"type": "boolean", "default": True, "description": "true = Warning events only; false = all events including Normal"},
+            "namespace":    {"type": "string",  "default": "all",
+                             "description": "Namespace to query. Defaults to 'all' namespaces — override only when explicitly specified."},
+            "search":       {"type": "string",  "default": None,
+                             "description": "Optional search term to filter events by pod, namespace, object, or message."},
+            "warning_only": {"type": "boolean", "default": True,
+                             "description": "true = Warning events only; false = include Normal events as well."},
         },
     },
 
@@ -483,12 +488,18 @@ K8S_TOOL_METADATA: dict = {
         "fn":          get_configmap_list,
         "description": (
             "List ConfigMaps in a namespace — useful for checking configuration drift. "
-            "Use filter_keys to search for configmaps containing specific key names "
-            "(e.g. filter_keys=['username','password'] to find credential configmaps)."
+            "Supports searching by ConfigMap name or namespace. "
+            "Use filter_keys to search for ConfigMaps containing specific key names "
+            "(e.g., filter_keys=['username','password'] to find credential ConfigMaps). "
+            "Returns a Markdown table with namespace, ConfigMap name, keys, and type (cert or regular)."
         ),
         "parameters":  {
-            "namespace":   {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "filter_keys": {"type": "array",  "default": None, "description": "Optional list of key name substrings to filter by."},
+            "namespace":   {"type": "string", "default": "all",
+                            "description": "Namespace to query. Defaults to 'all' namespaces — only override when explicitly specified."},
+            "search":      {"type": "string", "default": None,
+                            "description": "Optional search term to filter ConfigMaps by name or namespace (partial matches allowed)."},
+            "filter_keys": {"type": "array",  "default": None,
+                            "description": "Optional list of key name substrings to filter by."},
         },
     },
     
@@ -516,21 +527,74 @@ K8S_TOOL_METADATA: dict = {
     
     "get_resource_quotas": {
         "fn":          get_resource_quotas,
-        "description": "Check ResourceQuotas and current usage — useful when pods fail to schedule.",
-        "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
+        "description": (
+            "Check Kubernetes ResourceQuotas and current usage per namespace. "
+            "Supports searching by quota name or namespace using partial matches. "
+            "If no matches are found, automatically falls back to all namespaces. "
+            "Returns a Markdown table showing each resource (e.g. CPU, memory, pods) "
+            "with USED vs HARD limits. "
+            "Use this for: 'resource quotas in namespace X', 'why pod cannot schedule', "
+            "'quota usage for cpu/memory', or 'find quota Y'."
+        ),
+        "parameters":  {
+            "namespace": {
+                "type": "string",
+                "default": "all",
+                "description": "Namespace to query. Defaults to 'all' namespaces — override only when explicitly specified."
+            },
+            "search": {
+                "type": "string",
+                "default": None,
+                "description": "Optional search term to filter quotas by name or namespace (partial matches allowed)."
+            },
+        },
     },
     
     "get_limit_ranges": {
         "fn":          get_limit_ranges,
-        "description": "List LimitRanges that enforce default CPU/memory constraints per namespace.",
-        "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
+        "description": (
+            "List Kubernetes LimitRanges that enforce CPU and memory constraints per namespace. "
+            "Supports searching by LimitRange name or namespace using partial matches. "
+            "If no matches are found, automatically falls back to all namespaces. "
+            "Returns a Markdown table with CPU and memory max, min, and default values per LimitRange. "
+            "Use this for: 'limit ranges in namespace X', 'cpu/memory limits per namespace', "
+            "'default resource limits', or 'find limitrange Y'."
+        ),
+        "parameters":  {
+            "namespace": {
+                "type": "string",
+                "default": "all",
+                "description": "Namespace to query. Defaults to 'all' namespaces — override only when explicitly specified."
+            },
+            "search": {
+                "type": "string",
+                "default": None,
+                "description": "Optional search term to filter LimitRanges by name or namespace (partial matches allowed)."
+            },
+        },
     },
 
-    "get_service_accounts": {
-        "fn":          get_service_accounts,
-        "description": "List Kubernetes ServiceAccounts, optionally filtered by namespace. Shows all namespaces if none specified, and always includes default ServiceAccounts. Falls back to all namespaces if the specified namespace is empty or does not exist.",
+    "get_servicesaccounts": {
+        "fn":          get_serviceaccounts,
+        "description": (
+            "List Kubernetes ServiceAccounts across namespaces with their attached Roles and ClusterRoles. "
+            "Supports searching by ServiceAccount name or namespace using partial matches. "
+            "If no matches are found, automatically falls back to listing all ServiceAccounts. "
+            "Returns a Markdown table showing namespace, ServiceAccount name, RoleBindings, and ClusterRoleBindings. "
+            "Use this for: 'list serviceaccounts', 'serviceaccounts in namespace X', "
+            "'which roles are attached to serviceaccount Y', or 'find serviceaccount Z'."
+        ),
         "parameters":  {
-            "namespace": {"type": "string", "default": None, "description": "Optional namespace to filter ServiceAccounts. Defaults to all namespaces — if the namespace is empty or missing, shows all ServiceAccounts in other namespaces."},
+            "namespace": {
+                "type": "string",
+                "default": "all",
+                "description": "Namespace to query. Defaults to 'all' namespaces — override only when explicitly specified."
+            },
+            "search": {
+                "type": "string",
+                "default": None,
+                "description": "Optional search term to filter ServiceAccounts by name or namespace (partial matches allowed)."
+            },
         },
     },
     
@@ -750,19 +814,6 @@ K8S_TOOL_METADATA: dict = {
         },
     },
 
-   # "get_node_resource_requests": {
-   #     "fn":          get_node_resource_requests,
-   #     "description": (
-   #         "Aggregate CPU and memory REQUESTS and LIMITS per node. "
-   #         "Shows scheduling/allocation data — what pods have reserved on each node — NOT real-time usage. "
-   #         "Use for questions like: 'what is requested per node', 'how much CPU/memory is allocated per node', "
-   #         "'which node is most heavily scheduled', 'node capacity vs requests', 'node pressure', "
-   #         "'how many pods per node', or 'node resource utilisation'. "
-   #         "Do NOT use this tool for actual CPU/memory consumption, load, trends, or node health. "
-   #     ),
-   #     "parameters": {},
-    #},
-
     "query_prometheus_metrics": {
         "fn":          query_prometheus_metrics,
         "description": (
@@ -816,58 +867,6 @@ K8S_TOOL_METADATA: dict = {
                     "Leave EMPTY (do not pass anything) when the question is about all namespaces, "
                     "all nodes, or does not mention a specific namespace. "
                     "NEVER pass 'all', 'any', 'cluster', or similar — use empty string instead."
-                ),
-            },
-        },
-    },
-
-    "kubectl_exec": {
-        "fn":          kubectl_exec,
-        "description": (
-            "Execute a read-only kubectl command against the cluster. Use this as the general-purpose "
-            "tool for any cluster state query not covered by a more specific tool. "
-            "IMPORTANT: Commands run via the Kubernetes API — NOT a shell. "
-            "Pipes (|), grep, awk, &&, || are NOT supported. Use -n <namespace> or -A for all namespaces. "
-            "Use for the following (with example commands): "
-            "• Node health/status/conditions: 'kubectl get nodes -o wide' or 'kubectl describe node <name>' "
-            "• Pod location ('where is X?', 'which node is X on?', 'find X pod'): "
-            "  ALWAYS use 'kubectl get pod -A -o wide' — never assume the namespace. "
-            "  The -A flag searches all namespaces so grafana/vault/etc will be found regardless of namespace. "
-            "• Deployments/replicas: 'kubectl get deployments -n <ns>' "
-            "• ReplicaSets: 'kubectl get replicasets -n <ns>' "
-            "• DaemonSets: 'kubectl get daemonsets -A' "
-            "• StatefulSets: 'kubectl get statefulsets -A' "
-            "• Jobs/CronJobs: 'kubectl get jobs -A' or 'kubectl get cronjobs -A' "
-            "• HPA/autoscaling: 'kubectl get hpa -A' "
-            "• Services/endpoints: 'kubectl get services -A' or 'kubectl get endpoints -n <ns>' "
-            "• Ingress: 'kubectl get ingress -A' "
-            "• ConfigMaps: 'kubectl get configmaps -n <ns>' "
-            "• Secrets (names only, not values): 'kubectl get secrets -n <ns>' "
-            "• RBAC: 'kubectl get clusterrolebindings' or 'kubectl get rolebindings -n <ns>' "
-            "• ServiceAccounts: 'kubectl get serviceaccounts -n <ns>' "
-            "• Namespaces: 'kubectl get namespaces' "
-            "• Resource quotas: 'kubectl get resourcequota -n <ns>' "
-            "• LimitRanges: 'kubectl get limitrange -n <ns>' "
-            "• PVCs (list/status): 'kubectl get pvc -A' "
-            "• PVs: 'kubectl get pv' "
-            "• Events: 'kubectl get events -n <ns> --sort-by=.lastTimestamp' "
-            "• GPU info: 'kubectl describe nodes | grep -A5 nvidia' — NOTE: grep not supported, "
-            "  use 'kubectl describe node <nodename>' instead "
-            "• Cluster version: 'kubectl version' "
-            "• API resources: 'kubectl api-resources' "
-            "Resolve namespace aliases before calling: "
-            "vault → vault-system, longhorn → longhorn-system, rancher/cattle → cattle-system, "
-            "cert-manager/cert → cert-manager, coredns/dns → kube-system, "
-            "prometheus/grafana/alertmanager/monitoring → monitoring."
-        ),
-        "parameters": {
-            "command": {
-                "type": "string",
-                "description": (
-                    "Full kubectl command. No shell pipes or redirects. "
-                    "Examples: 'kubectl get nodes -o wide', 'kubectl get pod -A -o wide', "
-                    "'kubectl describe node ecs-w-01.dlee155.cldr.example', "
-                    "'kubectl get deployments -n cdp', 'kubectl get events -n vault-system --sort-by=.lastTimestamp'"
                 ),
             },
         },
@@ -945,6 +944,58 @@ K8S_TOOL_METADATA: dict = {
                     "If the tool errors with 'available containers: ...', set this to the DB container name."
                 )
             }
+        },
+    },
+    
+    "kubectl_exec": {
+        "fn":          kubectl_exec,
+        "description": (
+            "Execute a read-only kubectl command against the cluster. Use this as the general-purpose "
+            "tool for any cluster state query not covered by a more specific tool. "
+            "IMPORTANT: Commands run via the Kubernetes API — NOT a shell. "
+            "Pipes (|), grep, awk, &&, || are NOT supported. Use -n <namespace> or -A for all namespaces. "
+            "Use for the following (with example commands): "
+            "• Node health/status/conditions: 'kubectl get nodes -o wide' or 'kubectl describe node <name>' "
+            "• Pod location ('where is X?', 'which node is X on?', 'find X pod'): "
+            "  ALWAYS use 'kubectl get pod -A -o wide' — never assume the namespace. "
+            "  The -A flag searches all namespaces so grafana/vault/etc will be found regardless of namespace. "
+            "• Deployments/replicas: 'kubectl get deployments -n <ns>' "
+            "• ReplicaSets: 'kubectl get replicasets -n <ns>' "
+            "• DaemonSets: 'kubectl get daemonsets -A' "
+            "• StatefulSets: 'kubectl get statefulsets -A' "
+            "• Jobs/CronJobs: 'kubectl get jobs -A' or 'kubectl get cronjobs -A' "
+            "• HPA/autoscaling: 'kubectl get hpa -A' "
+            "• Services/endpoints: 'kubectl get services -A' or 'kubectl get endpoints -n <ns>' "
+            "• Ingress: 'kubectl get ingress -A' "
+            "• ConfigMaps: 'kubectl get configmaps -n <ns>' "
+            "• Secrets (names only, not values): 'kubectl get secrets -n <ns>' "
+            "• RBAC: 'kubectl get clusterrolebindings' or 'kubectl get rolebindings -n <ns>' "
+            "• ServiceAccounts: 'kubectl get serviceaccounts -n <ns>' "
+            "• Namespaces: 'kubectl get namespaces' "
+            "• Resource quotas: 'kubectl get resourcequota -n <ns>' "
+            "• LimitRanges: 'kubectl get limitrange -n <ns>' "
+            "• PVCs (list/status): 'kubectl get pvc -A' "
+            "• PVs: 'kubectl get pv' "
+            "• Events: 'kubectl get events -n <ns> --sort-by=.lastTimestamp' "
+            "• GPU info: 'kubectl describe nodes | grep -A5 nvidia' — NOTE: grep not supported, "
+            "  use 'kubectl describe node <nodename>' instead "
+            "• Cluster version: 'kubectl version' "
+            "• API resources: 'kubectl api-resources' "
+            "Resolve namespace aliases before calling: "
+            "vault → vault-system, longhorn → longhorn-system, rancher/cattle → cattle-system, "
+            "cert-manager/cert → cert-manager, coredns/dns → kube-system, "
+            "prometheus/grafana/alertmanager/monitoring → monitoring."
+        ),
+        "parameters": {
+            "command": {
+                "type": "string",
+                "description": (
+                    "Full kubectl command. No shell pipes or redirects. "
+                    "Examples: 'kubectl get nodes -o wide', 'kubectl get pod -A -o wide', "
+                    "'kubectl describe node ecs-w-01.dlee155.cldr.example', "
+                    "'kubectl get deployments -n cdp', 'kubectl get events -n vault-system --sort-by=.lastTimestamp'"
+                ),
+            },
         },
     },
 }

@@ -4,7 +4,8 @@ import logging
 _log = logging.getLogger("agent.bypass")
 
 NEVER_BYPASS = {
-    #"get_deployment_status",
+    "get_secret_list",
+    "exec_db_query",
 }
 
 BYPASSABLE_TOOLS = {
@@ -18,7 +19,6 @@ BYPASSABLE_TOOLS = {
     "get_pvc_status",
     "get_service",
     "get_ingress",
-    "get_secrets",
     "get_configmap_list",
     "get_pod_images",
     "kubectl_exec",
@@ -27,15 +27,23 @@ BYPASSABLE_TOOLS = {
     "get_pod_logs",
 }
 
+# Note: They must ALSO be listed in BYPASSABLE_TOOLS above.
+UNCONDITIONAL_BYPASS = {
+    "describe_pod",
+    "query_prometheus_metrics",
+    "get_pod_logs",
+}
+
 LIST_INTENTS = (
     r"\blist all\b", r"\bshow all\b", r"\bget all\b", r"\bdisplay all\b",
     r"\ball pods\b", r"\ball services\b", r"\ball svc\b", r"\ball pv\b", r"\ball persistent volume\b",
+    r"\ball log\b", r"\ball events\b",
     r"\blist entire\b", r"\bshow entire\b", r"\bget entire\b", r"\bdisplay entire\b",
 )
 
 ALWAYS_SYNTHESISE = (
     r"\bwhy\b", r"\bhow\b", r"\bwhen\b", r"\bwhere\b", r"\bwho\b",
-    r"\bhealth\b", r"\bhealthy\b", r"\bok\b", r"\bokay\b",
+    r"\bok\b", r"\bokay\b",
     r"\bissue\b", r"\bproblem\b", r"\berror\b", r"\bwarning\b",
     r"\bfail", r"\bbroken\b", r"\bdown\b", r"\bcrash",
     r"\bcondition\b", r"\bpending\b", r"\bcrashloop\b", 
@@ -44,6 +52,7 @@ ALWAYS_SYNTHESISE = (
     r"\bmost\b", r"\bleast\b", r"\bcompare\b", r"\brank\b",
     r"\bhow many\b", r"\bcount\b", r"\btop\b",
 )
+
 def should_bypass_llm(tool_name: str, args: dict,
                       output: str, user_q: str,
                       req_id: str = "") -> bool:
@@ -65,8 +74,6 @@ def should_bypass_llm(tool_name: str, args: dict,
     lq = user_q.lower()
 
     _SUMMARY_PATTERNS = (
-        "all pods are healthy",
-        "all pods are in running",
         "no unhealthy pods",
         "no pods found",
     )
@@ -74,12 +81,9 @@ def should_bypass_llm(tool_name: str, args: dict,
         _log.info(f"{tag}[bypass] PASS — {tool_name!r} returned self-contained summary")
         return True
 
-    if tool_name == "get_pv_usage":
-        _log.info(f"{tag}[bypass] PASS — {tool_name!r} is structured report (unconditional)")
-        return True
-
-    if tool_name in ("query_prometheus_metrics", "get_pod_logs"):
-        _log.info(f"{tag}[bypass] PASS — {tool_name!r} is structured report/logs (unconditional)")
+    # Check against the new upfront set
+    if tool_name in UNCONDITIONAL_BYPASS:
+        _log.info(f"{tag}[bypass] PASS — {tool_name!r} is in UNCONDITIONAL_BYPASS")
         return True
     
     matched_synth = next((p for p in ALWAYS_SYNTHESISE if re.search(p, lq)), None)

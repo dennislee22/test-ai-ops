@@ -479,13 +479,13 @@ def get_pod_logs(namespace: str = "all", search: str | None = None,
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def describe_pod(pod_name: str, namespace: str = "all", search: str | None = None) -> str:
-    if "/" in pod_name:
-        parts = pod_name.split("/", 1)
-        if len(parts) == 2:
-            pod_name = parts[1]
-
+def describe_pod(pod_name: str = "", namespace: str = "all", search: str | None = None, yaml: bool = False) -> str:
     try:
+        if "/" in pod_name:
+            parts = pod_name.split("/", 1)
+            if len(parts) == 2:
+                pod_name = parts[1]
+
         pods = (_core.list_pod_for_all_namespaces().items
                 if namespace == "all"
                 else _core.list_namespaced_pod(namespace=namespace).items)
@@ -499,42 +499,83 @@ def describe_pod(pod_name: str, namespace: str = "all", search: str | None = Non
             for pod in pods:
                 if search_lower in pod.metadata.name.lower() or (namespace != "all" and search_lower in pod.metadata.namespace.lower()):
                     matching_pods.append(pod)
-        else:
+        elif pod_name:
             matching_pods = [p for p in pods if p.metadata.name == pod_name]
+        else:
+            matching_pods = pods
 
         if not matching_pods:
-            return f"No pods matching '{pod_name if not search else search}' found in namespace '{namespace}'."
+            return f"No pods matching '{pod_name if pod_name else search}' found in namespace '{namespace}'."
 
         lines = []
         for pod in sorted(matching_pods, key=lambda p: (p.metadata.namespace, p.metadata.name)):
-            lines.append(f"## Pod `{pod.metadata.name}` in namespace `{pod.metadata.namespace}`")
-            lines.append(f"Phase: `{pod.status.phase}`")
-            lines.append("**Conditions:**")
-            for c in (pod.status.conditions or []):
-                lines.append(f"  - {c.type}: {c.status}" + (f" — {c.message}" if c.message else ""))
+            ns = pod.metadata.namespace
+            name = pod.metadata.name
+            lines.append(f"Name: {name}")
+            lines.append(f"Namespace: {ns}")
+            lines.append(f"Node: {pod.spec.node_name or 'N/A'}")
+            lines.append(f"Start Time: {pod.status.start_time or 'N/A'}")
+            lines.append(f"Labels: {pod.metadata.labels or {}}")
+            lines.append(f"Annotations: {pod.metadata.annotations or {}}")
+            lines.append(f"Status: {pod.status.phase}")
+            lines.append("Conditions:")
+            for cond in pod.status.conditions or []:
+                lines.append(f"  {cond.type}: {cond.status}" + (f" — {cond.message}" if cond.message else ""))
 
-            lines.append("**Containers:**")
-            for cs in (pod.status.container_statuses or []):
-                sk = list(cs.state.to_dict().keys())[0] if cs.state else "unknown"
-                lines.append(f"  - {cs.name}: ready={cs.ready}, restarts={cs.restart_count}, state={sk}")
+            lines.append("Containers:")
+            for cs, c in zip(pod.status.container_statuses or [], pod.spec.containers or []):
+                state = "unknown"
+                if cs.state:
+                    state = list(cs.state.to_dict().keys())[0]
+                lines.append(f"  - {c.name}: ready={cs.ready if cs else 'N/A'}, restarts={cs.restart_count if cs else 'N/A'}, state={state}")
                 if cs.last_state and cs.last_state.terminated:
-                    lt = cs.last_state.terminated
-                    lines.append(f"    Last terminated: exit={lt.exit_code}, reason={lt.reason}")
+                    t = cs.last_state.terminated
+                    lines.append(f"    Last terminated: exit={t.exit_code}, reason={t.reason}")
+                req = c.resources.requests or {}
+                lim = c.resources.limits or {}
+                lines.append(f"    Resources: req=cpu:{req.get('cpu','none')}/mem:{req.get('memory','none')} lim=cpu:{lim.get('cpu','none')}/mem:{lim.get('memory','none')}")
 
-            for c in pod.spec.containers or []:
-                if c.resources:
-                    req = c.resources.requests or {}
-                    lim = c.resources.limits   or {}
-                    lines.append(
-                        f"  - {c.name} resources: req=cpu:{req.get('cpu','none')}/mem:{req.get('memory','none')} "
-                        f"lim=cpu:{lim.get('cpu','none')}/mem:{lim.get('memory','none')}")
+            lines.append("Volumes:")
+            for v in pod.spec.volumes or []:
+                vol_type = "Unknown"
+                vol_name = v.name
+                detail = ""
+                if v.persistent_volume_claim:
+                    vol_type = "PVC"
+                    detail = v.persistent_volume_claim.claim_name
+                elif v.config_map:
+                    vol_type = "ConfigMap"
+                    detail = v.config_map.name
+                elif v.secret:
+                    vol_type = "Secret"
+                    detail = v.secret.secret_name
+                lines.append(f"  - {vol_name}: type={vol_type} name={detail}")
 
-            lines.append("")  # newline between pods
+            # Add pod events
+            try:
+                ev = (_core.list_event_for_all_namespaces(field_selector=f"involvedObject.name={name},involvedObject.namespace={ns}")
+                      if namespace == "all"
+                      else _core.list_namespaced_event(namespace=ns,
+                                                       field_selector=f"involvedObject.name={name}"))
+                if ev.items:
+                    lines.append("Events:")
+                    sev = sorted(ev.items, key=lambda e: e.last_timestamp or e.event_time or "", reverse=True)
+                    for e in sev:
+                        lines.append(f"  [{e.type}] {e.reason} — {e.message} (x{e.count or 1})")
+            except Exception:
+                lines.append("Events: Unable to fetch events.")
+
+            if yaml:
+                import yaml as _yaml
+                pod_yaml = _core.read_namespaced_pod(name=name, namespace=ns).to_dict()
+                lines.append("\nYAML:\n" + _yaml.safe_dump(pod_yaml, sort_keys=False))
+
+            lines.append("-" * 80)
 
         return "\n".join(lines)
 
     except ApiException as e:
-        return f"Pod '{pod_name}' not found." if e.status == 404 else f"K8s error: {e.reason}"
+        return f"K8s API error: {e.reason}"
 
 def get_unhealthy_pods_detail(namespace: str = "all") -> str:
     import datetime as _dt
@@ -661,7 +702,6 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
         scope = f"namespace '{namespace}'" if namespace != "all" else "all namespaces"
         return f"No unhealthy pods found in {scope}."
 
-    # --- Markdown Summary Table ---
     out = ["### Unhealthy Pods Summary", ""]
     out.append("| Namespace | Pod | Phase | Ready | Restarts |")
     out.append("|---|---|---|---|---|")
@@ -968,94 +1008,6 @@ def get_node_taints(search: str = None) -> str:
 
     except ApiException as e:
         return f"K8s API error: {e.reason}"
-    
-def get_node_resource_requests() -> str:
-    """Aggregate CPU/memory requests and limits per node from all running pods, in a Markdown table (RAM in GiB)."""
-    def _parse_cpu(s: str) -> float:
-        """Return millicores as float."""
-        s = s.strip()
-        if s.endswith("m"):
-            return float(s[:-1])
-        try:
-            return float(s) * 1000
-        except ValueError:
-            return 0.0
-
-    def _parse_mem(s: str) -> float:
-        """Return GiB as float."""
-        s = s.strip()
-        for suffix, factor in [("Ti", 1024), ("Gi", 1), ("Mi", 1/1024),
-                               ("Ki", 1/(1024*1024)), ("T", 1000), ("G", 1), ("M", 1/1024), ("K", 1/(1024*1024))]:
-            if s.endswith(suffix):
-                try:
-                    return float(s[:-len(suffix)]) * factor
-                except ValueError:
-                    return 0.0
-        try:
-            return float(s) / (1024**3)  # fallback: bytes → GiB
-        except ValueError:
-            return 0.0
-
-    try:
-        nodes = _core.list_node()
-        all_pods = _core.list_pod_for_all_namespaces(field_selector="status.phase=Running")
-    except ApiException as e:
-        return f"K8s API error: {e.reason}"
-
-    node_alloc = {}
-    for node in nodes.items:
-        alloc = node.status.allocatable or {}
-        node_alloc[node.metadata.name] = {
-            "cpu_alloc_m":  _parse_cpu(alloc.get("cpu", "0")),
-            "mem_alloc_gi": _parse_mem(alloc.get("memory", "0")),
-            "cpu_req_m": 0.0, "cpu_lim_m": 0.0,
-            "mem_req_gi": 0.0, "mem_lim_gi": 0.0,
-            "pod_count": 0,
-        }
-
-    for pod in all_pods.items:
-        node_name = pod.spec.node_name or ""
-        if node_name not in node_alloc:
-            continue
-        node_alloc[node_name]["pod_count"] += 1
-        for c in (pod.spec.containers or []):
-            res = c.resources
-            if not res:
-                continue
-            req = res.requests or {}
-            lim = res.limits   or {}
-            node_alloc[node_name]["cpu_req_m"]  += _parse_cpu(req.get("cpu", "0"))
-            node_alloc[node_name]["cpu_lim_m"]  += _parse_cpu(lim.get("cpu", "0"))
-            node_alloc[node_name]["mem_req_gi"] += _parse_mem(req.get("memory", "0"))
-            node_alloc[node_name]["mem_lim_gi"] += _parse_mem(lim.get("memory", "0"))
-
-    # Build Markdown table
-    lines = ["### Node Resource Requests and Limits", ""]
-    lines.append("| Node | Pods | CPU Requests | CPU Limits | CPU Alloc | CPU Free | MEM Requests | MEM Limits | MEM Alloc | MEM Free |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|")
-
-    for node in nodes.items:
-        name = node.metadata.name
-        d = node_alloc.get(name)
-        if not d:
-            continue
-        cpu_a  = d["cpu_alloc_m"]
-        mem_a  = d["mem_alloc_gi"]
-        cpu_free  = max(0, cpu_a - d["cpu_req_m"])
-        mem_free  = max(0, mem_a - d["mem_req_gi"])
-        cpu_rp = round(d["cpu_req_m"]  / cpu_a  * 100, 1) if cpu_a  else 0
-        cpu_lp = round(d["cpu_lim_m"]  / cpu_a  * 100, 1) if cpu_a  else 0
-        cpu_fp = round(cpu_free / cpu_a * 100, 1) if cpu_a else 0
-        mem_rp = round(d["mem_req_gi"] / mem_a  * 100, 1) if mem_a  else 0
-        mem_lp = round(d["mem_lim_gi"] / mem_a  * 100, 1) if mem_a  else 0
-        mem_fp = round(mem_free / mem_a * 100, 1) if mem_a else 0
-
-        lines.append(
-            f"| {name} | {d['pod_count']} | {d['cpu_req_m']:.0f}m ({cpu_rp}%) | {d['cpu_lim_m']:.0f}m ({cpu_lp}%) | {cpu_a:.0f}m | {cpu_free:.0f}m ({cpu_fp}%) "
-            f"| {d['mem_req_gi']:.2f}Gi ({mem_rp}%) | {d['mem_lim_gi']:.2f}Gi ({mem_lp}%) | {mem_a:.2f}Gi | {mem_free:.2f}Gi ({mem_fp}%) |"
-        )
-
-    return "\n".join(lines)
 
 def get_node_info(node_name: str = None) -> str:
     """Show nodes with roles, readiness, CPU, memory (Gi), GPU."""
@@ -1261,39 +1213,64 @@ def _is_noisy_event(message: str) -> bool:
     msg_lower = (message or "").lower()
     return any(pat in msg_lower for pat in _EVENT_NOISE_PATTERNS)
 
-def get_events(namespace: str = "all", warning_only: bool = True) -> str:
+def get_events(namespace: str = "all", search: str | None = None, warning_only: bool = True) -> str:
     try:
         fs = "type=Warning" if warning_only else ""
-        ev = (_core.list_event_for_all_namespaces(field_selector=fs, limit=500)
-              if namespace == "all"
-              else _core.list_namespaced_event(namespace=namespace,
-                                               field_selector=fs, limit=500))
-        if not ev.items:
+        events = (_core.list_event_for_all_namespaces(field_selector=fs, limit=500).items
+                  if namespace == "all"
+                  else _core.list_namespaced_event(namespace=namespace, field_selector=fs, limit=500).items)
+        if not events:
             return f"No {'warning ' if warning_only else ''}events in '{namespace}'."
 
-        sev = sorted(ev.items,
-                     key=lambda e: e.last_timestamp or e.event_time or "",
-                     reverse=True)
+        matching_events = []
+        search_lower = search.lower() if search else None
+        for e in events:
+            ns_name = e.metadata.namespace
+            obj_name = getattr(e.involved_object, "name", "")
+            if not search_lower or (search_lower in e.message.lower()
+                                    or (search_lower in ns_name.lower())
+                                    or (search_lower in obj_name.lower())):
+                matching_events.append(e)
 
-        lines      = [f"Recent events in '{namespace}':"]
-        shown      = 0
+        if not matching_events:
+            return f"No events matching '{search}' found in namespace '{namespace}'."
+
+        sorted_events = sorted(
+            matching_events,
+            key=lambda e: e.last_timestamp or e.event_time or "",
+            reverse=True
+        )
+
+        lines = []
+        shown = 0
         suppressed = 0
-        for e in sev:
+        for e in sorted_events:
             if shown >= 20:
                 break
             if _is_noisy_event(e.message):
                 suppressed += 1
                 continue
-            lines.append(
-                f"  [{e.type}] {e.involved_object.kind}/{e.involved_object.name}: "
-                f"{e.reason} — {e.message} (x{e.count or 1})")
+            obj_kind = getattr(e.involved_object, "kind", "Unknown")
+            obj_name = getattr(e.involved_object, "name", "Unknown")
+            lines.append(f"### `{ns_name}/{obj_kind}/{obj_name}`\n"
+                         f"- Type: {e.type}\n"
+                         f"- Reason: {e.reason}\n"
+                         f"- Message: {e.message}\n"
+                         f"- Count: {e.count or 1}\n"
+                         f"- Last Seen: {e.last_timestamp or e.event_time or 'N/A'}")
             shown += 1
 
         if suppressed:
-            lines.append(f"  ({suppressed} environment-noise event(s) suppressed)")
+            lines.append(f"_({suppressed} noisy/background event(s) suppressed)_")
         if shown == 0:
             return f"No actionable events in '{namespace}' (all were background noise)."
-        return "\n".join(lines)
+
+        header = ""
+        if namespace == "all":
+            header = "_As no namespace was specified, showing events from all namespaces._\n\n"
+
+        return header + "\n\n".join(lines)
+
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
@@ -2585,7 +2562,6 @@ def get_ingress(namespace: str = "all", name: str = "", port: int = 0) -> str:
         all_ings = _net.list_ingress_for_all_namespaces()
         pool = all_ings.items
 
-        # --- PORT FILTERING (Table Output) ---
         if port:
             pool = [ing for ing in pool if port in _get_ports(ing)]
             if not pool:
@@ -2598,7 +2574,6 @@ def get_ingress(namespace: str = "all", name: str = "", port: int = 0) -> str:
                 out.append(f"| {ing.metadata.namespace} | {ing.metadata.name} | {', '.join(hosts)} | {', '.join(str(p) for p in ports)} |")
             return "\n".join(out)
 
-        # --- SPECIFIC NAME OR HOSTNAME (Detailed Markdown Output) ---
         if name:
             if "." in name:
                 host_lower = name.lower()
@@ -2629,7 +2604,6 @@ def get_ingress(namespace: str = "all", name: str = "", port: int = 0) -> str:
                     return f"Ingress '{name}' not found in any namespace."
                 return "\n\n---\n\n".join(_fmt(ing) for ing in matches)
 
-        # --- LIST ALL OR BY NAMESPACE (Table Output) ---
         if namespace != "all":
             pool = [i for i in pool if i.metadata.namespace == namespace]
             
@@ -2661,45 +2635,69 @@ def get_ingress(namespace: str = "all", name: str = "", port: int = 0) -> str:
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_configmap_list(namespace: str = "all", filter_keys: list = None) -> str:
+def get_configmap_list(namespace: str = "all", search: str | None = None, filter_keys: list = None) -> str:
     _CERT_KEY_HINTS = {"ca.crt", "tls.crt", "tls.key", "ca-bundle", "ca-certificates",
                        "ca.pem", "cert.pem", "certificate", "ssl.crt", "ssl.key"}
     try:
-        cms = _core.list_namespaced_config_map(namespace=namespace)
+        if namespace != "all":
+            try:
+                cm_items = _core.list_namespaced_config_map(namespace=namespace).items
+                if not cm_items:
+                    cm_items = _core.list_config_map_for_all_namespaces().items
+            except Exception:
+                cm_items = _core.list_config_map_for_all_namespaces().items
+        else:
+            cm_items = _core.list_config_map_for_all_namespaces().items
+
+        if not cm_items:
+            return "No ConfigMaps found."
+
         skip = {"kube-root-ca.crt"}
-        items = [cm for cm in cms.items if cm.metadata.name not in skip]
-        if not items:
-            return f"No ConfigMaps in '{namespace}'."
+        cm_items = [cm for cm in cm_items if cm.metadata.name not in skip]
 
-        if filter_keys:
-            _fk_lower = [f.lower() for f in filter_keys]
-            matches = []
-            for cm in items:
-                data = cm.data or {}
-                hit_keys = [k for k in data
-                            if any(f in k.lower() for f in _fk_lower)]
-                if hit_keys:
-                    matches.append((cm.metadata.name, data, hit_keys))
-            if not matches:
-                return (f"No ConfigMaps in '{namespace}' contain keys matching "
-                        f"{filter_keys}.\nNo credentials found in configmaps.")
-            lines = [f"ConfigMaps in '{namespace}' matching keys {filter_keys} "
-                     f"({len(matches)} found):"]
-            for cmname, data, hit_keys in sorted(matches):
-                lines.append(f"  {cmname}:")
-                for k in hit_keys:
-                    lines.append(f"    {k}: {data[k]}")
-            return "\n".join(lines)
+        filtered = []
+        if search:
+            s = search.lower()
+            for cm in cm_items:
+                if s in cm.metadata.name.lower() or s in cm.metadata.namespace.lower():
+                    filtered.append(cm)
+        else:
+            filtered = cm_items
 
-        lines = [f"ConfigMaps in '{namespace}':"]
-        for cm in items:
-            keys = list((cm.data or {}).keys())
+        if search and not filtered:
+            filtered = cm_items
+
+        lines = []
+        lines.append("| NAMESPACE | CONFIGMAP | KEYS | TYPE |")
+        lines.append("|---|---|---|---|")
+
+        for cm in sorted(filtered, key=lambda x: (x.metadata.namespace, x.metadata.name)):
+            ns = cm.metadata.namespace
+            name = cm.metadata.name
+            data = cm.data or {}
+            keys = list(data.keys())
+
+            if filter_keys:
+                fk = [f.lower() for f in filter_keys]
+                keys = [k for k in keys if any(f in k.lower() for f in fk)]
+                if not keys:
+                    continue
+
             cert_keys = [k for k in keys
                          if k in _CERT_KEY_HINTS
                          or any(h in k.lower() for h in ("cert", "tls", "ssl", "ca.", ".crt", ".pem"))]
-            tag = " [cert]" if cert_keys else ""
-            lines.append(f"  {cm.metadata.name}: keys={keys}{tag}")
+
+            tag = "cert" if cert_keys else "-"
+
+            lines.append(
+                f"| `{ns}` | `{name}` | {keys if keys else '-'} | {tag} |"
+            )
+
+        if len(lines) == 2:
+            return "No matching ConfigMaps found."
+
         return "\n".join(lines)
+
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
@@ -2821,66 +2819,166 @@ def get_secret_list(namespace: str = "all", name: str = "", pod_name: str = None
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_resource_quotas(namespace: str = "all") -> str:
+def get_resource_quotas(namespace: str = "all", search: str | None = None) -> str:
     try:
-        quotas = (_core.list_resource_quota_for_all_namespaces()
-                  if namespace == "all"
-                  else _core.list_namespaced_resource_quota(namespace=namespace))
-        if not quotas.items:
-            return f"No ResourceQuotas in '{namespace}'."
-        lines = [f"ResourceQuotas in '{namespace}':"]
-        for q in quotas.items:
+        if namespace != "all":
+            try:
+                q_items = _core.list_namespaced_resource_quota(namespace=namespace).items
+                if not q_items:
+                    q_items = _core.list_resource_quota_for_all_namespaces().items
+            except Exception:
+                q_items = _core.list_resource_quota_for_all_namespaces().items
+        else:
+            q_items = _core.list_resource_quota_for_all_namespaces().items
+
+        if not q_items:
+            return "No ResourceQuotas found."
+
+        filtered = []
+        if search:
+            s = search.lower()
+            for q in q_items:
+                if s in q.metadata.name.lower() or s in q.metadata.namespace.lower():
+                    filtered.append(q)
+        else:
+            filtered = q_items
+
+        if search and not filtered:
+            filtered = q_items
+
+        lines = []
+        lines.append("| NAMESPACE | QUOTA | RESOURCE | USED | HARD |")
+        lines.append("|---|---|---|---|---|")
+
+        for q in sorted(filtered, key=lambda x: (x.metadata.namespace, x.metadata.name)):
+            ns = q.metadata.namespace
+            name = q.metadata.name
             hard = q.status.hard or {}
             used = q.status.used or {}
-            lines.append(f"  {q.metadata.namespace}/{q.metadata.name}:")
-            for resource, limit in hard.items():
-                current = used.get(resource, "0")
-                lines.append(f"    {resource}: {current} / {limit}")
+
+            for res in sorted(hard.keys()):
+                lines.append(
+                    f"| `{ns}` | `{name}` | {res} | {used.get(res, '0')} | {hard.get(res)} |"
+                )
+
         return "\n".join(lines)
+
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_limit_ranges(namespace: str = "all") -> str:
+def get_limit_ranges(namespace: str = "all", search: str | None = None) -> str:
     try:
-        lrs = (_core.list_limit_range_for_all_namespaces()
-               if namespace == "all"
-               else _core.list_namespaced_limit_range(namespace=namespace))
-        if not lrs.items:
-            return f"No LimitRanges in '{namespace}'."
-        lines = [f"LimitRanges in '{namespace}':"]
-        for lr in lrs.items:
-            lines.append(f"  {lr.metadata.namespace}/{lr.metadata.name}:")
+        if namespace != "all":
+            try:
+                lrs_items = _core.list_namespaced_limit_range(namespace=namespace).items
+                if not lrs_items:
+                    lrs_items = _core.list_limit_range_for_all_namespaces().items
+            except Exception:
+                lrs_items = _core.list_limit_range_for_all_namespaces().items
+        else:
+            lrs_items = _core.list_limit_range_for_all_namespaces().items
+
+        if not lrs_items:
+            return "No LimitRanges found."
+
+        filtered = []
+        if search:
+            s = search.lower()
+            for lr in lrs_items:
+                if s in lr.metadata.name.lower() or s in lr.metadata.namespace.lower():
+                    filtered.append(lr)
+        else:
+            filtered = lrs_items
+
+        if search and not filtered:
+            filtered = lrs_items
+
+        def _get(v, key):
+            if not v:
+                return "-"
+            return v.get(key, "-")
+
+        lines = []
+        lines.append("| NAMESPACE | LIMITRANGE | TYPE | CPU_MAX | CPU_MIN | CPU_DEFAULT | MEM_MAX | MEM_MIN | MEM_DEFAULT |")
+        lines.append("|---|---|---|---|---|---|---|---|---|")
+
+        for lr in sorted(filtered, key=lambda x: (x.metadata.namespace, x.metadata.name)):
+            ns = lr.metadata.namespace
+            name = lr.metadata.name
+
             for item in (lr.spec.limits or []):
                 lines.append(
-                    f"    type:{item.type} "
-                    f"max:{item.max} min:{item.min} default:{item.default}")
+                    f"| `{ns}` | `{name}` | {item.type} | "
+                    f"{_get(item.max, 'cpu')} | {_get(item.min, 'cpu')} | {_get(item.default, 'cpu')} | "
+                    f"{_get(item.max, 'memory')} | {_get(item.min, 'memory')} | {_get(item.default, 'memory')} |"
+                )
+
         return "\n".join(lines)
+
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def get_service_accounts(namespace: str = None) -> str:
+def get_serviceaccounts(namespace: str = "all", search: str | None = None) -> str:
     try:
-        lines = ["Namespace\tName"]
-        results = []
-
-        if namespace:
-            sa_list = _core.list_namespaced_service_account(namespace).items
-            if not sa_list:
-                # fallback: namespace empty or missing, list all namespaces
-                sa_list = _core.list_service_account_for_all_namespaces().items
+        if namespace != "all":
+            try:
+                sa_items = _core.list_namespaced_service_account(namespace=namespace).items
+                if not sa_items:
+                    sa_items = _core.list_service_account_for_all_namespaces().items
+            except Exception:
+                sa_items = _core.list_service_account_for_all_namespaces().items
         else:
-            sa_list = _core.list_service_account_for_all_namespaces().items
+            sa_items = _core.list_service_account_for_all_namespaces().items
 
-        if not sa_list:
-            return "No ServiceAccounts found in any namespace."
+        if not sa_items:
+            return "No ServiceAccounts found."
 
-        for sa in sa_list:
-            results.append(f"{sa.metadata.namespace}\t{sa.metadata.name}")
+        filtered = []
+        if search:
+            s = search.lower()
+            for sa in sa_items:
+                if s in sa.metadata.name.lower() or s in sa.metadata.namespace.lower():
+                    filtered.append(sa)
+        else:
+            filtered = sa_items
 
-        return "\n".join(lines + results)
+        if search and not filtered:
+            filtered = sa_items
+
+        rb_items = _rbac.list_role_binding_for_all_namespaces().items
+        crb_items = _rbac.list_cluster_role_binding().items
+
+        lines = []
+        lines.append("| NAMESPACE | SERVICEACCOUNT | ROLES | CLUSTER ROLES |")
+        lines.append("|---|---|---|---|")
+
+        for sa in sorted(filtered, key=lambda x: (x.metadata.namespace, x.metadata.name)):
+            ns = sa.metadata.namespace
+            name = sa.metadata.name
+
+            roles = []
+            for rb in rb_items:
+                if rb.metadata.namespace != ns:
+                    continue
+                for subj in rb.subjects or []:
+                    if subj.kind == "ServiceAccount" and subj.name == name and subj.namespace == ns:
+                        roles.append(rb.role_ref.name)
+
+            cluster_roles = []
+            for crb in crb_items:
+                for subj in crb.subjects or []:
+                    if subj.kind == "ServiceAccount" and subj.name == name and subj.namespace == ns:
+                        cluster_roles.append(crb.role_ref.name)
+
+            roles_str = ", ".join(sorted(set(roles))) if roles else "-"
+            cr_str = ", ".join(sorted(set(cluster_roles))) if cluster_roles else "-"
+
+            lines.append(f"| `{ns}` | `{name}` | {roles_str} | {cr_str} |")
+
+        return "\n".join(lines)
 
     except Exception as e:
-        return f"Unexpected error: {str(e)}"
+        return f"K8s error: {str(e)}"
 
 def get_cluster_role_bindings() -> str:
     try:
