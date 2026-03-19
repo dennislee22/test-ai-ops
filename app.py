@@ -270,6 +270,10 @@ def build_agent():
                 "Available is not equivalent to being used or in use."
                 "If the table does not specify which pod is attached to the GPU, it means the GPU is available to be used, it is not currently in use"
             ),
+            "find_resource": (
+                "Reproduce the command output VERBATIM. "
+                "Do NOT reformat, summarise, or omit any rows."
+            ),
             "get_namespace_resource_summary": (
                 "ALWAYS calculate and lead with the total figures at the very top of your answer: "
                 "TOTAL CPU REQUESTED, TOTAL CPU LIMIT, TOTAL MEMORY REQUESTED, TOTAL MEMORY LIMIT. "
@@ -385,7 +389,7 @@ def build_agent():
             #gguf_msgs = [{"role": "system", "content": tool_system}] + chat_msgs[1:]
             tool_system = f"{prompt}\n\nAvailable tools:\n{tools_json}{format_rules}"
             gguf_msgs = [{"role": "system", "content": tool_system}] + chat_msgs[1:]
-            
+
             resp = model.create_chat_completion(messages=gguf_msgs, max_tokens=_max_new, temperature=0.7, top_p=0.8, top_k=20, repeat_penalty=1.05)
             raw_text = resp["choices"][0]["message"].get("content", "") or ""
 
