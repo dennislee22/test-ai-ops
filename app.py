@@ -22,6 +22,9 @@ from tools.tools_k8s import reload_kubeconfig, _core as _k8s_core
 from tools.tools_metadata import K8S_TOOL_METADATA
 from agent.bypass import should_bypass_llm
 
+if not hasattr(config, "DISABLE_LOOP_PROTECTION"):
+    config.DISABLE_LOOP_PROTECTION = False
+
 _HERE = Path(__file__).resolve().parent
 _decode_secrets_ctx: ContextVar[bool] = ContextVar("decode_secrets", default=False)
 
@@ -33,6 +36,10 @@ LOCAL_NS_MAP = {
     "vault": "vault-system",
     "longhorn": "longhorn-system",
     "cdp": "cdp",
+    "cdp": "cdp-drs",
+    "cdp-keda": "cdp-keda",
+    "cdp-obs": "cdp-obs",
+    "cdp-services": "cdp-services",
 }
 
 IGNORE_NS = {
@@ -476,7 +483,12 @@ def build_agent():
         tcs = getattr(state["messages"][-1], "tool_calls", None)
         if not tcs: return "end"
         already, pending = state.get("tool_calls_made", []), [tc["name"] for tc in tcs]
-        if already and all(name in already for name in pending): return "end"
+        
+        # Check config before terminating for repeated tool calls
+        disable_loop_protection = getattr(config, "DISABLE_LOOP_PROTECTION", False)
+        if not disable_loop_protection and already and all(name in already for name in pending): 
+            return "end"
+            
         return "tools"
 
     g = StateGraph(AgentState)
@@ -1132,7 +1144,12 @@ async def api_reload_prompt():
 @app.get("/api/config")
 async def api_get_config():
     import tools.tools_k8s as _tk
-    return {"kubectl_max_chars": _tk._KUBECTL_MAX_OUT, "max_new_tokens": config.MAX_NEW_TOKENS, "llm_timeout": config.LLM_TIMEOUT}
+    return {
+        "kubectl_max_chars": _tk._KUBECTL_MAX_OUT, 
+        "max_new_tokens": config.MAX_NEW_TOKENS, 
+        "llm_timeout": config.LLM_TIMEOUT,
+        "disable_loop_protection": getattr(config, "DISABLE_LOOP_PROTECTION", False)
+    }
 
 @app.post("/api/config")
 async def api_set_config(body: dict):
@@ -1150,6 +1167,11 @@ async def api_set_config(body: dict):
         val = max(30, min(int(body["llm_timeout"]), 1800))
         config.LLM_TIMEOUT = val
         updated["llm_timeout"] = val
+    if "disable_loop_protection" in body:
+        val = bool(body["disable_loop_protection"])
+        config.DISABLE_LOOP_PROTECTION = val
+        updated["disable_loop_protection"] = val
+        
     if not updated: return _JSONResponse(status_code=400, content={"error": "No recognised config keys in body"})
     return {"ok": True, "updated": updated}
 

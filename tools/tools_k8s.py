@@ -3444,19 +3444,22 @@ def get_namespace_status(namespace: str = "all", show_all: bool = False, sort_by
         for ns in ns_items:
             ns_name = ns.metadata.name
             pods = _core.list_namespaced_pod(ns_name, limit=1000).items
-            pod_counts = {"Running": 0, "Pending": 0, "Failed": 0, "Unknown": 0}
+            running = 0
+            other_states = {}
 
             for pod in pods:
                 phase = pod.status.phase or "Unknown"
-                pod_counts[phase] = pod_counts.get(phase, 0) + 1
+                if phase == "Running":
+                    running += 1
+                else:
+                    other_states[phase] = other_states.get(phase, 0) + 1
 
-            ns_pod_info[ns_name] = {"phase": ns.status.phase or "Active", "pod_counts": pod_counts}
+            ns_pod_info[ns_name] = {"running": running, "other": other_states}
 
-        # Apply sorting if requested
         if sort_by == "pods_asc":
-            sorted_ns = sorted(ns_pod_info.items(), key=lambda x: sum(x[1]["pod_counts"].values()))
+            sorted_ns = sorted(ns_pod_info.items(), key=lambda x: x[1]["running"] + sum(x[1]["other"].values()))
         elif sort_by == "pods_desc":
-            sorted_ns = sorted(ns_pod_info.items(), key=lambda x: sum(x[1]["pod_counts"].values()), reverse=True)
+            sorted_ns = sorted(ns_pod_info.items(), key=lambda x: x[1]["running"] + sum(x[1]["other"].values()), reverse=True)
         elif sort_by == "name_asc":
             sorted_ns = sorted(ns_pod_info.items(), key=lambda x: x[0])
         elif sort_by == "name_desc":
@@ -3467,19 +3470,23 @@ def get_namespace_status(namespace: str = "all", show_all: bool = False, sort_by
         if limit is not None:
             sorted_ns = sorted_ns[:limit]
 
-        # Markdown table header
         lines = [
-            "| Namespace | Status | Total | Running | Pending | Failed | Unknown |",
-            "|-----------|--------|-------|---------|---------|--------|---------|"
+            "| Namespace | Total Pods | Running | Other State |",
+            "|-----------|------------|---------|--------------|"
         ]
 
         pod_totals = {}
         for ns_name, info in sorted_ns:
-            counts = info["pod_counts"]
-            total = sum(counts.values())
+            total = info["running"] + sum(info["other"].values())
             pod_totals[ns_name] = total
+
+            if info["other"]:
+                other_str = ", ".join(f"{k}: {v}" for k, v in info["other"].items())
+            else:
+                other_str = "-"
+
             lines.append(
-                f"| {ns_name} | {info['phase']} | {total} | {counts['Running']} | {counts['Pending']} | {counts['Failed']} | {counts['Unknown']} |"
+                f"| {ns_name} | {total} | {info['running']} | {other_str} |"
             )
 
         if show_all:
