@@ -69,44 +69,35 @@ K8S_TOOL_METADATA: dict = {
     },
 
     "get_pod_status": {
-        "fn": get_pod_status,
+        "fn":          get_pod_status,
         "description": (
-            "List and check runtime STATUS of Kubernetes pods. "
-            "This is the PRIMARY tool for listing pods in a namespace or across the cluster. "
+            "List Kubernetes pods in a namespace or across the cluster. "
+            "This is the PRIMARY tool for listing pods. "
 
             "Use this tool for queries like: "
             "'list pods', "
             "'list all pods in namespace X', "
             "'show pods in longhorn-system', "
-            "'which pods are unhealthy', "
-            "'search pods by partial name'. "
+            "'search pods by partial name or namespace'. "
 
-            "Supports namespace filtering and search by partial pod name. "
-            "Returns matching pods only (no hidden fallback). "
-            "If no pods match the search, the tool returns a 'no results' message. "
+            "Supports namespace filtering and partial search on pod name or namespace. "
+            "If a search term is provided and no matches are found, the tool automatically falls back to showing all pods. "
 
-            "Use show_all=true to include all pods instead of filtered results. "
-
-            "Shows pod phase (Running/Pending/Failed/Unknown), container readiness, restart counts, "
-            "and unhealthy conditions. "
+            "Displays pod phase (Running/Pending/Failed/Unknown), container readiness, restart counts, "
+            "and non-ready conditions. "
 
             "Do NOT use this tool for detailed per-container resource requests or limits — "
             "use get_pod_resource_requests for that purpose."
         ),
-        "parameters": {
+        "parameters":  {
             "namespace": {
                 "type": "string",
                 "default": "all",
-                "description": "Namespace to query. Defaults to 'all' namespaces — set when user specifies a namespace."
+                "description": "Namespace to query. Defaults to 'all' namespaces — set when the user specifies a namespace."
             },
             "search": {
                 "type": "string",
-                "description": "Optional search string to match pod names (partial match only)."
-            },
-            "show_all": {
-                "type": "boolean",
-                "default": False,
-                "description": "Set true to include ALL pods (otherwise returns filtered results)."
+                "description": "Optional search string to match pod names or namespaces (partial match)."
             },
         },
     },
