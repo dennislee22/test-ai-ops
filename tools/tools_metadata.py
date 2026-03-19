@@ -247,16 +247,17 @@ K8S_TOOL_METADATA: dict = {
         "description": (
             "Fetch recent Kubernetes events. Use for diagnosing issues, errors, or warnings. "
             "Supports searching by namespace, involved object, or message content (partial matches). "
-            "warning_only=true (default) returns only Warning events; "
-            "set warning_only=false to include Normal events."
+            "type='Warning' returns Warning events (falls back to Normal if none found). "
+            "type='Normal' returns only Normal events. "
+            "type='All' (default) returns all events."
         ),
         "parameters":  {
-            "namespace":    {"type": "string",  "default": "all",
-                             "description": "Namespace to query. Defaults to 'all' namespaces — override only when explicitly specified."},
-            "search":       {"type": "string",  "default": None,
-                             "description": "Optional search term to filter events by pod, namespace, object, or message."},
-            "warning_only": {"type": "boolean", "default": True,
-                             "description": "true = Warning events only; false = include Normal events as well."},
+            "namespace": {"type": "string", "default": "all",
+                          "description": "Namespace to query. Defaults to 'all' namespaces — override only when explicitly specified."},
+            "search":    {"type": "string", "default": None,
+                          "description": "Optional search term to filter events by pod, namespace, object, or message."},
+            "type":      {"type": "string", "default": "All",
+                          "description": "Event type to fetch: 'Warning', 'Normal', or 'All' (default)."},
         },
     },
 

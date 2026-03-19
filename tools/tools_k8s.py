@@ -1237,23 +1237,34 @@ def _is_noisy_event(message: str) -> bool:
     msg_lower = (message or "").lower()
     return any(pat in msg_lower for pat in _EVENT_NOISE_PATTERNS)
 
-def get_events(namespace: str = "all", search: str | None = None, warning_only: bool = True) -> str:
+def get_events(namespace: str = "all", search: str | None = None, type: str = "All") -> str:
     try:
-        fs = "type=Warning" if warning_only else ""
-        events = (_core.list_event_for_all_namespaces(field_selector=fs, limit=500).items
-                  if namespace == "all"
-                  else _core.list_namespaced_event(namespace=namespace, field_selector=fs, limit=500).items)
-        if not events:
-            return f"No {'warning ' if warning_only else ''}events in '{namespace}'."
+        def fetch_events(ns: str, fs: str):
+            if ns == "all":
+                return _core.list_event_for_all_namespaces(field_selector=fs, limit=500).items
+            return _core.list_namespaced_event(namespace=ns, field_selector=fs, limit=500).items
 
-        matching_events = []
+        type_upper = type.capitalize()
+        field_selector = f"type={type_upper}" if type_upper in ("Warning", "Normal") else ""
+        events = fetch_events(namespace, field_selector)
+
+        # fallback: if Warning requested but no events, try Normal
+        if type_upper == "Warning" and not events:
+            field_selector = "type=Normal"
+            events = fetch_events(namespace, field_selector)
+            type_upper = "Normal"
+
+        if not events:
+            return f"No {type_upper.lower() if type_upper != 'All' else ''} events in '{namespace}'."
+
         search_lower = search.lower() if search else None
+        matching_events = []
         for e in events:
             ns_name = e.metadata.namespace
             obj_name = getattr(e.involved_object, "name", "")
             if not search_lower or (search_lower in e.message.lower()
-                                    or (search_lower in ns_name.lower())
-                                    or (search_lower in obj_name.lower())):
+                                    or search_lower in ns_name.lower()
+                                    or search_lower in obj_name.lower()):
                 matching_events.append(e)
 
         if not matching_events:
@@ -1276,7 +1287,7 @@ def get_events(namespace: str = "all", search: str | None = None, warning_only: 
                 continue
             obj_kind = getattr(e.involved_object, "kind", "Unknown")
             obj_name = getattr(e.involved_object, "name", "Unknown")
-            lines.append(f"### `{ns_name}/{obj_kind}/{obj_name}`\n"
+            lines.append(f"### `{e.metadata.namespace}/{obj_kind}/{obj_name}`\n"
                          f"- Type: {e.type}\n"
                          f"- Reason: {e.reason}\n"
                          f"- Message: {e.message}\n"
@@ -1291,7 +1302,9 @@ def get_events(namespace: str = "all", search: str | None = None, warning_only: 
 
         header = ""
         if namespace == "all":
-            header = "_As no namespace was specified, showing events from all namespaces._\n\n"
+            header = f"_Showing {type_upper.lower() if type_upper != 'All' else 'all'} events from all namespaces._\n\n"
+        else:
+            header = f"_Showing {type_upper.lower() if type_upper != 'All' else 'all'} events in namespace '{namespace}'._\n\n"
 
         return header + "\n\n".join(lines)
 
