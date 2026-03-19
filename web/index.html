@@ -2176,7 +2176,7 @@ function _renderAgentStatus(updates){
   if(current) sections.push(current);
 
   const lastSection = sections[sections.length - 1];
-  let h = '<div class="s-label">Agentic AI is processing</div>';
+  let h = '<div class="s-label">Agentic AI processing</div>';
 
   sections.forEach((sec, si) => {
     const isLastSec = si === sections.length - 1;
@@ -2430,10 +2430,8 @@ function appendAi(text, tools, iters, elapsed, statusUpdates, isClarification, s
     '<span class="tbadge">'+(t==='rag_search'?'📚':'\u2699\uFE0F')+' '+esc(t)+'</span>'
   ).join('');
   
-  // Create the Synthesis badge using the same 'tbadge' class
   const synthBadge = '<span class="tbadge">' + (skipSynth ? '⚡ Synthesise: OFF' : '🧠 Synthesise: ON') + '</span>';
 
-  // Always show the row, putting the synthBadge next to tools/iters if they exist
   const toolRow = '<div class="ai-tools">'
     + (unique.length ? '<span class="tmeta">called:</span>'+badges+'<span class="tmeta">&middot; '+iters+' iter'+(iters!==1?'s':'')+' &middot; </span>' : '')
     + synthBadge
@@ -2501,7 +2499,6 @@ async function sendMessage(override){
   setLoading(true);
   appendUser(q);
 
-  // Define skipSynth at the top so it is safely available in the catch/error blocks!
   const skipSynth = document.getElementById('skip-synth-toggle')?.checked || false;
 
   const liveUpdates = [];
@@ -2521,7 +2518,6 @@ async function sendMessage(override){
       if(!thinkEl) return;
       const hdr = thinkEl.querySelector('.s-label');
       if(hdr){
-        // Updated title to "Agentic AI processing"
         if (_elapsedSec >= 20 && !skipSynth && _toolChars > 0) {
           hdr.innerHTML = `Agentic AI processing (${_elapsedSec}s)<br>` +
                           `<span style="color: #ef4444; text-transform: none; letter-spacing: normal; font-size: 11px; display: inline-block; margin-top: 5px; line-height: 1.4;">` +
