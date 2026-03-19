@@ -8,7 +8,7 @@ from tools.tools_k8s import (
     get_serviceaccounts, get_cluster_role_bindings, get_namespace_status,
     get_pod_tolerations, get_pod_resource_requests, run_cluster_health, get_replicaset,
     get_namespace_resource_summary, get_pod_images, get_unhealthy_pods_detail,
-    get_coredns_health, get_pv_usage, find_resource, get_pod_containers_resources,
+    get_coredns_health, get_pv_usage, find_resource, get_pod_containers_resources, get_cronjob_status,
     query_prometheus_metrics, kubectl_exec, exec_db_query, get_pod_storage, get_pdb_status,
     get_certificate_status, get_control_plane_status, get_network_policy_status, get_webhook_health,
 )
