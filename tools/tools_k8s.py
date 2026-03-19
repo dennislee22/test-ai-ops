@@ -479,19 +479,14 @@ def get_pod_logs(namespace: str = "all", search: str | None = None,
     except ApiException as e:
         return f"K8s API error: {e.reason}"
 
-def describe_pod(pod_name: str = "", namespace: str = "all", search: str | None = None, yaml: bool = False) -> str:
+def describe_pod(pod_name: str, namespace: str = "all", search: str | None = None, show_yaml: bool = False) -> str:
     try:
-        if "/" in pod_name:
-            parts = pod_name.split("/", 1)
-            if len(parts) == 2:
-                pod_name = parts[1]
-
         pods = (_core.list_pod_for_all_namespaces().items
                 if namespace == "all"
                 else _core.list_namespaced_pod(namespace=namespace).items)
 
         if not pods:
-            return f"No pods found in namespace '{namespace}'."
+            return f"`No pods found in namespace '{namespace}'.`"
 
         matching_pods = []
         if search:
@@ -499,83 +494,112 @@ def describe_pod(pod_name: str = "", namespace: str = "all", search: str | None 
             for pod in pods:
                 if search_lower in pod.metadata.name.lower() or (namespace != "all" and search_lower in pod.metadata.namespace.lower()):
                     matching_pods.append(pod)
-        elif pod_name:
-            matching_pods = [p for p in pods if p.metadata.name == pod_name]
         else:
-            matching_pods = pods
+            matching_pods = [p for p in pods if p.metadata.name == pod_name]
 
         if not matching_pods:
-            return f"No pods matching '{pod_name if pod_name else search}' found in namespace '{namespace}'."
+            return f"`No pods matching '{pod_name if not search else search}' found in namespace '{namespace}'.`"
 
-        lines = []
-        for pod in sorted(matching_pods, key=lambda p: (p.metadata.namespace, p.metadata.name)):
-            ns = pod.metadata.namespace
-            name = pod.metadata.name
-            lines.append(f"Name: {name}")
-            lines.append(f"Namespace: {ns}")
-            lines.append(f"Node: {pod.spec.node_name or 'N/A'}")
-            lines.append(f"Start Time: {pod.status.start_time or 'N/A'}")
-            lines.append(f"Labels: {pod.metadata.labels or {}}")
-            lines.append(f"Annotations: {pod.metadata.annotations or {}}")
-            lines.append(f"Status: {pod.status.phase}")
-            lines.append("Conditions:")
-            for cond in pod.status.conditions or []:
-                lines.append(f"  {cond.type}: {cond.status}" + (f" — {cond.message}" if cond.message else ""))
+        pod = matching_pods[0]
 
+        if show_yaml:
+            import yaml
+            return f"`{yaml.safe_dump(pod.to_dict(), sort_keys=False)}`"
+
+        lines = ["`"]
+        lines.append(f"Name:             {pod.metadata.name}")
+        lines.append(f"Namespace:        {pod.metadata.namespace}")
+        lines.append(f"Priority:         {pod.spec.priority or 0}")
+        lines.append(f"Service Account:  {pod.spec.service_account_name or pod.spec.service_account}")
+        lines.append(f"Node:             {pod.spec.node_name or '<none>'}")
+        lines.append(f"Start Time:       {pod.status.start_time}")
+        lines.append("Labels:           " + 
+                     "\n                  ".join(f"{k}={v}" for k,v in (pod.metadata.labels or {}).items()))
+        lines.append("Annotations:      " +
+                     "\n                  ".join(f"{k}: {v}" for k,v in (pod.metadata.annotations or {}).items()))
+        lines.append(f"Status:           {pod.status.phase}")
+        lines.append(f"IP:               {pod.status.pod_ip}")
+        if pod.status.pod_ips:
+            lines.append("IPs:")
+            for ip in pod.status.pod_ips:
+                lines.append(f"  IP:           {ip.ip}")
+        if pod.metadata.owner_references:
+            owner = pod.metadata.owner_references[0]
+            lines.append(f"Controlled By:  {owner.kind}/{owner.name}")
+
+        if pod.spec.init_containers:
+            lines.append("Init Containers:")
+            for c in pod.spec.init_containers:
+                lines.append(f"  {c.name}:")
+                lines.append(f"    Image:        {c.image}")
+                lines.append(f"    Resources:    limits={c.resources.limits}, requests={c.resources.requests}")
+                lines.append(f"    Mounts:       " + ", ".join(m.mount_path for m in c.volume_mounts or []))
+                status = next((s for s in pod.status.init_container_statuses or [] if s.name == c.name), None)
+                if status:
+                    if status.state.running:
+                        lines.append(f"    State:        Running (Started: {status.state.running.started_at})")
+                    elif status.state.terminated:
+                        lines.append(f"    State:        Terminated (Exit: {status.state.terminated.exit_code}, Reason: {status.state.terminated.reason})")
+                    elif status.state.waiting:
+                        lines.append(f"    State:        Waiting ({status.state.waiting.reason})")
+                    lines.append(f"    Ready:        {status.ready}")
+                    lines.append(f"    Restart Count: {status.restart_count}")
+
+        if pod.spec.containers:
             lines.append("Containers:")
-            for cs, c in zip(pod.status.container_statuses or [], pod.spec.containers or []):
-                state = "unknown"
-                if cs.state:
-                    state = list(cs.state.to_dict().keys())[0]
-                lines.append(f"  - {c.name}: ready={cs.ready if cs else 'N/A'}, restarts={cs.restart_count if cs else 'N/A'}, state={state}")
-                if cs.last_state and cs.last_state.terminated:
-                    t = cs.last_state.terminated
-                    lines.append(f"    Last terminated: exit={t.exit_code}, reason={t.reason}")
-                req = c.resources.requests or {}
-                lim = c.resources.limits or {}
-                lines.append(f"    Resources: req=cpu:{req.get('cpu','none')}/mem:{req.get('memory','none')} lim=cpu:{lim.get('cpu','none')}/mem:{lim.get('memory','none')}")
+            for c in pod.spec.containers:
+                lines.append(f"  {c.name}:")
+                lines.append(f"    Image:        {c.image}")
+                status = next((s for s in pod.status.container_statuses or [] if s.name == c.name), None)
+                if status:
+                    if status.state.running:
+                        lines.append(f"    State:        Running (Started: {status.state.running.started_at})")
+                    elif status.state.terminated:
+                        lines.append(f"    State:        Terminated (Exit: {status.state.terminated.exit_code}, Reason: {status.state.terminated.reason})")
+                    elif status.state.waiting:
+                        lines.append(f"    State:        Waiting ({status.state.waiting.reason})")
+                    lines.append(f"    Ready:        {status.ready}")
+                    lines.append(f"    Restart Count: {status.restart_count}")
+                lines.append(f"    Requests:     {c.resources.requests or {}}")
+                lines.append(f"    Limits:       {c.resources.limits or {}}")
+                lines.append(f"    Mounts:       " + ", ".join(m.mount_path for m in c.volume_mounts or []))
 
+        if pod.status.conditions:
+            lines.append("Conditions:")
+            for cond in pod.status.conditions:
+                lines.append(f"  Type: {cond.type:25} Status: {cond.status}")
+
+        if pod.spec.volumes:
             lines.append("Volumes:")
-            for v in pod.spec.volumes or []:
-                vol_type = "Unknown"
-                vol_name = v.name
-                detail = ""
-                if v.persistent_volume_claim:
-                    vol_type = "PVC"
-                    detail = v.persistent_volume_claim.claim_name
-                elif v.config_map:
-                    vol_type = "ConfigMap"
-                    detail = v.config_map.name
-                elif v.secret:
-                    vol_type = "Secret"
-                    detail = v.secret.secret_name
-                lines.append(f"  - {vol_name}: type={vol_type} name={detail}")
+            for v in pod.spec.volumes:
+                vtype = next((k for k in v.to_dict() if k not in ("name",)), "unknown")
+                lines.append(f"  {v.name}: {vtype}")
 
-            # Add pod events
-            try:
-                ev = (_core.list_event_for_all_namespaces(field_selector=f"involvedObject.name={name},involvedObject.namespace={ns}")
+        lines.append(f"QoS Class:       {pod.status.qos_class or 'None'}")
+        if pod.spec.node_selector:
+            lines.append("Node-Selectors:  " + ", ".join(f"{k}={v}" for k,v in pod.spec.node_selector.items()))
+        if pod.spec.tolerations:
+            lines.append("Tolerations:     " + ", ".join(str(t) for t in pod.spec.tolerations))
+
+        try:
+            events = (_core.list_event_for_all_namespaces(limit=500)
                       if namespace == "all"
-                      else _core.list_namespaced_event(namespace=ns,
-                                                       field_selector=f"involvedObject.name={name}"))
-                if ev.items:
-                    lines.append("Events:")
-                    sev = sorted(ev.items, key=lambda e: e.last_timestamp or e.event_time or "", reverse=True)
-                    for e in sev:
-                        lines.append(f"  [{e.type}] {e.reason} — {e.message} (x{e.count or 1})")
-            except Exception:
-                lines.append("Events: Unable to fetch events.")
+                      else _core.list_namespaced_event(namespace=namespace, limit=500))
+            pod_events = [e for e in (events.items or []) if e.involved_object.name == pod.metadata.name and e.involved_object.kind == "Pod"]
+            if pod_events:
+                lines.append("Events:")
+                for e in sorted(pod_events, key=lambda x: x.last_timestamp or x.event_time or ""):
+                    lines.append(f"  {e.last_timestamp} {e.type} {e.reason} — {e.message} (x{e.count or 1})")
+            else:
+                lines.append("Events:          <none>")
+        except Exception:
+            lines.append("Events:          <error fetching events>")
 
-            if yaml:
-                import yaml as _yaml
-                pod_yaml = _core.read_namespaced_pod(name=name, namespace=ns).to_dict()
-                lines.append("\nYAML:\n" + _yaml.safe_dump(pod_yaml, sort_keys=False))
-
-            lines.append("-" * 80)
-
+        lines.append("`")
         return "\n".join(lines)
 
-    except ApiException as e:
-        return f"K8s API error: {e.reason}"
+    except Exception as e:
+        return f"`Error fetching pod: {str(e)}`"
 
 def get_unhealthy_pods_detail(namespace: str = "all") -> str:
     import datetime as _dt
