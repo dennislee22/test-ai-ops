@@ -85,30 +85,58 @@ K8S_TOOL_METADATA: dict = {
     "get_pod_status": {
         "fn":          get_pod_status,
         "description": (
-            "List Kubernetes pods in a namespace or across the cluster. "
-            "This is the PRIMARY tool for listing pods. "
+            "List Kubernetes pods with their phase, readiness, restart count, and conditions. "
+            "This is the PRIMARY tool for listing pods and checking pod health. "
             "Use this tool for queries like: "
             "'list pods', "
             "'list all pods', "
             "'list pods in namespace X', "
             "'show pods in cdp namespace', "
-            "Supports filtering by partial pod name match. "
-            "If no matches are found, the tool falls back to showing all pods. "
+            "'any pod not running', "
+            "'any broken or stuck pods', "
+            "'show me failed pods', "
+            "'are there any pending pods'. "
+            "Supports filtering by partial pod name via search, and by phase via the phase parameter. "
+            "When phase='notrunning', fetches only Pending/Failed/Unknown pods using server-side "
+            "field selectors — efficient even on large clusters. "
+            "Non-running results include an extra REASON column (e.g. CrashLoopBackOff, "
+            "ImagePullBackOff, OOMKilled) so the cause is visible without a second tool call. "
             "Namespace defaults to 'all' unless the user explicitly specifies one. "
-            "Displays pod phase (Running/Pending/Failed/Unknown), container readiness, restart counts, "
-            "and non-ready conditions. "
             "Do NOT use this tool for detailed per-container resource requests or limits — "
-            "use get_pod_resource_requests for that purpose."
+            "use get_pod_resource_requests for that purpose. "
+            "Do NOT use get_unhealthy_pods_detail unless the user explicitly asks for logs "
+            "or deep diagnostics on a specific pod."
         ),
         "parameters":  {
             "namespace": {
-                "type": "string",
-                "default": "all",
-                "description": "Namespace to query. Defaults to 'all' namespaces — only override when explicitly specified."
+                "type":        "string",
+                "default":     "all",
+                "description": (
+                    "Namespace to query. Defaults to 'all' namespaces — "
+                    "only override when the user explicitly specifies one."
+                ),
             },
             "search": {
-                "type": "string",
-                "description": "Optional keyword to filter pods by name (partial match)."
+                "type":        "string",
+                "default":     None,
+                "description": (
+                    "Optional keyword to filter pods by name (partial, case-insensitive match). "
+                    "Omit when the user is not filtering by a specific name."
+                ),
+            },
+            "phase": {
+                "type":        "string",
+                "default":     None,
+                "description": (
+                    "Optional phase filter. Use this whenever the user asks about pod health "
+                    "or non-running pods. "
+                    "Pass 'notrunning' for: 'any pod not running', 'broken pods', 'stuck pods', "
+                    "'unhealthy pods', 'failed pods', 'any issues', 'pods with problems'. "
+                    "Also accepts natural variants: 'unhealthy', 'failed', 'failing', "
+                    "'stuck', 'broken', 'down', 'pending', 'unknown'. "
+                    "For a specific phase pass it directly: 'Running', 'Pending', 'Failed', 'Unknown'. "
+                    "Omit entirely to show all pods regardless of phase."
+                ),
             },
         },
     },
