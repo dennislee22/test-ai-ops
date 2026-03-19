@@ -26,7 +26,7 @@ if not hasattr(config, "DISABLE_LOOP_PROTECTION"):
     config.DISABLE_LOOP_PROTECTION = False
 
 _HERE = Path(__file__).resolve().parent
-SETTINGS_FILE = _HERE / "settings.json"
+SETTINGS_FILE = _HERE / "config" / "settings.json"
 
 def load_settings():
     if SETTINGS_FILE.exists():
