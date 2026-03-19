@@ -364,7 +364,7 @@ def build_agent():
             except Exception: pass
         return tcs
 
-    def llm_node(state: AgentState):
+def llm_node(state: AgentState):
         itr, msgs, updates = state.get("iteration", 0) + 1, state["messages"], list(state.get("status_updates", []))
         req_id = state.get("req_id", "")
         if state.get("direct_answer"): 
@@ -385,15 +385,11 @@ def build_agent():
                 "</tool_call>"
             )
             tools_json = json.dumps(tool_schemas, indent=2)
-            #tool_system = f"{prompt}\n\nAvailable tools:\n{tools_json}"
-            #gguf_msgs = [{"role": "system", "content": tool_system}] + chat_msgs[1:]
             tool_system = f"{prompt}\n\nAvailable tools:\n{tools_json}{format_rules}"
             gguf_msgs = [{"role": "system", "content": tool_system}] + chat_msgs[1:]
 
-            resp = model.create_chat_completion(messages=gguf_msgs, max_tokens=_max_new, temperature=0.7, top_p=0.8, top_k=20, repeat_penalty=1.05)
-            raw_text = resp["choices"][0]["message"].get("content", "") or ""
-
-            resp = model.create_chat_completion(messages=gguf_msgs, max_tokens=_max_new, temperature=0.7, top_p=0.8, top_k=20, repeat_penalty=1.05)
+            # CHANGED: Cleaned up duplicate lines and set temperature=0.1
+            resp = model.create_chat_completion(messages=gguf_msgs, max_tokens=_max_new, temperature=0.1, top_p=0.8, top_k=20, repeat_penalty=1.05)
             raw_text = resp["choices"][0]["message"].get("content", "") or ""
         else:
             import torch
@@ -402,7 +398,8 @@ def build_agent():
             encoded = tokenizer.apply_chat_template(chat_msgs, tokenize=True, return_tensors="pt", **kw)
             input_ids = (encoded["input_ids"] if hasattr(encoded, "__getitem__") and not hasattr(encoded, "shape") else encoded).to(model.device)
             with torch.no_grad(): 
-                output_ids = model.generate(input_ids, max_new_tokens=_max_new, do_sample=True, temperature=0.7, top_p=0.8, top_k=20, repetition_penalty=1.05, pad_token_id=tokenizer.eos_token_id)
+                # CHANGED: set temperature=0.1
+                output_ids = model.generate(input_ids, max_new_tokens=_max_new, do_sample=True, temperature=0.1, top_p=0.8, top_k=20, repetition_penalty=1.05, pad_token_id=tokenizer.eos_token_id)
             raw_text = tokenizer.decode(output_ids[0][input_ids.shape[-1]:], skip_special_tokens=True)
 
         _log_ag.info(f"[REQ:{req_id}] [llm_node] RAW LLM OUTPUT ({len(raw_text)} chars):\n{raw_text!r}")
