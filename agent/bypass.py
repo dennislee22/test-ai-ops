@@ -24,12 +24,14 @@ BYPASSABLE_TOOLS = {
     "kubectl_exec",
     "query_prometheus_metrics",
     "describe_pod",
+    "get_events",
     "get_pod_logs",
 }
 
 # Note: They must ALSO be listed in BYPASSABLE_TOOLS above.
 UNCONDITIONAL_BYPASS = {
     "describe_pod",
+    "get_events",
     "query_prometheus_metrics",
     "get_pod_logs",
 }
