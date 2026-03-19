@@ -9,6 +9,7 @@ NEVER_BYPASS = {
 }
 
 BYPASSABLE_TOOLS = {
+    "get_node_info",
     "get_namespace_status",
     "get_namespace_resource_summary",
     "get_persistent_volumes",
