@@ -2176,7 +2176,7 @@ function _renderAgentStatus(updates){
   if(current) sections.push(current);
 
   const lastSection = sections[sections.length - 1];
-  let h = '<div class="s-label">AGENT STATUS — processing</div>';
+  let h = '<div class="s-label">Agentic AI is processing</div>';
 
   sections.forEach((sec, si) => {
     const isLastSec = si === sections.length - 1;
@@ -2491,6 +2491,9 @@ function appendAi(text, tools, iters, elapsed, statusUpdates, isClarification, s
   scrollBot();
 }
 
+let agentTimerInterval = null;
+let agentStartTime = 0;
+
 async function sendMessage(override){
   const q = override || inpEl.value.trim();
   if(!q || loading) return;
@@ -2498,8 +2501,11 @@ async function sendMessage(override){
   setLoading(true);
   appendUser(q);
 
+  // Define skipSynth at the top so it is safely available in the catch/error blocks!
+  const skipSynth = document.getElementById('skip-synth-toggle')?.checked || false;
+
   const liveUpdates = [];
-  let   resultReceived = false;
+  let resultReceived = false;
   showThinking(liveUpdates);
 
   let _elapsedSec = 0;
@@ -2508,21 +2514,21 @@ async function sendMessage(override){
 
   function _startElapsedCounter(){
     _elapsedSec = 0;
+    if (_elapsedTimer) clearInterval(_elapsedTimer); // Ensure no duplicate intervals
+    
     _elapsedTimer = setInterval(() => {
       _elapsedSec++;
       if(!thinkEl) return;
       const hdr = thinkEl.querySelector('.s-label');
       if(hdr){
-        const isSkipping = document.getElementById('skip-synth-toggle')?.checked;
-        
-        // If > 20s, NOT skipping synth, and we actually have tool data
-        if (_elapsedSec >= 20 && !isSkipping && _toolChars > 0) {
-          hdr.innerHTML = `AGENT STATUS — processing (${_elapsedSec}s)<br>` +
+        // Updated title to "Agentic AI processing"
+        if (_elapsedSec >= 20 && !skipSynth && _toolChars > 0) {
+          hdr.innerHTML = `Agentic AI processing (${_elapsedSec}s)<br>` +
                           `<span style="color: #ef4444; text-transform: none; letter-spacing: normal; font-size: 11px; display: inline-block; margin-top: 5px; line-height: 1.4;">` +
                           `LLM is taking a longer time to digest <strong>${_toolChars.toLocaleString()}</strong> chars for synthesis. You can opt to "Skip Synthesis" to see the raw output from the tool or please rephrase your ask 🙏.</span>`;
           hdr.style.color = ''; 
         } else {
-          hdr.innerHTML = `AGENT STATUS — processing (${_elapsedSec}s)`;
+          hdr.innerHTML = `Agentic AI processing (${_elapsedSec}s)`;
           hdr.style.color = _elapsedSec >= 60 ? '#f59e0b' : '';
         }
       }
@@ -2530,16 +2536,16 @@ async function sendMessage(override){
   }
 
   function _stopElapsedCounter(){
-    if(_elapsedTimer){ clearInterval(_elapsedTimer); _elapsedTimer = null; }
+    if(_elapsedTimer){ 
+      clearInterval(_elapsedTimer); 
+      _elapsedTimer = null; 
+    }
   }
+  
+  // Start the persistent timer exactly once per message
   _startElapsedCounter();
 
-  // No conversation history — each request is fully independent.
-
   try{
-
-    const skipSynth = document.getElementById('skip-synth-toggle')?.checked || false;
-
     const res = await fetch('/chat/stream', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
@@ -2619,12 +2625,11 @@ async function sendMessage(override){
             payload.clarification_needed,
             skipSynth
           );
-          // (history not stored — each request is stateless)
 
         } else if(payload.type === 'error'){
           _stopElapsedCounter();
           removeThinking();
-          appendAi('⚠ Agent error: '+payload.text, [], 0, null, [], false,skipSynth);
+          appendAi('⚠ Agent error: '+payload.text, [], 0, null, [], false, skipSynth);
         }
       }
     }
@@ -2643,6 +2648,7 @@ async function sendMessage(override){
     setLoading(false);
   }
 }
+
 sndBtn.onclick = ()=> sendMessage();
 inpEl.addEventListener('keydown', e=>{
   if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); }
