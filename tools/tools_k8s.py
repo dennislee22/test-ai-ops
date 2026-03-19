@@ -2943,7 +2943,7 @@ def get_secret_list(namespace: str = "all", name: str = "", pod_name: str = None
 
     hidden_msg = "<hidden> — enable 'Show Secret Values' in ⚙ Settings → Security to decode."
 
-    CERT_KEY_HINTS = {"tls", "cert", "ca", "ssl"}
+    CERT_KEY_HINTS = {"tls", "cert", "certs", "certificate", "crt", "pem", "key", "ca", "ssl", "x509"}
 
     try:
         if pod_name:
