@@ -77,7 +77,7 @@ K8S_TOOL_METADATA: dict = {
             "'list pods', "
             "'list all pods', "
             "'list pods in namespace X', "
-            "'show pods in longhorn-system', "
+            "'show pods in cdp namespace', "
             "Supports filtering by partial pod name match. "
             "If no matches are found, the tool falls back to showing all pods. "
             "Namespace defaults to 'all' unless the user explicitly specifies one. "
