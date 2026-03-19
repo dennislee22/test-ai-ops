@@ -215,10 +215,6 @@ def _build_llm_gguf():
 
 def _extract_namespace(text: str) -> str:
     text = text.lower()
-    
-    # 0. Explicit cluster-wide / across cluster handling
-    if re.search(r'\b(across\s+cluster|cluster[- ]wide)\b', text):
-        return "all"
 
     # 1. Interrogative Short-Circuit: "which namespace", "what ns", "how many namespaces"
     if re.search(r'\b(which|what|how many|list all|show all)\b\s+(?:namespaces|namespace|ns)\b', text):
@@ -288,7 +284,7 @@ def build_agent():
         
         _needs_ns = bool(_tools_used - _EXEMPT_TOOLS - {""})
         
-        # --- DYNAMIC GUARDRAIL ---
+        # Guardrail
         _ns_prefix = ""
         if _needs_ns:
             detected_ns = _extract_namespace(original_question)
@@ -477,7 +473,14 @@ def build_agent():
 
         for tc in tcs:
             name, args = tc["name"], dict(tc.get("args", {}) or {})
+        for tc in tcs:
+            name, args = tc["name"], dict(tc.get("args", {}) or {})
             
+            # Catch LLM hallucinations before the interceptor runs
+            bad_ns = ["cluster", "across the cluster", "entire cluster", "any", "none"]
+            if args.get("namespace", "").lower() in bad_ns:
+                args["namespace"] = "all"
+
             # Override LLM's namespace choice with our deterministic mapper
             if "namespace" in args and forced_ns != "all":
                 args["namespace"] = forced_ns
@@ -487,7 +490,6 @@ def build_agent():
             tools_called.append(name)
             updates.append(f"$ {args['command']}" if name == "kubectl_exec" and "command" in args else f"⚙️ {name}")
             
-            # Execute tool and log complete untruncated output
             out = _call_tool(name, args, all_tools)
             _out_str = str(out)
             _log_ag.info(f"[REQ:{state.get('req_id', '')}] [tool_node] {name} returned {len(_out_str)} chars:\n{_out_str}")
@@ -503,7 +505,7 @@ def build_agent():
                 updates.append("⚡ Direct output (LLM synthesis skipped)")
                 direct_answer = out
                 
-        # --- SKIP SYNTHESISE ---
+        # SKIP SYNTHESISE
         if forced_skip and direct_answer is None and results:
             updates.append("⚡ Skip Synthesise toggled: LLM synthesis bypassed")
             config.logger.info(f"[REQ:{state.get('req_id', '')}] [tool_node] Skip Synthesise is ON for query: {user_q!r}. Overriding normal sequence...")
@@ -840,25 +842,15 @@ async def api_index(request: Request):
     return {
         "description": "Cloudera ECS AI Ops — curl-friendly REST API",
         "endpoints": [
-            {"method": "GET",  "path": "/api/info",           "description": "Model, GPU, cluster info"},
             {"method": "POST", "path": "/api/ask",            "description": "Ask the AI chatbot (blocking)",
              "curl": f'curl -s -X POST {base}/api/ask -H "Content-Type: application/json" -d \'{{"q":"list all pods with problems", "skip_synthesise": true}}\''},
             {"method": "POST", "path": "/api/tool",           "description": "Call a specific K8s tool directly",
              "curl": f'curl -s -X POST {base}/api/tool -H "Content-Type: application/json" -d \'{{"name":"get_pod_status","args":{{"namespace":"all","show_all":true}}}}\''},
             {"method": "GET",  "path": "/api/tools",          "description": "List all registered tools and their signatures"},
-            {"method": "GET",  "path": "/api/pods",           "description": "Pod health summary  (optional: ?ns=cdp-drs)"},
-            {"method": "GET",  "path": "/api/pods/raw",       "description": "kubectl-style pod table  (optional: ?ns=cdp-drs)",
              "curl": f"curl -s '{base}/api/pods/raw?ns=longhorn-system'"},
-            {"method": "GET",  "path": "/api/nodes",          "description": "Node health and GPU summary"},
-            {"method": "GET",  "path": "/api/events",         "description": "Cluster events  (optional: ?ns=X&warn=1 for warnings only)",
-             "curl": f"curl -s '{base}/api/events?warn=1'"},
-            {"method": "GET",  "path": "/api/deployments",    "description": "Deployment status  (optional: ?ns=X)"},
-            {"method": "GET",  "path": "/api/pvcs",           "description": "PVC / storage status  (optional: ?ns=X)"},
-            {"method": "GET",  "path": "/api/namespaces",     "description": "All namespaces and their status"},
             {"method": "GET",  "path": "/api/rag/stats",      "description": "LanceDB document and Excel row statistics"},
             {"method": "GET",  "path": "/api/rag/files",      "description": "List all previously ingested filenames"},
             {"method": "GET",  "path": "/api/rag/query",      "description": "RAG-only query for Knowledge Bot (no LLM, no truncation)"},
-            {"method": "GET",  "path": "/metrics",            "description": "Live CPU / RAM / GPU metrics"},
         ],
     }
 
@@ -1001,55 +993,6 @@ async def api_tools():
                 params[pname] = {"default": None if p.default is _inspect.Parameter.empty else p.default, "required": p.default is _inspect.Parameter.empty}
         out[name] = {"description": entry.get("description", ""), "parameters": params}
     return {"count": len(out), "tools": out}
-
-@app.get("/api/pods")
-async def api_pods(ns: str = "all"):
-    from tools.tools_k8s import get_pod_status
-    import asyncio
-    raw = await asyncio.get_event_loop().run_in_executor(None, lambda: get_pod_status(namespace=ns, show_all=True, raw_output=False))
-    return {"namespace": ns, "output": raw}
-
-@app.get("/api/pods/raw")
-async def api_pods_raw(ns: str = "all"):
-    from tools.tools_k8s import get_pod_status
-    import asyncio
-    raw = await asyncio.get_event_loop().run_in_executor(None, lambda: get_pod_status(namespace=ns, show_all=True, raw_output=True))
-    return {"namespace": ns, "output": raw}
-
-@app.get("/api/nodes")
-async def api_nodes():
-    from tools.tools_k8s import get_node_info
-    import asyncio
-    raw = await asyncio.get_event_loop().run_in_executor(None, get_node_info)
-    return {"output": raw}
-
-@app.get("/api/events")
-async def api_events(ns: str = "all", warn: int = 0):
-    from tools.tools_k8s import get_events
-    import asyncio
-    raw = await asyncio.get_event_loop().run_in_executor(None, lambda: get_events(namespace=ns, warning_only=bool(warn)))
-    return {"namespace": ns, "warnings_only": bool(warn), "output": raw}
-
-@app.get("/api/deployments")
-async def api_deployments(ns: str = "all"):
-    from tools.tools_k8s import get_deployment_status
-    import asyncio
-    raw = await asyncio.get_event_loop().run_in_executor(None, lambda: get_deployment_status(namespace=ns))
-    return {"namespace": ns, "output": raw}
-
-@app.get("/api/pvcs")
-async def api_pvcs(ns: str = "all"):
-    from tools.tools_k8s import get_pvc_status
-    import asyncio
-    raw = await asyncio.get_event_loop().run_in_executor(None, lambda: get_pvc_status(namespace=ns))
-    return {"namespace": ns, "output": raw}
-
-@app.get("/api/namespaces")
-async def api_namespaces():
-    from tools.tools_k8s import get_namespace_status
-    import asyncio
-    raw = await asyncio.get_event_loop().run_in_executor(None, get_namespace_status)
-    return {"output": raw}
 
 @app.get("/api/rag/stats")
 async def api_rag_stats():

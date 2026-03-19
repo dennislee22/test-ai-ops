@@ -2674,14 +2674,12 @@ def get_service(namespace: str = "all", search: str = None) -> str:
     Always shows a Markdown table, even if fallback to all services.
     """
     try:
-        # Fetch services
         svcs = (_core.list_service_for_all_namespaces()
                 if namespace == "all"
                 else _core.list_namespaced_service(namespace=namespace))
         if not svcs.items:
             return f"No services found in '{namespace}'."
 
-        # Filter services by search
         table_rows = []
         for svc in svcs.items:
             if search and search.lower() not in svc.metadata.name.lower():
@@ -3288,7 +3286,6 @@ def run_cluster_health(namespace: str = "all", show_all: bool = True, raw_output
     try:
         report = []
 
-        # --- Nodes health ---
         nodes = _core.list_node().items
         critical_nodes, moderate_nodes = [], []
         node_capacity = {}
@@ -3312,11 +3309,9 @@ def run_cluster_health(namespace: str = "all", show_all: bool = True, raw_output
         if moderate_nodes:
             report.append(f"  Moderate (Pressure issues): {len(moderate_nodes)} — {', '.join(moderate_nodes)}")
 
-        # --- Namespaces and Pods ---
         ns_status = get_namespace_status(namespace=namespace, show_all=show_all)
         report.append("\nNamespace/Pod summary:\n" + ns_status)
 
-        # --- PVCs ---
         pvcs = _core.list_persistent_volume_claim_for_all_namespaces().items
         unbound_pvcs = [f"{p.metadata.namespace}/{p.metadata.name}" for p in pvcs if p.status.phase != "Bound"]
         if unbound_pvcs:
@@ -3324,7 +3319,6 @@ def run_cluster_health(namespace: str = "all", show_all: bool = True, raw_output
             if raw_output:
                 report.extend(f"  {p}" for p in unbound_pvcs)
 
-        # --- Ingresses ---
         _net = _k8s.NetworkingV1Api()
         ingresses = _net.list_ingress_for_all_namespaces().items
         failed_ing = [f"{i.metadata.namespace}/{i.metadata.name}" for i in ingresses if not i.status.load_balancer.ingress]
@@ -3333,7 +3327,6 @@ def run_cluster_health(namespace: str = "all", show_all: bool = True, raw_output
             if raw_output:
                 report.extend(f"  {i}" for i in failed_ing)
 
-        # --- Core system components ---
         core_system_ns = ["kube-system", "coredns", "longhorn-system", "ingress-nginx"]
         system_unhealthy = []
         for ns in core_system_ns:
