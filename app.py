@@ -215,15 +215,16 @@ def _build_llm_gguf():
 
 def _extract_namespace(text: str) -> str:
     text = text.lower()
-
+        
     # 1. Interrogative Short-Circuit: "which namespace", "what ns", "how many namespaces"
     if re.search(r'\b(which|what|how many|list all|show all)\b\s+(?:namespaces|namespace|ns)\b', text):
         return "all"
     
-    # 2. Map known hardcoded keywords
-    for keyword, actual_ns in LOCAL_NS_MAP.items():
+    # 2. Map known hardcoded keywords (Sort by length descending: cdp-services, cdp-keda, cdp...)
+    sorted_keywords = sorted(LOCAL_NS_MAP.keys(), key=len, reverse=True)
+    for keyword in sorted_keywords:
         if re.search(rf'\b{keyword}\b', text):
-            return actual_ns
+            return LOCAL_NS_MAP[keyword]
 
     # 3. Explicit "all namespaces", "all ns", or "-a" flag
     if re.search(r'\ball\b[^a-z0-9-]+(?:namespace|namespaces|namespac|namespcs|ns)\b', text) or "-a" in text.split():
