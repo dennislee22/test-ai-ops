@@ -154,15 +154,18 @@ K8S_TOOL_METADATA: dict = {
         "fn":          describe_pod,
         "description": (
             "Get detailed info about pods: container states, restart count, "
-            "last termination reason (e.g. OOMKilled, Error), and CPU/memory requests and limits per container. "
-            "Supports searching by pod name and namespace. "
+            "last termination reason (e.g., OOMKilled, Error), and CPU/memory requests and limits per container. "
+            "Supports searching by exact pod name or partial pod name across namespaces. "
+            "Optionally output the full YAML of the pod. "
             "Use for: 'what are the resource limits for pod X', 'why did pod X crash', "
             "'what is the memory limit for pod X', or any OOMKilled diagnosis. "
             "This is the ONLY tool that shows per-pod resource limits and termination reasons."
         ),
         "parameters":  {
-            "search":    {"type": "string", "description": "Partial pod name to search for across namespaces."},
-            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
+            "pod_name":   {"type": "string",  "description": "Exact pod name to fetch details for. Optional if using 'search'."},
+            "search":     {"type": "string",  "description": "Partial pod name to search for across namespaces. Optional if using 'pod_name'."},
+            "namespace":  {"type": "string",  "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
+            "show_yaml":  {"type": "boolean", "default": False, "description": "true = output full pod YAML instead of human-readable describe-style summary."},
         },
     },
     
