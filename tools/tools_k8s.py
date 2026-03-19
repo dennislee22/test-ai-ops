@@ -479,33 +479,151 @@ def get_pod_containers_resources(namespace: str = "all", search: str | None = No
         return _api_error(e)
 
 
-def get_pod_status(namespace: str = "all", search: str | None = None) -> str:
+
+# Phases that map to "not running" intent words
+_NOT_RUNNING_PHASES = ("Pending", "Failed", "Unknown")
+# Words Claude might pass meaning "show only non-Running pods"
+_NOT_RUNNING_WORDS  = {
+    "notrunning", "not_running", "not-running",
+    "unhealthy", "failed", "failing",
+    "pending", "unknown",
+    "bad", "broken", "down", "stuck", "problem", "issue",
+}
+
+
+def get_pod_status(namespace: str = "all", search: str | None = None,
+                   phase: str | None = None) -> str:
+    """
+    List pods with their phase, readiness, restart count and failed conditions.
+
+    phase parameter behaviour:
+      - None / omitted   → all pods (existing behaviour)
+      - "notrunning"     → only Pending, Failed, Unknown pods (uses field_selector
+                           at API level — no in-memory filtering of large pod lists)
+      - any specific phase string ("Pending", "Failed", "Running", …)
+                         → only pods in that exact phase
+    """
     try:
-        pods = _list_pods(namespace)
+        # ── Normalise phase intent ────────────────────────────────────────────
+        phase_filter: str | None = None   # None = fetch all
+        not_running_mode = False
+
+        if phase:
+            p = phase.strip().lower().replace(" ", "")
+            if p in _NOT_RUNNING_WORDS:
+                not_running_mode = True   # fetch Pending+Failed+Unknown via 3 calls
+            else:
+                # Capitalise properly so field_selector works: "running" → "Running"
+                phase_filter = phase.strip().capitalize()
+
+        # ── Fetch pods ────────────────────────────────────────────────────────
+        if not_running_mode:
+            # API field_selector only supports = not !=, so three targeted calls
+            pods = []
+            for p in _NOT_RUNNING_PHASES:
+                try:
+                    if namespace == "all":
+                        pods += _core.list_pod_for_all_namespaces(
+                            field_selector=f"status.phase={p}").items
+                    else:
+                        pods += _core.list_namespaced_pod(
+                            namespace=namespace,
+                            field_selector=f"status.phase={p}").items
+                except ApiException:
+                    pass
+        elif phase_filter:
+            # Single phase via field_selector
+            fs = f"status.phase={phase_filter}"
+            if namespace == "all":
+                pods = _core.list_pod_for_all_namespaces(field_selector=fs).items
+            else:
+                pods = _core.list_namespaced_pod(namespace=namespace, field_selector=fs).items
+        else:
+            pods = _list_pods(namespace)
+
         if not pods:
+            if not_running_mode:
+                return _ns_header("Pods", namespace) + "\n✅ All pods are Running — no Pending/Failed/Unknown pods found."
+            if phase_filter:
+                return _ns_header("Pods", namespace) + f"\nNo pods in phase `{phase_filter}` found."
             return f"No pods found in '{namespace}'."
+
+        # ── Name/search filter (in-memory, after API phase filter) ────────────
         filtered = _filter_pods(pods, search)
+
+        # ── Build rows ────────────────────────────────────────────────────────
         rows = []
-        for pod in filtered:
-            phase    = pod.status.phase or "Unknown"
+        for pod in sorted(filtered, key=lambda p: (p.metadata.namespace, p.metadata.name)):
+            ph       = pod.status.phase or "Unknown"
             restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
             ready    = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
             total    = len(pod.spec.containers)
             conds    = [f"{c.type}={c.status}" for c in (pod.status.conditions or []) if c.status != "True"]
-            rows.append((pod.metadata.namespace, pod.metadata.name, phase,
-                         f"{ready}/{total}", restarts, ", ".join(conds) if conds else "-"))
-        lines = [_ns_header("Pods", namespace, search)]
-        if namespace == "all":
-            lines += ["| NAMESPACE | NAME | STATUS | READY | RESTARTS | CONDITIONS |", "|---|---|---|---|---|---|"]
-            for ns, nm, ph, rd, rs, cd in rows:
-                lines.append(f"| `{ns}` | `{nm}` | {ph} | {rd} | {rs} | {cd} |")
+
+            # For not-running pods also surface the first waiting/terminated reason
+            reason = ""
+            if not_running_mode or (phase_filter and phase_filter != "Running"):
+                for cs in (pod.status.container_statuses or []):
+                    if cs.state and cs.state.waiting and cs.state.waiting.reason:
+                        reason = cs.state.waiting.reason
+                        break
+                    if cs.state and cs.state.terminated and cs.state.terminated.reason:
+                        reason = cs.state.terminated.reason
+                        break
+
+            rows.append((pod.metadata.namespace, pod.metadata.name, ph,
+                         f"{ready}/{total}", restarts,
+                         ", ".join(conds) if conds else "-",
+                         reason))
+
+        # ── Compose header ────────────────────────────────────────────────────
+        if not_running_mode:
+            kind_label = "Non-Running Pods (Pending / Failed / Unknown)"
+        elif phase_filter:
+            kind_label = f"Pods (phase={phase_filter})"
         else:
-            lines += ["| NAME | STATUS | READY | RESTARTS | CONDITIONS |", "|---|---|---|---|---|"]
-            for _, nm, ph, rd, rs, cd in rows:
-                lines.append(f"| `{nm}` | {ph} | {rd} | {rs} | {cd} |")
+            kind_label = "Pods"
+
+        lines = [_ns_header(kind_label, namespace, search)]
+
+        # ── Table ─────────────────────────────────────────────────────────────
+        show_reason = not_running_mode or (phase_filter and phase_filter != "Running")
+
+        if namespace == "all":
+            if show_reason:
+                lines += ["| NAMESPACE | NAME | STATUS | READY | RESTARTS | REASON | CONDITIONS |",
+                          "|---|---|---|---|---|---|---|"]
+                for ns, nm, ph, rd, rs, cd, rsn in rows:
+                    lines.append(f"| `{ns}` | `{nm}` | {ph} | {rd} | {rs} | {rsn or '-'} | {cd} |")
+            else:
+                lines += ["| NAMESPACE | NAME | STATUS | READY | RESTARTS | CONDITIONS |",
+                          "|---|---|---|---|---|---|"]
+                for ns, nm, ph, rd, rs, cd, _ in rows:
+                    lines.append(f"| `{ns}` | `{nm}` | {ph} | {rd} | {rs} | {cd} |")
+        else:
+            if show_reason:
+                lines += ["| NAME | STATUS | READY | RESTARTS | REASON | CONDITIONS |",
+                          "|---|---|---|---|---|---|"]
+                for _, nm, ph, rd, rs, cd, rsn in rows:
+                    lines.append(f"| `{nm}` | {ph} | {rd} | {rs} | {rsn or '-'} | {cd} |")
+            else:
+                lines += ["| NAME | STATUS | READY | RESTARTS | CONDITIONS |",
+                          "|---|---|---|---|---|"]
+                for _, nm, ph, rd, rs, cd, _ in rows:
+                    lines.append(f"| `{nm}` | {ph} | {rd} | {rs} | {cd} |")
+
+        # Helpful hint when showing non-running pods
+        if not_running_mode and rows:
+            lines.append(
+                f"\n_{len(rows)} non-running pod(s) found. "
+                "Ask for details on a specific pod to see logs and events._"
+            )
+
         return "\n".join(lines)
+
     except ApiException as e:
         return _api_error(e)
+
 
 
 def get_pod_logs(namespace: str = "all", search: str | None = None,
@@ -1838,13 +1956,19 @@ def get_gpu_info() -> str:
 
 def find_resource(name_substring: str, resource_type: str = None, namespace: str = None) -> str:
     try:
-        resource_type = resource_type.lower() if resource_type else None
-
-        # Treat vague intent words as "no filter" so "show me all" works the same
-        # as passing an empty name_substring.
+        # Treat vague intent words as "no filter" for both arguments
         _INTENT_WORDS = {"all", "any", "everything", "anything", "every", "show", "list"}
+
         if name_substring and name_substring.strip().lower() in _INTENT_WORDS:
             name_substring = ""
+
+        # Normalise resource_type — unknown/vague values mean "search all types"
+        _VALID_TYPES = {"pod", "svc", "service", "ingress", "pvc"}
+        if resource_type:
+            rt = resource_type.strip().lower()
+            resource_type = rt if rt in _VALID_TYPES else None
+        else:
+            resource_type = None
 
         results = []
 
@@ -1857,6 +1981,7 @@ def find_resource(name_substring: str, resource_type: str = None, namespace: str
                         f"| {item.metadata.name} | {details_fn(item)} |"
                     )
 
+        # Build resource list based on type filter
         resources = []
         if not resource_type or resource_type == "pod":
             pods = (_core.list_namespaced_pod(namespace).items if namespace
@@ -1884,11 +2009,11 @@ def find_resource(name_substring: str, resource_type: str = None, namespace: str
         for kind, items, fn in resources:
             add(kind, items, fn)
 
-        # Fallback — if nothing matched, show everything (force=True bypasses name filter)
+        # Fallback — if a named search yielded nothing, show everything so the
+        # user gets context rather than a silent empty table
         if not results and name_substring:
             for kind, items, fn in resources:
                 add(kind, items, fn, force=True)
-            # Prepend a note so Claude knows we fell back
             fallback_note = (f"No resources found matching `{name_substring}`. "
                              f"Showing all resources instead.")
             lines = [fallback_note,
@@ -1896,58 +2021,246 @@ def find_resource(name_substring: str, resource_type: str = None, namespace: str
                      "|---|---|---|---|"]
             return "\n".join(lines + results)
 
-        scope = f"namespace `{namespace}`" if namespace else "all namespaces"
+        scope       = f"namespace `{namespace}`" if namespace else "all namespaces"
         filter_note = f" matching `{name_substring}`" if name_substring else ""
-        header = f"Showing resources{filter_note} in {scope}."
-        lines = [header,
-                 "| Resource Type | Namespace | Name | Status/Details |",
-                 "|---|---|---|---|"]
+        header      = f"Showing resources{filter_note} in {scope}."
+        lines       = [header,
+                       "| Resource Type | Namespace | Name | Status/Details |",
+                       "|---|---|---|---|"]
         return "\n".join(lines + results)
 
     except Exception as e:
         return f"Unexpected error: {e}"
 
 
-def run_cluster_health(namespace: str = "all", show_all: bool = True, raw_output: bool = True) -> str:
+_SYSTEM_NAMESPACES = ("kube-system", "coredns", "longhorn-system", "ingress-nginx")
+_MAX_DETAIL_ITEMS  = 5   # max names shown inline before "(+N more)"
+
+
+def _cap(items: list, max_n: int = _MAX_DETAIL_ITEMS) -> str:
+    """Render up to max_n items inline; suffix with (+N more) if list is longer."""
+    shown = items[:max_n]
+    rest  = len(items) - max_n
+    s     = ", ".join(f"`{x}`" for x in shown)
+    return s + (f" (+{rest} more)" if rest > 0 else "")
+
+
+def run_cluster_health(namespace: str = "all") -> str:
+    """
+    Scorecard-style cluster health report. One line per check — only failures
+    get extra detail. Designed to be token-efficient while still giving Claude
+    enough signal to answer 'is my cluster ok?' in one sentence.
+    """
+    now_str = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    out     = [f"Cluster Health Report — {now_str}", ""]
+
+    criticals = 0   # counts of critical issues
+    warnings  = 0   # counts of warnings
+    healthy   = []  # names of sections that are fully green
+
+    # ── 1. Nodes ─────────────────────────────────────────────────────────────
+    out.append("── Nodes " + "─" * 52)
     try:
-        report = []
-        nodes  = _core.list_node().items
-        critical, moderate = [], []
+        nodes = _core.list_node().items
+        not_ready    = []
+        mem_pressure = []
+        disk_pressure = []
         for node in nodes:
             conds = {c.type: c.status for c in (node.status.conditions or [])}
-            if conds.get("Ready") != "True": critical.append(node.metadata.name)
-            elif conds.get("MemoryPressure") == "True" or conds.get("DiskPressure") == "True":
-                moderate.append(node.metadata.name)
-        report.append(f"Nodes: {len(nodes)} total")
-        if critical: report.append(f"  Critical (Not Ready): {len(critical)} — {', '.join(critical)}")
-        if moderate: report.append(f"  Moderate (Pressure issues): {len(moderate)} — {', '.join(moderate)}")
-        report.append("\nNamespace/Pod summary:\n" + get_namespace_status(namespace=namespace, show_all=show_all))
-        pvcs = _core.list_persistent_volume_claim_for_all_namespaces().items
-        unbound = [f"{p.metadata.namespace}/{p.metadata.name}" for p in pvcs if p.status.phase != "Bound"]
-        if unbound:
-            report.append(f"\nPersistentVolumeClaims not bound: {len(unbound)}")
-            if raw_output: report.extend(f"  {p}" for p in unbound)
-        ingresses = _net.list_ingress_for_all_namespaces().items
-        failed_ing = [f"{i.metadata.namespace}/{i.metadata.name}"
-                      for i in ingresses if not i.status.load_balancer.ingress]
-        if failed_ing:
-            report.append(f"\nIngresses without active load balancer: {len(failed_ing)}")
-            if raw_output: report.extend(f"  {i}" for i in failed_ing)
-        system_unhealthy = []
-        for ns in ("kube-system","coredns","longhorn-system","ingress-nginx"):
+            if conds.get("Ready") != "True":
+                not_ready.append(node.metadata.name)
+            else:
+                if conds.get("MemoryPressure") == "True":
+                    mem_pressure.append(node.metadata.name)
+                if conds.get("DiskPressure") == "True":
+                    disk_pressure.append(node.metadata.name)
+
+        total = len(nodes)
+        bad   = len(not_ready)
+        if not_ready:
+            out.append(f"🔴 {total - bad}/{total} nodes Ready — Not Ready: {_cap(not_ready)}")
+            criticals += 1
+        else:
+            out.append(f"✅ {total}/{total} nodes Ready")
+        if mem_pressure:
+            out.append(f"⚠️  MemoryPressure: {_cap(mem_pressure)}")
+            warnings += 1
+        if disk_pressure:
+            out.append(f"⚠️  DiskPressure: {_cap(disk_pressure)}")
+            warnings += 1
+        if not not_ready and not mem_pressure and not disk_pressure:
+            healthy.append("Nodes")
+    except Exception as e:
+        out.append(f"⚠️  Could not check nodes: {e}")
+        warnings += 1
+
+    # ── 2. System Pods ───────────────────────────────────────────────────────
+    out.append("\n── System Pods " + "─" * 45)
+    try:
+        for ns in _SYSTEM_NAMESPACES:
             try:
-                for pod in _core.list_namespaced_pod(namespace=ns, limit=1000).items:
-                    ready = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
-                    if ready < len(pod.spec.containers):
-                        system_unhealthy.append(f"{ns}/{pod.metadata.name}")
+                pods = _core.list_namespaced_pod(namespace=ns, limit=500).items
+                if not pods:
+                    continue
+                unhealthy = [p.metadata.name for p in pods
+                             if sum(1 for cs in (p.status.container_statuses or []) if cs.ready)
+                             < len(p.spec.containers or [])]
+                total = len(pods)
+                if unhealthy:
+                    out.append(f"⚠️  {ns}: {len(unhealthy)}/{total} pods not ready — {_cap(unhealthy)}")
+                    warnings += 1
+                else:
+                    out.append(f"✅ {ns}: {total}/{total} pods ready")
             except Exception:
                 pass
-        if system_unhealthy:
-            report.append(f"\nSystem components with unhealthy pods: {len(system_unhealthy)}")
-            if raw_output: report.extend(f"  {p}" for p in system_unhealthy)
-        return "\n".join(report)
     except Exception as e:
-        return f"[ERROR] Unexpected error: {e}"
+        out.append(f"⚠️  Could not check system pods: {e}")
+        warnings += 1
+
+    # ── 3. Workloads ─────────────────────────────────────────────────────────
+    out.append("\n── Workloads " + "─" * 47)
+    try:
+        # Deployments
+        deps = _apps.list_deployment_for_all_namespaces().items
+        dep_bad = [f"{d.metadata.namespace}/{d.metadata.name}" for d in deps
+                   if (d.spec.replicas or 0) > 0
+                   and (d.status.ready_replicas or 0) < (d.spec.replicas or 0)]
+        if dep_bad:
+            out.append(f"⚠️  {len(dep_bad)}/{len(deps)} Deployments degraded — {_cap(dep_bad)}")
+            warnings += 1
+        else:
+            out.append(f"✅ {len(deps)} Deployments healthy")
+
+        # DaemonSets
+        dss = _apps.list_daemon_set_for_all_namespaces().items
+        ds_bad = [f"{d.metadata.namespace}/{d.metadata.name}" for d in dss
+                  if (d.status.desired_number_scheduled or 0) > 0
+                  and (d.status.number_ready or 0) < (d.status.desired_number_scheduled or 0)]
+        if ds_bad:
+            out.append(f"⚠️  {len(ds_bad)}/{len(dss)} DaemonSets degraded — {_cap(ds_bad)}")
+            warnings += 1
+        else:
+            out.append(f"✅ {len(dss)} DaemonSets healthy")
+
+        # StatefulSets
+        stss = _apps.list_stateful_set_for_all_namespaces().items
+        sts_bad = [f"{s.metadata.namespace}/{s.metadata.name}" for s in stss
+                   if (s.spec.replicas or 0) > 0
+                   and (s.status.ready_replicas or 0) < (s.spec.replicas or 0)]
+        if sts_bad:
+            out.append(f"⚠️  {len(sts_bad)}/{len(stss)} StatefulSets degraded — {_cap(sts_bad)}")
+            warnings += 1
+        else:
+            out.append(f"✅ {len(stss)} StatefulSets healthy")
+
+        # Unhealthy pods (non-Running, non-Succeeded, or high-restart Running)
+        failed_pods = []
+        for phase in ("Pending", "Failed", "Unknown"):
+            try:
+                result = _core.list_pod_for_all_namespaces(
+                    field_selector=f"status.phase={phase}").items
+                failed_pods.extend(
+                    f"{p.metadata.namespace}/{p.metadata.name} ({phase})"
+                    for p in result)
+            except Exception:
+                pass
+        if failed_pods:
+            out.append(f"🔴 {len(failed_pods)} pod(s) not running — {_cap(failed_pods)}")
+            criticals += 1
+        else:
+            out.append("✅ No failed/pending pods")
+
+        if not dep_bad and not ds_bad and not sts_bad and not failed_pods:
+            healthy.append("Workloads")
+
+    except Exception as e:
+        out.append(f"⚠️  Could not check workloads: {e}")
+        warnings += 1
+
+    # ── 4. Storage ───────────────────────────────────────────────────────────
+    out.append("\n── Storage " + "─" * 49)
+    try:
+        pvcs = _core.list_persistent_volume_claim_for_all_namespaces().items
+        bound   = [p for p in pvcs if p.status.phase == "Bound"]
+        unbound = [f"{p.metadata.namespace}/{p.metadata.name}"
+                   for p in pvcs if p.status.phase != "Bound"]
+        if unbound:
+            out.append(f"🔴 {len(unbound)}/{len(pvcs)} PVCs not Bound — {_cap(unbound)}")
+            criticals += 1
+        else:
+            out.append(f"✅ {len(bound)}/{len(pvcs)} PVCs Bound")
+        if not unbound:
+            healthy.append("Storage")
+    except Exception as e:
+        out.append(f"⚠️  Could not check PVCs: {e}")
+        warnings += 1
+
+    # ── 5. Networking ────────────────────────────────────────────────────────
+    out.append("\n── Networking " + "─" * 46)
+    try:
+        ings = _net.list_ingress_for_all_namespaces().items
+        no_lb = [f"{i.metadata.namespace}/{i.metadata.name}"
+                 for i in ings
+                 if not (i.status.load_balancer and i.status.load_balancer.ingress)]
+        if no_lb:
+            out.append(f"⚠️  {len(no_lb)}/{len(ings)} Ingresses missing LB IP — {_cap(no_lb)}")
+            warnings += 1
+        elif ings:
+            out.append(f"✅ {len(ings)} Ingresses with LB IP")
+        else:
+            out.append("✅ No Ingresses defined")
+        if not no_lb:
+            healthy.append("Networking")
+    except Exception as e:
+        out.append(f"⚠️  Could not check Ingresses: {e}")
+        warnings += 1
+
+    # ── 6. Recent Warning Events ─────────────────────────────────────────────
+    out.append("\n── Recent Warning Events " + "─" * 36)
+    try:
+        events = _core.list_event_for_all_namespaces(
+            field_selector="type=Warning", limit=200).items
+        # Deduplicate by reason+object, keep highest count
+        seen: dict = {}
+        for e in events:
+            if _is_noisy_event(e.message or ""):
+                continue
+            key = (e.reason or "", getattr(e.involved_object, "name", ""))
+            prev = seen.get(key)
+            if prev is None or (e.count or 1) > (prev[0] or 1):
+                seen[key] = (e.count or 1, e.metadata.namespace, e.reason, key[1], e.message or "")
+        top = sorted(seen.values(), key=lambda x: x[0], reverse=True)[:8]
+        if top:
+            for count, ns, reason, obj, msg in top:
+                short_msg = msg[:60] + "…" if len(msg) > 60 else msg
+                out.append(f"⚠️  {reason:<22} {ns}/{obj}  {short_msg}  (x{count})")
+            warnings += len(top)
+        else:
+            out.append("✅ No recent warning events")
+            healthy.append("Events")
+    except Exception as e:
+        out.append(f"⚠️  Could not fetch events: {e}")
+        warnings += 1
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    out.append("\n── Summary " + "─" * 49)
+    if criticals:
+        out.append(f"🔴 {criticals} critical issue(s) require attention")
+    if warnings:
+        out.append(f"🟠 {warnings} warning(s) detected")
+    if healthy:
+        out.append(f"✅ Healthy: {', '.join(healthy)}")
+    if criticals == 0 and warnings == 0:
+        out.append("✅ Cluster is healthy — all checks passed")
+
+    # ── Footer ────────────────────────────────────────────────────────────────
+    out.append("")
+    out.append("─" * 60)
+    out.append("💬 Continue asking to drill into any specific area above.")
+    out.append("📋 For a complete and comprehensive health check report,")
+    out.append("   click **Healthcheck Report** via ⚙ Settings.")
+
+    return "\n".join(out)
 
 
 def get_control_plane_status() -> str:
