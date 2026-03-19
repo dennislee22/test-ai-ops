@@ -344,14 +344,14 @@ def get_pod_containers_resources(namespace: str = "all", search: str | None = No
     except ApiException as e:
         return f"K8s API error: {e.reason}"
     
-def get_pod_status(namespace: str = "all", search: str | None = None, show_all: bool = False, phase_only: bool = False) -> str:
+def get_pod_status(namespace: str = "all", search: str | None = None, show_all: bool = False) -> str:
     try:
         if namespace != "all":
             try:
                 _core.read_namespace(name=namespace)
             except ApiException as e:
                 if e.status == 404:
-                    return f"Namespace '{namespace}' does not exist in this cluster. Cannot report pod status."
+                    return f"Namespace '{namespace}' does not exist in this cluster."
                 raise
 
         pods = (_core.list_pod_for_all_namespaces().items
@@ -361,58 +361,63 @@ def get_pod_status(namespace: str = "all", search: str | None = None, show_all: 
         if not pods:
             return f"No pods found in namespace '{namespace}'."
 
-        filtered_pods = []
         if search:
             search_lower = search.lower()
-            for pod in pods:
-                if search_lower in pod.metadata.name.lower() or (namespace != "all" and search_lower in pod.metadata.namespace.lower()):
-                    filtered_pods.append(pod)
+            filtered_pods = [
+                pod for pod in pods
+                if search_lower in pod.metadata.name.lower()
+            ]
         else:
             filtered_pods = pods
 
         if search and not filtered_pods:
-            filtered_pods = pods
+            return f"No pods matching '{search}' found in namespace '{namespace}'."
 
-        non_running = []
-        if not show_all:
-            for pod in filtered_pods:
-                phase = pod.status.phase or "Unknown"
-                restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
-                ready = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
-                tot = len(pod.spec.containers)
-                if phase not in ("Running", "Succeeded") or ready < tot or _is_high_restart(pod, restarts):
-                    non_running.append(pod)
-
-        if phase_only:
-            display_pods = non_running if non_running else filtered_pods
-        elif show_all:
-            display_pods = filtered_pods
-        else:
-            display_pods = non_running if non_running else filtered_pods
+        display_pods = filtered_pods if show_all else filtered_pods
 
         total = len(display_pods)
+
         lines = [f"### Pods in '{namespace}' ({total} total)\n"]
+
         if namespace == "all":
-            lines.extend(["| NAMESPACE | NAME | STATUS | READY | RESTARTS | CONDITIONS |", "|---|---|---|---|---|---|"])
+            lines.extend([
+                "| NAMESPACE | NAME | STATUS | READY | RESTARTS | CONDITIONS |",
+                "|---|---|---|---|---|---|"
+            ])
         else:
-            lines.extend(["| NAME | STATUS | READY | RESTARTS | CONDITIONS |", "|---|---|---|---|---|"])
+            lines.extend([
+                "| NAME | STATUS | READY | RESTARTS | CONDITIONS |",
+                "|---|---|---|---|---|"
+            ])
 
         for pod in display_pods:
             phase = pod.status.phase or "Unknown"
             restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
             ready = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
             tot = len(pod.spec.containers)
-            bad = [f"{c.type}={c.status}" for c in (pod.status.conditions or []) if c.status != "True"]
+
+            bad = [
+                f"{c.type}={c.status}"
+                for c in (pod.status.conditions or [])
+                if c.status != "True"
+            ]
             bad_str = ", ".join(bad) if bad else "-"
+
             if namespace == "all":
-                lines.append(f"| {pod.metadata.namespace} | {pod.metadata.name} | {phase} | {ready}/{tot} | {restarts} | {bad_str} |")
+                lines.append(
+                    f"| {pod.metadata.namespace} | {pod.metadata.name} | {phase} | {ready}/{tot} | {restarts} | {bad_str} |"
+                )
             else:
-                lines.append(f"| {pod.metadata.name} | {phase} | {ready}/{tot} | {restarts} | {bad_str} |")
+                lines.append(
+                    f"| {pod.metadata.name} | {phase} | {ready}/{tot} | {restarts} | {bad_str} |"
+                )
 
         return "\n".join(lines)
 
     except ApiException as e:
         return f"K8s API error: {e.reason}"
+    except Exception as e:
+        return f"Error fetching pods: {str(e)}"
     
 def get_pod_logs(namespace: str = "all", search: str | None = None,
                  tail_lines: int = 50, container: str = "") -> str:
