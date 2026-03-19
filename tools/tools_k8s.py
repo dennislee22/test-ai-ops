@@ -472,7 +472,7 @@ def get_pod_logs(namespace: str = "all", search: str | None = None,
 
         header = ""
         if namespace == "all":
-            header = "_As no namespace was specified, showing logs from all namespaces._\n\n"
+            header = "As no namespace was specified, I searched all namespaces and below is the result.\n\n"
 
         return header + "\n\n".join(log_entries)
 
