@@ -69,7 +69,7 @@ K8S_TOOL_METADATA: dict = {
     },
 
     "get_pod_status": {
-        "fn":          get_pod_status,
+        "fn": get_pod_status,
         "description": (
             "List and check runtime STATUS of Kubernetes pods. "
             "This is the PRIMARY tool for listing pods in a namespace or across the cluster. "
@@ -78,12 +78,14 @@ K8S_TOOL_METADATA: dict = {
             "'list pods', "
             "'list all pods in namespace X', "
             "'show pods in longhorn-system', "
-            "'how many pods are running', "
             "'which pods are unhealthy', "
-            "'search pods by partial name or namespace'. "
+            "'search pods by partial name'. "
 
-            "Supports namespace filtering and search by partial pod or namespace name. "
-            "Returns either only unhealthy pods (default) or ALL pods when show_all=true. "
+            "Supports namespace filtering and search by partial pod name. "
+            "Returns matching pods only (no hidden fallback). "
+            "If no pods match the search, the tool returns a 'no results' message. "
+
+            "Use show_all=true to include all pods instead of filtered results. "
 
             "Shows pod phase (Running/Pending/Failed/Unknown), container readiness, restart counts, "
             "and unhealthy conditions. "
@@ -91,25 +93,20 @@ K8S_TOOL_METADATA: dict = {
             "Do NOT use this tool for detailed per-container resource requests or limits — "
             "use get_pod_resource_requests for that purpose."
         ),
-        "parameters":  {
-            "namespace":   {
+        "parameters": {
+            "namespace": {
                 "type": "string",
                 "default": "all",
                 "description": "Namespace to query. Defaults to 'all' namespaces — set when user specifies a namespace."
             },
-            "search":      {
+            "search": {
                 "type": "string",
-                "description": "Optional search string to match pod names or namespaces (supports partial matches)."
+                "description": "Optional search string to match pod names (partial match only)."
             },
-            "show_all":    {
+            "show_all": {
                 "type": "boolean",
                 "default": False,
-                "description": "Set true to include ALL pods (healthy + unhealthy)."
-            },
-            "phase_only":  {
-                "type": "boolean",
-                "default": False,
-                "description": "Return only pods whose phase is Pending/Failed/Unknown."
+                "description": "Set true to include ALL pods (otherwise returns filtered results)."
             },
         },
     },

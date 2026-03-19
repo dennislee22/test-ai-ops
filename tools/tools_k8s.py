@@ -2664,61 +2664,85 @@ def get_coredns_health() -> str:
 
     return "\n".join(lines)
 
-def get_service(namespace: str = "all", search: str = None) -> str:
-    """
-    List Kubernetes services in a namespace or all namespaces.
-    Optionally filter by a search term in the service name.
-    Always shows a Markdown table, even if fallback to all services.
-    """
+def get_pod_status(namespace: str = "all", search: str | None = None, show_all: bool = False) -> str:
     try:
-        # Fetch services
-        svcs = (_core.list_service_for_all_namespaces()
+        # Validate namespace if explicitly provided
+        if namespace != "all":
+            try:
+                _core.read_namespace(name=namespace)
+            except ApiException as e:
+                if e.status == 404:
+                    return f"Namespace '{namespace}' does not exist in this cluster."
+                raise
+
+        # Fetch pods
+        pods = (_core.list_pod_for_all_namespaces().items
                 if namespace == "all"
-                else _core.list_namespaced_service(namespace=namespace))
-        if not svcs.items:
-            return f"No services found in '{namespace}'."
+                else _core.list_namespaced_pod(namespace=namespace).items)
 
-        # Filter services by search
-        table_rows = []
-        for svc in svcs.items:
-            if search and search.lower() not in svc.metadata.name.lower():
-                continue
-            stype    = svc.spec.type or "ClusterIP"
-            ports    = ", ".join(f"{p.port}/{p.protocol}" for p in (svc.spec.ports or []))
-            selector = svc.spec.selector or {}
-            flag     = "✓ Present" if selector else "⚠ No selector"
-            table_rows.append((svc.metadata.namespace, svc.metadata.name, stype, ports, flag))
+        if not pods:
+            return f"No pods found in namespace '{namespace}'."
 
-        # Fallback: show all services if search applied but no matches
-        fallback_msg = ""
-        if search and not table_rows:
-            #fallback_msg = f"No matches for '{search}'. Showing all services:\n"
-            fallback_msg = f"No matches. Showing all services:\n"
-            table_rows = []
-            for svc in svcs.items:
-                stype    = svc.spec.type or "ClusterIP"
-                ports    = ", ".join(f"{p.port}/{p.protocol}" for p in (svc.spec.ports or []))
-                selector = svc.spec.selector or {}
-                flag     = "✓ Present" if selector else "⚠ No selector"
-                table_rows.append((svc.metadata.namespace, svc.metadata.name, stype, ports, flag))
-
-        # Build Markdown table
-        md_lines = [fallback_msg] if fallback_msg else []
-        if namespace == "all":
-            md_lines.append("| NAMESPACE | NAME | TYPE | PORTS | SELECTOR STATUS |")
-            md_lines.append("|---|---|---|---|---|")
-            for ns, name, stype, ports, flag in table_rows:
-                md_lines.append(f"| `{ns}` | `{name}` | {stype} | {ports} | {flag} |")
+        # Filter by search (ONLY by name, like kubectl-style)
+        if search:
+            search_lower = search.lower()
+            filtered_pods = [
+                pod for pod in pods
+                if search_lower in pod.metadata.name.lower()
+            ]
         else:
-            md_lines.append("| NAME | TYPE | PORTS | SELECTOR STATUS |")
-            md_lines.append("|---|---|---|---|")
-            for _, name, stype, ports, flag in table_rows:
-                md_lines.append(f"| `{name}` | {stype} | {ports} | {flag} |")
+            filtered_pods = pods
 
-        return "\n".join(md_lines)
+        # ❗ No silent fallback — return clear message instead
+        if search and not filtered_pods:
+            return f"No pods matching '{search}' found in namespace '{namespace}'."
+
+        # Determine what to display
+        display_pods = filtered_pods if show_all else filtered_pods
+
+        total = len(display_pods)
+
+        lines = [f"### Pods in '{namespace}' ({total} total)\n"]
+
+        if namespace == "all":
+            lines.extend([
+                "| NAMESPACE | NAME | STATUS | READY | RESTARTS | CONDITIONS |",
+                "|---|---|---|---|---|---|"
+            ])
+        else:
+            lines.extend([
+                "| NAME | STATUS | READY | RESTARTS | CONDITIONS |",
+                "|---|---|---|---|---|"
+            ])
+
+        for pod in display_pods:
+            phase = pod.status.phase or "Unknown"
+            restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
+            ready = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
+            tot = len(pod.spec.containers)
+
+            bad = [
+                f"{c.type}={c.status}"
+                for c in (pod.status.conditions or [])
+                if c.status != "True"
+            ]
+            bad_str = ", ".join(bad) if bad else "-"
+
+            if namespace == "all":
+                lines.append(
+                    f"| {pod.metadata.namespace} | {pod.metadata.name} | {phase} | {ready}/{tot} | {restarts} | {bad_str} |"
+                )
+            else:
+                lines.append(
+                    f"| {pod.metadata.name} | {phase} | {ready}/{tot} | {restarts} | {bad_str} |"
+                )
+
+        return "\n".join(lines)
 
     except ApiException as e:
         return f"K8s API error: {e.reason}"
+    except Exception as e:
+        return f"Error fetching pods: {str(e)}"
 
 def get_ingress(namespace: str = "all", name: str = "", port: int = 0) -> str:
     def _get_ports(ing) -> list:
