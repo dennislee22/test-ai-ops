@@ -31,6 +31,9 @@ BYPASSABLE_TOOLS = {
 # Note: They must ALSO be listed in BYPASSABLE_TOOLS above.
 UNCONDITIONAL_BYPASS = {
     "describe_pod",
+    "describe_pvc",
+    "describe_pv",
+    "describe_sc",
     "get_events",
     "query_prometheus_metrics",
     "get_pod_logs",
