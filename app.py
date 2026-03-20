@@ -474,8 +474,6 @@ def build_agent():
 
         for tc in tcs:
             name, args = tc["name"], dict(tc.get("args", {}) or {})
-        for tc in tcs:
-            name, args = tc["name"], dict(tc.get("args", {}) or {})
 
             # 1. Catch LLM hallucinations before the interceptor runs
             bad_ns = ["cluster", "across the cluster", "entire cluster", "any", "none"]
@@ -552,6 +550,7 @@ def build_agent():
     return g.compile()
 
 _agent = None
+
 def get_agent():
     global _agent
     if _agent is None: 

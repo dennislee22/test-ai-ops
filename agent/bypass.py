@@ -54,14 +54,6 @@ LIST_INTENTS = (
 
 ALWAYS_SYNTHESISE = (
     r"\bwhy\b", r"\bhow\b", r"\bwhen\b", r"\bwhere\b", r"\bwho\b",
-    r"\bok\b", r"\bokay\b",
-    r"\bissue\b", r"\bproblem\b", r"\berror\b", r"\bwarning\b",
-    r"\bfail", r"\bbroken\b", r"\bdown\b", r"\bcrash",
-    r"\bcondition\b", r"\bpending\b", r"\bcrashloop\b", 
-    r"\bnot running\b", r"\bnot ready\b",
-    r"\btell me\b", r"\bexplain\b", r"\bdescribe\b", r"\bsummar",
-    r"\bmost\b", r"\bleast\b", r"\bcompare\b", r"\brank\b",
-    r"\bhow many\b", r"\bcount\b", r"\btop\b",
 )
 
 def should_bypass_llm(tool_name: str, args: dict,
