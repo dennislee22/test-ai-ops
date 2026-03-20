@@ -15,9 +15,6 @@ import yaml as _yaml
 from kubernetes import client as _k8s, config as _k8s_cfg
 from kubernetes.client.rest import ApiException
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Constants
-# ─────────────────────────────────────────────────────────────────────────────
 
 _KUBECTL_MAX_OUT     = 4_000
 _KUBECTL_READ_VERBS  = {
@@ -53,16 +50,10 @@ _EVENT_NOISE_PATTERNS = ["cgroup", "cgroupv", "cgroup v1", "cgroup v2"]
 _PG_SYSTEM_DBS        = {"postgres", "template0", "template1"}
 _MYSQL_SYSTEM_DBS     = {"information_schema", "performance_schema", "mysql", "sys"}
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Logging
-# ─────────────────────────────────────────────────────────────────────────────
 
 logging.basicConfig(level=logging.INFO)
 _log = logging.getLogger("k8s")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# API client singletons  (refactor #4 – single _init_api_clients() helper)
-# ─────────────────────────────────────────────────────────────────────────────
 
 _version_api: _k8s.VersionApi
 _storage:      _k8s.StorageV1Api
@@ -102,17 +93,11 @@ def _load_initial_k8s() -> None:
 _load_initial_k8s()
 _init_api_clients()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Shared helpers  (refactors #1 #2 #3 #7 #8 #9 #10)
-# ─────────────────────────────────────────────────────────────────────────────
 
-# #9 – single consistent error formatter
 def _api_error(e: ApiException) -> str:
     return f"[K8s API error {e.status}] {e.reason}"
 
 
-# Namespace-scope header — prepended to every tool output so Claude and the
-# user always know exactly what was searched, regardless of what was typed.
 def _ns_header(kind: str, namespace: str, search: str | None = None) -> str:
     """
     Returns a single plain sentence describing the query scope.
@@ -133,14 +118,12 @@ def _ns_header(kind: str, namespace: str, search: str | None = None) -> str:
     return f"Showing {prefix}{kind} in {scope}{filt}."
 
 
-# #1 – extracted pod-listing helper
 def _list_pods(namespace: str = "all") -> list:
     return (_core.list_pod_for_all_namespaces().items
             if namespace == "all"
             else _core.list_namespaced_pod(namespace=namespace).items)
 
 
-# #2 – extracted pod-filter helper with fallback-to-all
 def _filter_pods(pods: list, search: str | None) -> list:
     if not search:
         return pods
@@ -150,7 +133,6 @@ def _filter_pods(pods: list, search: str | None) -> list:
     return filtered if filtered else pods
 
 
-# #3 – extracted GPU-request helper
 def _get_gpu_requests(pod) -> str:
     reqs = [
         f"{c.name}:{v}"
@@ -161,7 +143,6 @@ def _get_gpu_requests(pod) -> str:
     return ", ".join(reqs) if reqs else "-"
 
 
-# #10 – module-level memory-unit converter (was redefined inside loop)
 def _to_mebibytes(val: str) -> str:
     try:
         if val.endswith("Ki"): return f"{int(int(val[:-2]) / 1024)}Mi"
@@ -173,12 +154,10 @@ def _to_mebibytes(val: str) -> str:
         return "0Mi"
 
 
-# #8 – single YAML dump helper used by all describe functions
 def _as_yaml(obj) -> str:
     return f"```yaml\n{_yaml.safe_dump(obj.to_dict(), sort_keys=False)}```"
 
 
-# #7 – single key-value formatter for describe output
 def _fmt_kv(label: str, d: dict | None, sep: str = "=", pad: int = 17) -> str:
     if not d:
         return f"{label:<{pad}} <none>"
@@ -337,10 +316,6 @@ def _search_filter(items: list, search: str | None, fallback: bool = True) -> li
     return filtered if filtered else (items if fallback else [])
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# kubeconfig management  (refactor #4)
-# ─────────────────────────────────────────────────────────────────────────────
-
 def reload_kubeconfig(yaml_content: str) -> dict:
     global _core, _apps, _batch, _rbac, _net, _autoscaling
     if not yaml_content.strip():
@@ -362,10 +337,6 @@ def reload_kubeconfig(yaml_content: str) -> dict:
     _log.info(f"[kubeconfig] Reloaded — server={server_url}")
     return {"ok": True, "server": server_url or "unknown"}
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Pod tools  (refactors #1 #2 #3 #10 #11)
-# ─────────────────────────────────────────────────────────────────────────────
 
 def get_pod_tolerations(namespace: str = "all", pod_name: str | None = None,
                         search: str | None = None) -> str:
@@ -418,7 +389,7 @@ def get_pod_resource_requests(namespace: str = "all", search: str | None = None)
         pods = _list_pods(namespace)
         if not pods:
             return f"No pods found in namespace '{namespace}'."
-        filtered = _filter_pods(pods, search)  # #2
+        filtered = _filter_pods(pods, search)
         lines = [
             _ns_header("Pod Resource Requests", namespace, search),
             "| NAMESPACE | POD | CONTAINER | CPU_REQ | CPU_LIM | MEM_REQ | MEM_LIM | ATTACHED GPU |",
@@ -426,7 +397,7 @@ def get_pod_resource_requests(namespace: str = "all", search: str | None = None)
         ]
         for pod in sorted(filtered, key=lambda p: (p.metadata.namespace, p.metadata.name)):
             ns, podn = pod.metadata.namespace, pod.metadata.name
-            attached_gpu = _get_gpu_requests(pod)  # #3
+            attached_gpu = _get_gpu_requests(pod)
             cpu_req_total_m = cpu_lim_total_m = mem_req_total_mi = mem_lim_total_mi = 0
             for c in pod.spec.containers or []:
                 req = c.resources.requests or {}
@@ -435,7 +406,7 @@ def get_pod_resource_requests(namespace: str = "all", search: str | None = None)
                 cpu_lim = lim.get("cpu", "0")
                 cpu_req_m = cpu_req if cpu_req.endswith("m") else f"{int(float(cpu_req)*1000)}m"
                 cpu_lim_m = cpu_lim if cpu_lim.endswith("m") else f"{int(float(cpu_lim)*1000)}m"
-                mem_req_mi = _to_mebibytes(req.get("memory", "0"))  # #10
+                mem_req_mi = _to_mebibytes(req.get("memory", "0"))
                 mem_lim_mi = _to_mebibytes(lim.get("memory", "0"))
                 cpu_req_total_m  += int(cpu_req_m.rstrip("m"))
                 cpu_lim_total_m  += int(cpu_lim_m.rstrip("m"))
@@ -451,7 +422,6 @@ def get_pod_resource_requests(namespace: str = "all", search: str | None = None)
 
 
 def get_pod_containers_resources(namespace: str = "all", search: str | None = None) -> str:
-    # #11 – _parse_cpu/_parse_mem were trivial no-ops; replaced inline
     try:
         pods = _list_pods(namespace)
         if not pods:
@@ -479,10 +449,7 @@ def get_pod_containers_resources(namespace: str = "all", search: str | None = No
         return _api_error(e)
 
 
-
-# Phases that map to "not running" intent words
 _NOT_RUNNING_PHASES = ("Pending", "Failed", "Unknown")
-# Words Claude might pass meaning "show only non-Running pods"
 _NOT_RUNNING_WORDS  = {
     "notrunning", "not_running", "not-running",
     "unhealthy", "failed", "failing",
@@ -504,21 +471,17 @@ def get_pod_status(namespace: str = "all", search: str | None = None,
                          → only pods in that exact phase
     """
     try:
-        # ── Normalise phase intent ────────────────────────────────────────────
-        phase_filter: str | None = None   # None = fetch all
+        phase_filter: str | None = None
         not_running_mode = False
 
         if phase:
             p = phase.strip().lower().replace(" ", "")
             if p in _NOT_RUNNING_WORDS:
-                not_running_mode = True   # fetch Pending+Failed+Unknown via 3 calls
+                not_running_mode = True
             else:
-                # Capitalise properly so field_selector works: "running" → "Running"
                 phase_filter = phase.strip().capitalize()
 
-        # ── Fetch pods ────────────────────────────────────────────────────────
         if not_running_mode:
-            # API field_selector only supports = not !=, so three targeted calls
             pods = []
             for p in _NOT_RUNNING_PHASES:
                 try:
@@ -532,7 +495,6 @@ def get_pod_status(namespace: str = "all", search: str | None = None,
                 except ApiException:
                     pass
         elif phase_filter:
-            # Single phase via field_selector
             fs = f"status.phase={phase_filter}"
             if namespace == "all":
                 pods = _core.list_pod_for_all_namespaces(field_selector=fs).items
@@ -548,10 +510,8 @@ def get_pod_status(namespace: str = "all", search: str | None = None,
                 return _ns_header("Pods", namespace) + f"\nNo pods in phase `{phase_filter}` found."
             return f"No pods found in '{namespace}'."
 
-        # ── Name/search filter (in-memory, after API phase filter) ────────────
         filtered = _filter_pods(pods, search)
 
-        # ── Build rows ────────────────────────────────────────────────────────
         rows = []
         for pod in sorted(filtered, key=lambda p: (p.metadata.namespace, p.metadata.name)):
             ph       = pod.status.phase or "Unknown"
@@ -560,7 +520,6 @@ def get_pod_status(namespace: str = "all", search: str | None = None,
             total    = len(pod.spec.containers)
             conds    = [f"{c.type}={c.status}" for c in (pod.status.conditions or []) if c.status != "True"]
 
-            # For not-running pods also surface the first waiting/terminated reason
             reason = ""
             if not_running_mode or (phase_filter and phase_filter != "Running"):
                 for cs in (pod.status.container_statuses or []):
@@ -576,7 +535,6 @@ def get_pod_status(namespace: str = "all", search: str | None = None,
                          ", ".join(conds) if conds else "-",
                          reason))
 
-        # ── Compose header ────────────────────────────────────────────────────
         if not_running_mode:
             kind_label = "Non-Running Pods (Pending / Failed / Unknown)"
         elif phase_filter:
@@ -586,7 +544,6 @@ def get_pod_status(namespace: str = "all", search: str | None = None,
 
         lines = [_ns_header(kind_label, namespace, search)]
 
-        # ── Table ─────────────────────────────────────────────────────────────
         show_reason = not_running_mode or (phase_filter and phase_filter != "Running")
 
         if namespace == "all":
@@ -612,7 +569,6 @@ def get_pod_status(namespace: str = "all", search: str | None = None,
                 for _, nm, ph, rd, rs, cd, _ in rows:
                     lines.append(f"| `{nm}` | {ph} | {rd} | {rs} | {cd} |")
 
-        # Helpful hint when showing non-running pods
         if not_running_mode and rows:
             lines.append(
                 f"\n_{len(rows)} non-running pod(s) found. "
@@ -623,7 +579,6 @@ def get_pod_status(namespace: str = "all", search: str | None = None,
 
     except ApiException as e:
         return _api_error(e)
-
 
 
 def get_pod_logs(namespace: str = "all", search: str | None = None,
@@ -677,7 +632,7 @@ def describe_pod(pod_name: str, namespace: str = "all", search: str | None = Non
             return f"`No pods matching '{search or pod_name}' found in namespace '{namespace}'.`"
         pod = matching[0]
         if show_yaml:
-            return _as_yaml(pod)  # #8
+            return _as_yaml(pod)
         lines = ["```",
                  f"Name:             {pod.metadata.name}",
                  f"Namespace:        {pod.metadata.namespace}",
@@ -685,7 +640,7 @@ def describe_pod(pod_name: str, namespace: str = "all", search: str | None = Non
                  f"Service Account:  {pod.spec.service_account_name or pod.spec.service_account}",
                  f"Node:             {pod.spec.node_name or '<none>'}",
                  f"Start Time:       {pod.status.start_time}",
-                 _fmt_kv("Labels:",      pod.metadata.labels),           # #7
+                 _fmt_kv("Labels:",      pod.metadata.labels),
                  _fmt_kv("Annotations:", pod.metadata.annotations, sep=": "),
                  f"Status:           {pod.status.phase}",
                  f"IP:               {pod.status.pod_ip}"]
@@ -939,10 +894,6 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
     return "\n".join(out)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Storage tools  (refactors #7 #8 #9)
-# ─────────────────────────────────────────────────────────────────────────────
-
 def describe_pv(name: str, show_yaml: bool = False) -> str:
     try:
         pvs = _core.list_persistent_volume().items
@@ -953,12 +904,12 @@ def describe_pv(name: str, show_yaml: bool = False) -> str:
             return f"`No PV matching '{name}' found.`"
         pv = matching[0]
         if show_yaml:
-            return _as_yaml(pv)  # #8
+            return _as_yaml(pv)
         claim_ref = (f"{pv.spec.claim_ref.namespace}/{pv.spec.claim_ref.name}"
                      if pv.spec.claim_ref else "<none>")
         lines = ["```",
                  f"Name:            {pv.metadata.name}",
-                 _fmt_kv("Labels:         ", pv.metadata.labels),  # #7
+                 _fmt_kv("Labels:         ", pv.metadata.labels),
                  _fmt_kv("Annotations:    ", pv.metadata.annotations, sep=": "),
                  f"Finalizers:      {pv.metadata.finalizers or []}",
                  f"StorageClass:    {pv.spec.storage_class_name or '<none>'}",
@@ -1167,7 +1118,6 @@ def get_persistent_volumes() -> str:
 
 
 def get_pv_usage(threshold: int = 80) -> str:
-    # refactor #5 – removed local re-imports of kubernetes client; uses module-level _core
     from kubernetes.stream import stream as _k8s_stream
 
     def _exec_df(pod_name, namespace, mount_path, container=None):
@@ -1306,10 +1256,6 @@ def get_pdb_status(namespace: str = "all") -> str:
     except Exception as e:
         return f"K8s API error fetching PDBs: {e}"
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Networking
-# ─────────────────────────────────────────────────────────────────────────────
 
 def get_endpoints(namespace: str = "all", search: str | None = None) -> str:
     try:
@@ -1512,10 +1458,6 @@ def get_network_policy_status(namespace: str = "all") -> str:
         return f"K8s API error fetching NetworkPolicies: {e}"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Node tools
-# ─────────────────────────────────────────────────────────────────────────────
-
 def get_node_capacity() -> str:
     try:
         nodes = _core.list_node()
@@ -1630,10 +1572,6 @@ def get_node_info(node_name: str = None) -> str:
     except Exception as e:
         return f"Unexpected error: {e}"
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Workloads  (generic _workload_table helper eliminates copy-paste)
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _workload_table(namespace, kind, items, desired_fn, ready_fn, avail_fn, search=None):
     if not items:
@@ -1813,10 +1751,6 @@ def get_cronjob_status(namespace: str = "all", search: str = None) -> str:
         return f"K8s API error fetching CronJobs: {e}"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Cluster-level tools
-# ─────────────────────────────────────────────────────────────────────────────
-
 def get_cluster_version() -> str:
     try:
         v = _version_api.get_code()
@@ -1956,13 +1890,11 @@ def get_gpu_info() -> str:
 
 def find_resource(name_substring: str, resource_type: str = None, namespace: str = None) -> str:
     try:
-        # Treat vague intent words as "no filter" for both arguments
         _INTENT_WORDS = {"all", "any", "everything", "anything", "every", "show", "list"}
 
         if name_substring and name_substring.strip().lower() in _INTENT_WORDS:
             name_substring = ""
 
-        # Normalise resource_type — unknown/vague values mean "search all types"
         _VALID_TYPES = {
             "pod", "svc", "service", "ingress", "pvc",
             "deployment", "deploy",
@@ -2061,12 +1993,9 @@ def find_resource(name_substring: str, resource_type: str = None, namespace: str
                         )
             return results
 
-        # ── First pass: search with the requested resource_type filter ────────
         resources = _build_resources(resource_type)
         results   = _search(resources)
 
-        # ── Fallback stage 1: if a typed search found nothing, try ALL types ──
-        # e.g. Claude passed resource_type="svc" but grafana is a Pod
         if not results and name_substring and resource_type:
             all_resources = _build_resources(None)
             results       = _search(all_resources)
@@ -2077,7 +2006,6 @@ def find_resource(name_substring: str, resource_type: str = None, namespace: str
                          "|---|---|---|---|"]
                 return "\n".join(lines + results)
 
-        # ── Fallback stage 2: named search (any type) found nothing → show all ─
         if not results and name_substring:
             all_resources = _build_resources(None)
             results       = _search(all_resources, force=True)
@@ -2101,7 +2029,7 @@ def find_resource(name_substring: str, resource_type: str = None, namespace: str
 
 
 _SYSTEM_NAMESPACES = ("kube-system", "coredns", "longhorn-system", "ingress-nginx")
-_MAX_DETAIL_ITEMS  = 5   # max names shown inline before "(+N more)"
+_MAX_DETAIL_ITEMS  = 5
 
 
 def _cap(items: list, max_n: int = _MAX_DETAIL_ITEMS) -> str:
@@ -2121,13 +2049,11 @@ def run_cluster_health() -> str:
     from kubernetes.stream import stream as _k8s_stream
 
     now_str  = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    out      = [f"Cluster Health Report — {now_str}", ""]
-    criticals: list[str] = []   # descriptions of critical issues
-    warnings:  list[str] = []   # descriptions of warnings
-    healthy:   list[str] = []   # names of fully-green sections
+    out      = ["```", f"Cluster Health Report — {now_str}", ""]
+    criticals: list[str] = []
+    warnings:  list[str] = []
+    healthy:   list[str] = []
 
-    # ── 1. Nodes ─────────────────────────────────────────────────────────────
-    # List every node line-by-line: readiness, CPU/RAM used vs allocatable, taints
     out.append("── Nodes " + "─" * 52)
     try:
         nodes = _core.list_node().items
@@ -2137,11 +2063,9 @@ def run_cluster_health() -> str:
             alloc  = node.status.allocatable or {}
             cap    = node.status.capacity    or {}
 
-            # Readiness
             ready  = conds.get("Ready") == "True"
             status = "✅ Ready" if ready else "🔴 NotReady"
 
-            # CPU: compute requested across all pods on this node
             cpu_alloc     = _parse_cpu_cores(alloc.get("cpu", 0))
             pods_on_node  = _core.list_pod_for_all_namespaces(
                 field_selector=f"spec.nodeName={node.metadata.name}").items
@@ -2155,7 +2079,6 @@ def run_cluster_health() -> str:
             cpu_str       = (f"{round(cpu_req, 2)}C / {round(cpu_alloc, 2)}C"
                              f" ({cpu_used_pct}% used)")
 
-            # RAM: compute requested across all pods on this node
             mem_alloc_gib = _parse_mem_gib(alloc.get("memory", "0Ki"))
             mem_req_gib   = sum(
                 _parse_mem_gib((c.resources.requests or {}).get("memory", "0"))
@@ -2167,14 +2090,12 @@ def run_cluster_health() -> str:
             mem_str       = (f"{round(mem_req_gib, 1)}Gi / {round(mem_alloc_gib, 1)}Gi"
                              f" ({mem_used_pct}% used)")
 
-            # Pressure flags
             pressure = []
             if conds.get("MemoryPressure") == "True": pressure.append("MemPressure")
             if conds.get("DiskPressure")   == "True": pressure.append("DiskPressure")
             if conds.get("PIDPressure")    == "True": pressure.append("PIDPressure")
             pressure_str = f" ⚠️  {', '.join(pressure)}" if pressure else ""
 
-            # Taints — always shown, "<none>" when absent
             taints    = node.spec.taints or []
             taint_str = ", ".join(
                 f"{t.key}{'=' + t.value if t.value else ''}:{t.effect}" for t in taints
@@ -2202,8 +2123,6 @@ def run_cluster_health() -> str:
         out.append(f"⚠️  Could not check nodes: {e}")
         warnings.append("Node check failed")
 
-    # ── 2. System Pods ───────────────────────────────────────────────────────
-    # List each unhealthy pod individually with namespace
     out.append("\n── System Pods " + "─" * 45)
     try:
         sys_pod_issues = False
@@ -2224,7 +2143,6 @@ def run_cluster_health() -> str:
                         ready   = sum(1 for cs in (p.status.container_statuses or []) if cs.ready)
                         tot_c   = len(p.spec.containers or [])
                         restarts = sum(cs.restart_count for cs in (p.status.container_statuses or []))
-                        # Surface first waiting/terminated reason
                         reason  = ""
                         for cs in (p.status.container_statuses or []):
                             if cs.state and cs.state.waiting and cs.state.waiting.reason:
@@ -2249,12 +2167,10 @@ def run_cluster_health() -> str:
         out.append(f"⚠️  Could not check system pods: {e}")
         warnings.append("System pod check failed")
 
-    # ── 3. Workloads ─────────────────────────────────────────────────────────
     out.append("\n── Workloads " + "─" * 47)
     try:
         workload_issues = False
 
-        # Deployments
         deps    = _apps.list_deployment_for_all_namespaces().items
         dep_bad = [f"{d.metadata.namespace}/{d.metadata.name}" for d in deps
                    if (d.spec.replicas or 0) > 0
@@ -2266,7 +2182,6 @@ def run_cluster_health() -> str:
         else:
             out.append(f"✅ {len(deps)} Deployments healthy")
 
-        # DaemonSets
         dss    = _apps.list_daemon_set_for_all_namespaces().items
         ds_bad = [f"{d.metadata.namespace}/{d.metadata.name}" for d in dss
                   if (d.status.desired_number_scheduled or 0) > 0
@@ -2278,7 +2193,6 @@ def run_cluster_health() -> str:
         else:
             out.append(f"✅ {len(dss)} DaemonSets healthy")
 
-        # StatefulSets
         stss    = _apps.list_stateful_set_for_all_namespaces().items
         sts_bad = [f"{s.metadata.namespace}/{s.metadata.name}" for s in stss
                    if (s.spec.replicas or 0) > 0
@@ -2290,7 +2204,6 @@ def run_cluster_health() -> str:
         else:
             out.append(f"✅ {len(stss)} StatefulSets healthy")
 
-        # Non-running pods
         failed_pods = []
         for phase in _NOT_RUNNING_PHASES:
             try:
@@ -2329,7 +2242,6 @@ def run_cluster_health() -> str:
         out.append(f"⚠️  Could not check workloads: {e}")
         warnings.append("Workload check failed")
 
-    # ── 4. Storage ───────────────────────────────────────────────────────────
     out.append("\n── Storage " + "─" * 49)
     storage_issues = False
     try:
@@ -2349,7 +2261,6 @@ def run_cluster_health() -> str:
         warnings.append("PVC check failed")
         storage_issues = True
 
-    # PV disk capacity — volumes above 80%
     try:
         def _exec_df_quick(pod_name, ns, mount_path, container=None):
             try:
@@ -2437,7 +2348,6 @@ def run_cluster_health() -> str:
     if not storage_issues:
         healthy.append("Storage")
 
-    # ── 5. Recent Warning Events ─────────────────────────────────────────────
     out.append("\n── Recent Warning Events " + "─" * 36)
     try:
         events = _core.list_event_for_all_namespaces(
@@ -2464,7 +2374,6 @@ def run_cluster_health() -> str:
         out.append(f"⚠️  Could not fetch events: {e}")
         warnings.append("Event check failed")
 
-    # ── Summary ───────────────────────────────────────────────────────────────
     out.append("\n── Summary " + "─" * 49)
     if criticals:
         out.append(f"🔴 {len(criticals)} critical issue(s):")
@@ -2479,12 +2388,12 @@ def run_cluster_health() -> str:
     if not criticals and not warnings:
         out.append("✅ Cluster is healthy — all checks passed")
 
-    # ── Next Action Plan ──────────────────────────────────────────────────────
     out.append("")
     out.append("── Next Action Plan " + "─" * 41)
     out.append("💬 Continue asking the chatbot to investigate any specific area reported above.")
     out.append("📋 For a complete and comprehensive health check report, click `Healthcheck Report` via ⚙ Settings.")
     out.append("🤖 Check out ECS Knowledge Bot to find out about known issues, Dos and Don'ts, and best practices.")
+    out.append("```")
 
     return "\n".join(out)
 
@@ -2519,7 +2428,6 @@ def generate_healthcheck_report() -> str:
         "",
     ]
 
-    # ── Section 1: Executive Summary ─────────────────────────────────────────
     report.append(_section("1. Executive Summary"))
     try:
         v = _version_api.get_code()
@@ -2527,24 +2435,20 @@ def generate_healthcheck_report() -> str:
     except Exception:
         report.append("Kubernetes version: unavailable")
 
-    # Reuse the scorecard from run_cluster_health (strip its own footer)
     try:
         scorecard = run_cluster_health()
-        # Drop the footer lines (last 4) so we don't embed duplicate footer
         scorecard_lines = scorecard.splitlines()
         trimmed = "\n".join(scorecard_lines[:-4]) if len(scorecard_lines) > 4 else scorecard
         report.append(trimmed)
     except Exception as e:
         report.append(f"⚠️  Could not generate scorecard: {e}")
 
-    # ── Section 2: Node Infrastructure ───────────────────────────────────────
     report.append(_section("2. Node Infrastructure"))
     try:
         nodes = _core.list_node().items
         if not nodes:
             report.append("No nodes found.")
         else:
-            # Node info table
             report.append(f"**Nodes ({len(nodes)} total)**")
             hdr = ["| NAME | ROLES | STATUS | CPU | MEMORY | GPU |", "|---|---|---|---|---|---|"]
             rows = []
@@ -2558,7 +2462,6 @@ def generate_healthcheck_report() -> str:
                 mem    = alloc.get("memory", "?")
                 gpu    = next((alloc[k] for k in alloc
                                if "nvidia.com/gpu" in k or "amd.com/gpu" in k), "-")
-                # Pressure flags
                 flags = []
                 if conds.get("MemoryPressure") == "True": flags.append("MemPressure")
                 if conds.get("DiskPressure")   == "True": flags.append("DiskPressure")
@@ -2566,7 +2469,6 @@ def generate_healthcheck_report() -> str:
                 rows.append(f"| `{node.metadata.name}` | {roles} | {status_str} | {cpu} | {mem} | {gpu} |")
             report.extend(_table_cap(rows, hdr))
 
-            # Node capacity (allocatable vs requested)
             report.append("")
             report.append("**Node Capacity (Allocatable vs Requested)**")
             hdr2 = ["| NODE | CPU ALLOC | CPU REQ | CPU AVAIL | RAM ALLOC (Gi) | RAM REQ (Gi) | RAM AVAIL (Gi) |",
@@ -2595,7 +2497,6 @@ def generate_healthcheck_report() -> str:
                 )
             report.extend(_table_cap(rows2, hdr2))
 
-            # Node taints — only if any exist
             tainted = [(n.metadata.name, t) for n in nodes for t in (n.spec.taints or [])]
             if tainted:
                 report.append("")
@@ -2607,7 +2508,6 @@ def generate_healthcheck_report() -> str:
             else:
                 report.append("✅ No node taints defined.")
 
-            # GPU — only if GPU nodes exist
             gpu_nodes = [n for n in nodes
                          if any("gpu" in k.lower() for k in (n.status.allocatable or {}))]
             if gpu_nodes:
@@ -2634,10 +2534,8 @@ def generate_healthcheck_report() -> str:
     except Exception as e:
         report.append(f"⚠️  Could not gather node data: {e}")
 
-    # ── Section 3: Resource Capacity ─────────────────────────────────────────
     report.append(_section("3. Resource Capacity"))
     try:
-        # Namespace resource summary — top 10 by CPU request
         all_ns = [ns.metadata.name for ns in _core.list_namespace().items]
         ns_data = []
         for ns in all_ns:
@@ -2675,7 +2573,6 @@ def generate_healthcheck_report() -> str:
         report.append(f"⚠️  Could not gather resource data: {e}")
 
     try:
-        # Resource quotas — only namespaces that have them
         q_items = _core.list_resource_quota_for_all_namespaces().items
         if q_items:
             report.append("")
@@ -2689,7 +2586,6 @@ def generate_healthcheck_report() -> str:
                 for res in sorted(hard.keys()):
                     hard_val = hard.get(res, "0")
                     used_val = used.get(res, "0")
-                    # Compute % for cpu/memory/pods where possible
                     try:
                         if "cpu" in res:
                             pct = round(_parse_cpu_to_millicores(str(used_val)) /
@@ -2714,7 +2610,6 @@ def generate_healthcheck_report() -> str:
         report.append(f"⚠️  Could not gather quota data: {e}")
 
     try:
-        # LimitRanges — only show if defined
         lr_items = _core.list_limit_range_for_all_namespaces().items
         if lr_items:
             report.append("")
@@ -2736,10 +2631,8 @@ def generate_healthcheck_report() -> str:
     except Exception as e:
         report.append(f"⚠️  Could not gather LimitRange data: {e}")
 
-    # ── Section 4: Storage Health ─────────────────────────────────────────────
     report.append(_section("4. Storage Health"))
     try:
-        # Storage classes
         scs = _storage.list_storage_class().items
         if scs:
             report.append("**Storage Classes**")
@@ -2762,7 +2655,6 @@ def generate_healthcheck_report() -> str:
         report.append(f"⚠️  Could not gather StorageClass data: {e}")
 
     try:
-        # PVCs — split into Bound and non-Bound
         pvcs = _core.list_persistent_volume_claim_for_all_namespaces().items
         bound   = [p for p in pvcs if p.status.phase == "Bound"]
         unbound = [p for p in pvcs if p.status.phase != "Bound"]
@@ -2786,7 +2678,6 @@ def generate_healthcheck_report() -> str:
         report.append(f"⚠️  Could not gather PVC data: {e}")
 
     try:
-        # PV usage via df — best-effort, skips PVCs with no mounted pod
         report.append("")
         report.append("**PV Disk Usage** _(requires running pod with mounted volume)_")
         from kubernetes.stream import stream as _k8s_stream
@@ -2870,7 +2761,6 @@ def generate_healthcheck_report() -> str:
     except Exception as e:
         report.append(f"⚠️  Could not gather PV usage data: {e}")
 
-    # ── Section 5: Workload Health ────────────────────────────────────────────
     report.append(_section("5. Workload Health"))
 
     def _workload_section(kind, items, desired_fn, ready_fn, avail_fn):
@@ -2921,7 +2811,6 @@ def generate_healthcheck_report() -> str:
         report.append(f"⚠️  StatefulSets: {e}")
 
     try:
-        # Orphaned ReplicaSets only (no owner reference)
         all_rs  = _apps.list_replica_set_for_all_namespaces().items
         orphaned = [r for r in all_rs
                     if not r.metadata.owner_references
@@ -2940,7 +2829,6 @@ def generate_healthcheck_report() -> str:
         report.append(f"⚠️  ReplicaSets: {e}")
 
     try:
-        # Jobs — failed/stuck only (exclude completed)
         jobs = _batch.list_job_for_all_namespaces().items
         failed_jobs = [j for j in jobs
                        if not any(o.kind == "CronJob" for o in (j.metadata.owner_references or []))
@@ -2959,7 +2847,6 @@ def generate_healthcheck_report() -> str:
         report.append(f"⚠️  Jobs: {e}")
 
     try:
-        # CronJobs
         cjs = _batch.list_cron_job_for_all_namespaces().items
         if cjs:
             report.append("")
@@ -2988,7 +2875,6 @@ def generate_healthcheck_report() -> str:
         report.append(f"⚠️  CronJobs: {e}")
 
     try:
-        # Non-running pods
         report.append("")
         non_running = []
         for phase in _NOT_RUNNING_PHASES:
@@ -3024,11 +2910,9 @@ def generate_healthcheck_report() -> str:
     except Exception as e:
         report.append(f"⚠️  Non-running pods: {e}")
 
-    # ── Section 6: Networking & DNS ───────────────────────────────────────────
     report.append(_section("6. Networking & DNS"))
 
     try:
-        # CoreDNS
         DNS_NS       = "kube-system"
         DNS_PATTERNS = ["coredns", "core-dns", "kube-dns"]
         dns_pods = [p for p in _core.list_namespaced_pod(namespace=DNS_NS).items
@@ -3050,7 +2934,6 @@ def generate_healthcheck_report() -> str:
         report.append(f"⚠️  CoreDNS check failed: {e}")
 
     try:
-        # Ingresses
         ings = _net.list_ingress_for_all_namespaces().items
         no_lb = [i for i in ings
                  if not (i.status.load_balancer and i.status.load_balancer.ingress)]
@@ -3070,7 +2953,6 @@ def generate_healthcheck_report() -> str:
         report.append(f"⚠️  Ingresses: {e}")
 
     try:
-        # NetworkPolicies — report namespaces with no policy
         nps      = _net.list_network_policy_for_all_namespaces().items
         covered  = {np.metadata.namespace for np in nps}
         all_ns_names = {n.metadata.name for n in _core.list_namespace().items}
@@ -3083,7 +2965,6 @@ def generate_healthcheck_report() -> str:
     except Exception as e:
         report.append(f"⚠️  NetworkPolicies: {e}")
 
-    # ── Section 7: Certificates & RBAC ───────────────────────────────────────
     report.append(_section("7. Certificates & RBAC"))
 
     try:
@@ -3131,7 +3012,6 @@ def generate_healthcheck_report() -> str:
             report.append(f"⚠️  Certificates: {e}")
 
     try:
-        # Admission webhooks with Fail policy
         adm_api    = _k8s.AdmissionregistrationV1Api()
         mutating   = adm_api.list_mutating_webhook_configuration().items
         validating = adm_api.list_validating_webhook_configuration().items
@@ -3149,11 +3029,9 @@ def generate_healthcheck_report() -> str:
     except Exception as e:
         report.append(f"⚠️  Webhooks: {e}")
 
-    # ── Section 8: Recent Diagnostics ────────────────────────────────────────
     report.append(_section("8. Recent Diagnostics"))
 
     try:
-        # Control plane
         pods = _core.list_namespaced_pod(namespace="kube-system").items
         core_components = ["kube-apiserver", "etcd", "kube-controller-manager", "kube-scheduler"]
         cp_pods = [p for p in pods if any(comp in p.metadata.name for comp in core_components)]
@@ -3172,7 +3050,6 @@ def generate_healthcheck_report() -> str:
         report.append(f"⚠️  Control plane: {e}")
 
     try:
-        # Top warning events — deduplicated, capped at 15
         events = _core.list_event_for_all_namespaces(
             field_selector="type=Warning", limit=500).items
         seen: dict = {}
@@ -3199,7 +3076,6 @@ def generate_healthcheck_report() -> str:
     except Exception as e:
         report.append(f"⚠️  Warning events: {e}")
 
-    # ── Footer ────────────────────────────────────────────────────────────────
     report.append(f"\n{_DIV}")
     report.append("💬 This is your complete health check report.")
     report.append("📋 Ask the chatbot to drill into any flagged area for deeper diagnostics.")
@@ -3305,10 +3181,6 @@ def get_certificate_status(namespace: str = "all") -> str:
     except Exception as e:
         return f"K8s API error fetching Certificates: {e}"
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Config, RBAC, resource summaries
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _list_namespaced_or_all(list_ns_fn, list_all_fn, namespace: str) -> list:
     if namespace != "all":
@@ -3566,10 +3438,6 @@ def get_namespace_resource_summary(namespace: str) -> str:
     ] + table_rows)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CoreDNS health  (refactor #6 – import logging moved to top level)
-# ─────────────────────────────────────────────────────────────────────────────
-
 def get_coredns_health() -> str:
     from kubernetes.stream import stream as _k8s_stream
 
@@ -3687,10 +3555,6 @@ def get_coredns_health() -> str:
 
     return "\n".join(lines)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Prometheus metrics  (refactor #6 – all imports at top; no local re-imports)
-# ─────────────────────────────────────────────────────────────────────────────
 
 def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h",
                               step: str = "60s", namespace: str = "") -> str:
@@ -3899,11 +3763,6 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h",
     return "\n".join(summary_lines) + f"\n§GRAPH§{graph_payload}§GRAPH§"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DB tools  (refactor #5 – removed local re-imports; use module-level symbols)
-#           (refactor #12 – bare except: replaced with except Exception)
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _find_db_credentials(namespace: str, pod_name: str) -> dict:
     creds: dict = {k: None for k in ("user","password","database","host","port")}
 
@@ -4059,7 +3918,6 @@ def _discover_mysql_database(pod_name: str, namespace: str, container_name: str,
 
 def exec_db_query(namespace: str, sql: str, pod_name: str = "", database: str = "",
                   container: str = "") -> str:
-    # refactor #5 – all re-imports removed; uses module-level _log, _ALLOW_DB_EXEC, _SQL_WRITE_RE, _core
     if not _ALLOW_DB_EXEC:
         return "[BLOCKED] DB exec is disabled (ALLOW_DB_EXEC=false)."
     if not sql.strip():
@@ -4126,7 +3984,7 @@ def exec_db_query(namespace: str, sql: str, pod_name: str = "", database: str = 
             container=container,
             stderr=True, stdin=False, stdout=True, tty=False, _preload_content=True)
         output = resp.strip() if isinstance(resp, str) else str(resp).strip()
-    except Exception as exc:    # #12 – was bare except:
+    except Exception as exc:
         return f"[ERROR] Exec failed: {exc}"
 
     if not output:
@@ -4152,10 +4010,6 @@ def exec_db_query(namespace: str, sql: str, pod_name: str = "", database: str = 
               + (f" · db={db_name}" if db_name else "") + "]\n" + "-" * 60 + "\n")
     return header + output
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# kubectl emulation
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _resolve_crd_version(group: str, plural: str) -> str:
     try:
@@ -4191,7 +4045,6 @@ def _get_custom(name: str, ns: str, plural: str, group: str, version: str) -> di
 def _get_resource_fns(resource: str):
     r = resource.lower()
     _POLICY = _k8s.PolicyV1Api()
-    # Map of (aliases,) → (list_all_fn, list_ns_fn, get_one_fn, kind)
     _TABLE = [
         (("pod","pods","po"),                             (_core.list_pod_for_all_namespaces, _core.list_namespaced_pod, _core.read_namespaced_pod, "Pod")),
         (("deployment","deployments","deploy"),           (_apps.list_deployment_for_all_namespaces, _apps.list_namespaced_deployment, _apps.read_namespaced_deployment, "Deployment")),
@@ -4518,7 +4371,7 @@ def kubectl_exec(command: str) -> str:
             out = f"[ERROR] kubectl {verb} is not yet implemented in API mode. Use a specific tool instead."
         else:
             out = f"[ERROR] Unknown kubectl verb: {verb!r}"
-    except Exception as exc:    # #12 – was bare except:
+    except Exception as exc:
         _log.exception(f"[kubectl_exec] Unexpected error: {exc}")
         out = f"[ERROR] Unexpected error: {exc}"
     if len(out) > _KUBECTL_MAX_OUT:
