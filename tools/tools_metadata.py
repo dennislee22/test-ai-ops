@@ -405,7 +405,7 @@ K8S_TOOL_METADATA: dict = {
         },
     },
     
-"get_pdb_status": {
+    "get_pdb_status": {
         "fn":          get_pdb_status,
         "description": (
             "List all PodDisruptionBudgets (PDBs) across a namespace (or all namespaces). "
@@ -846,20 +846,23 @@ K8S_TOOL_METADATA: dict = {
     "run_cluster_health": {
         "fn":          run_cluster_health,
         "description": (
-            "Summarize the overall health of the Kubernetes cluster by aggregating issues "
-            "across namespaces, pods, nodes, storage, ingresses, and critical system components. "
-            "Reports counts of Critical and Moderate issues, resource usage, and summaries per component. "
-            "Includes CPU/memory requested vs. capacity, pods in non-Running phases, "
-            "unbound PVCs, failed ingresses, unhealthy system DaemonSets, CoreDNS, kube-proxy, "
-            "and any namespace-level quota breaches. "
-            "Useful for: 'cluster health check', 'what is failing in the cluster', "
-            "'which components have issues', 'summary of resource usage'."
+            "Run a quick scorecard-style health check of the entire Kubernetes cluster. "
+            "Covers nodes, system pods, workloads, storage, networking, and recent warning events. "
+            "Each section emits a single ✅/⚠️/🔴 line — only failures include detail. "
+            "Use this tool when the user asks: "
+            "'is my cluster ok', "
+            "'cluster health check', "
+            "'any issues in the cluster', "
+            "'what is failing', "
+            "'is everything running fine', "
+            "'quick cluster status'. "
+            "Returns a compact scorecard ending with a summary of critical issues, warnings, "
+            "and healthy sections, followed by a prompt to ask follow-up questions or run "
+            "the full health check report via ⚙ Settings. "
+            "Do NOT use this for deep diagnostics on a specific resource — use the dedicated "
+            "tools (get_pod_status, get_unhealthy_pods_detail, get_events, etc.) for that."
         ),
-        "parameters":  {
-            "namespace":  {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "show_all":   {"type": "boolean", "default": False, "description": "Include all pods, namespaces, PVCs, and system components in counts, even if healthy."},
-            "raw_output": {"type": "boolean", "default": False, "description": "Return detailed per-object output for PVCs, ingresses, and system components instead of a summarized report."}
-        },
+        "parameters":  {},
     },
 
     "get_namespace_resource_summary": {
