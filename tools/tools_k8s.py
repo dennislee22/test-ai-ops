@@ -1970,50 +1970,63 @@ def find_resource(name_substring: str, resource_type: str = None, namespace: str
         else:
             resource_type = None
 
-        results = []
+        def _build_resources(rt_filter):
+            """Build the list of (kind, items, details_fn) for a given type filter."""
+            r = []
+            if not rt_filter or rt_filter == "pod":
+                pods = (_core.list_namespaced_pod(namespace).items if namespace
+                        else _core.list_pod_for_all_namespaces().items)
+                r.append(("Pod", pods,
+                           lambda p: f"{p.status.phase or 'Unknown'} on {p.spec.node_name or 'n/a'}"))
+            if not rt_filter or rt_filter in ("svc", "service"):
+                svcs = (_core.list_namespaced_service(namespace).items if namespace
+                        else _core.list_service_for_all_namespaces().items)
+                r.append(("Service", svcs,
+                           lambda s: f"{s.spec.type} {s.spec.cluster_ip}"))
+            if not rt_filter or rt_filter == "ingress":
+                ings = (_net.list_namespaced_ingress(namespace).items if namespace
+                        else _net.list_ingress_for_all_namespaces().items)
+                r.append(("Ingress", ings,
+                           lambda i: ", ".join(h.host for h in (i.spec.rules or []) if h.host) or "-"))
+            if not rt_filter or rt_filter == "pvc":
+                pvcs = (_core.list_namespaced_persistent_volume_claim(namespace).items if namespace
+                        else _core.list_persistent_volume_claim_for_all_namespaces().items)
+                r.append(("PVC", pvcs,
+                           lambda p: (f"{p.status.phase or 'Unknown'} "
+                                      f"{(p.spec.resources.requests or {}).get('storage', 'n/a') if p.spec.resources else 'n/a'}")))
+            return r
 
-        def add(kind, items, details_fn, force: bool = False):
-            """Append matching rows. force=True bypasses the name filter (used in fallback)."""
-            for item in items:
-                if force or not name_substring or name_substring.lower() in item.metadata.name.lower():
-                    results.append(
-                        f"| {kind} | {item.metadata.namespace or '-'} "
-                        f"| {item.metadata.name} | {details_fn(item)} |"
-                    )
+        def _search(resources, force: bool = False) -> list[str]:
+            results = []
+            for kind, items, details_fn in resources:
+                for item in items:
+                    if force or not name_substring or name_substring.lower() in item.metadata.name.lower():
+                        results.append(
+                            f"| {kind} | {item.metadata.namespace or '-'} "
+                            f"| {item.metadata.name} | {details_fn(item)} |"
+                        )
+            return results
 
-        # Build resource list based on type filter
-        resources = []
-        if not resource_type or resource_type == "pod":
-            pods = (_core.list_namespaced_pod(namespace).items if namespace
-                    else _core.list_pod_for_all_namespaces().items)
-            resources.append(("Pod", pods,
-                               lambda p: f"{p.status.phase or 'Unknown'} on {p.spec.node_name or 'n/a'}"))
-        if not resource_type or resource_type in ("svc", "service"):
-            svcs = (_core.list_namespaced_service(namespace).items if namespace
-                    else _core.list_service_for_all_namespaces().items)
-            resources.append(("Service", svcs,
-                               lambda s: f"{s.spec.type} {s.spec.cluster_ip}"))
-        if not resource_type or resource_type == "ingress":
-            ings = (_net.list_namespaced_ingress(namespace).items if namespace
-                    else _net.list_ingress_for_all_namespaces().items)
-            resources.append(("Ingress", ings,
-                               lambda i: ", ".join(h.host for h in (i.spec.rules or []) if h.host) or "-"))
-        if not resource_type or resource_type == "pvc":
-            pvcs = (_core.list_namespaced_persistent_volume_claim(namespace).items if namespace
-                    else _core.list_persistent_volume_claim_for_all_namespaces().items)
-            resources.append(("PVC", pvcs,
-                               lambda p: (f"{p.status.phase or 'Unknown'} "
-                                          f"{(p.spec.resources.requests or {}).get('storage', 'n/a') if p.spec.resources else 'n/a'}")))
+        # ── First pass: search with the requested resource_type filter ────────
+        resources = _build_resources(resource_type)
+        results   = _search(resources)
 
-        # First pass — filtered by name_substring
-        for kind, items, fn in resources:
-            add(kind, items, fn)
+        # ── Fallback stage 1: if a typed search found nothing, try ALL types ──
+        # e.g. Claude passed resource_type="svc" but grafana is a Pod
+        if not results and name_substring and resource_type:
+            all_resources = _build_resources(None)
+            results       = _search(all_resources)
+            if results:
+                note = (f"Searched all resource types for `{name_substring}`:")
+                lines = [note,
+                         "| Resource Type | Namespace | Name | Status/Details |",
+                         "|---|---|---|---|"]
+                return "\n".join(lines + results)
 
-        # Fallback — if a named search yielded nothing, show everything so the
-        # user gets context rather than a silent empty table
+        # ── Fallback stage 2: named search (any type) found nothing → show all ─
         if not results and name_substring:
-            for kind, items, fn in resources:
-                add(kind, items, fn, force=True)
+            all_resources = _build_resources(None)
+            results       = _search(all_resources, force=True)
             fallback_note = (f"No resources found matching `{name_substring}`. "
                              f"Showing all resources instead.")
             lines = [fallback_note,
@@ -2261,6 +2274,724 @@ def run_cluster_health(namespace: str = "all") -> str:
     out.append("   click **Healthcheck Report** via ⚙ Settings.")
 
     return "\n".join(out)
+
+
+def generate_healthcheck_report() -> str:
+    """
+    Full, multi-section cluster health report. Covers every layer from nodes
+    to certificates. Each section is self-contained — healthy sections emit a
+    single green line; problem sections emit a full table capped at 20 rows.
+    """
+
+    now_str  = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    _DIV     = "─" * 60
+    _MAX_ROWS = 20
+
+    def _section(title: str) -> str:
+        pad = max(0, 58 - len(title))
+        return f"\n{'─' * 2} {title} {'─' * pad}"
+
+    def _table_cap(rows: list[str], header_lines: list[str]) -> list[str]:
+        """Return header + up to _MAX_ROWS data rows + optional overflow note."""
+        out = list(header_lines)
+        out.extend(rows[:_MAX_ROWS])
+        overflow = len(rows) - _MAX_ROWS
+        if overflow > 0:
+            out.append(f"_… and {overflow} more row(s) — ask the chatbot to filter by namespace._")
+        return out
+
+    report: list[str] = [
+        "# Cluster Health Report",
+        f"Generated: {now_str}",
+        "",
+    ]
+
+    # ── Section 1: Executive Summary ─────────────────────────────────────────
+    report.append(_section("1. Executive Summary"))
+    try:
+        v = _version_api.get_code()
+        report.append(f"Kubernetes: {v.git_version}")
+    except Exception:
+        report.append("Kubernetes version: unavailable")
+
+    # Reuse the scorecard from run_cluster_health (strip its own footer)
+    try:
+        scorecard = run_cluster_health()
+        # Drop the footer lines (last 4) so we don't embed duplicate footer
+        scorecard_lines = scorecard.splitlines()
+        trimmed = "\n".join(scorecard_lines[:-4]) if len(scorecard_lines) > 4 else scorecard
+        report.append(trimmed)
+    except Exception as e:
+        report.append(f"⚠️  Could not generate scorecard: {e}")
+
+    # ── Section 2: Node Infrastructure ───────────────────────────────────────
+    report.append(_section("2. Node Infrastructure"))
+    try:
+        nodes = _core.list_node().items
+        if not nodes:
+            report.append("No nodes found.")
+        else:
+            # Node info table
+            report.append(f"**Nodes ({len(nodes)} total)**")
+            hdr = ["| NAME | ROLES | STATUS | CPU | MEMORY | GPU |", "|---|---|---|---|---|---|"]
+            rows = []
+            for node in sorted(nodes, key=lambda n: n.metadata.name):
+                roles = (",".join(k.split("/")[-1] for k in (node.metadata.labels or {})
+                                  if "node-role.kubernetes.io" in k) or "worker")
+                conds  = {c.type: c.status for c in (node.status.conditions or [])}
+                status = "✅ Ready" if conds.get("Ready") == "True" else "🔴 NotReady"
+                alloc  = node.status.allocatable or {}
+                cpu    = alloc.get("cpu", "?")
+                mem    = alloc.get("memory", "?")
+                gpu    = next((alloc[k] for k in alloc
+                               if "nvidia.com/gpu" in k or "amd.com/gpu" in k), "-")
+                # Pressure flags
+                flags = []
+                if conds.get("MemoryPressure") == "True": flags.append("MemPressure")
+                if conds.get("DiskPressure")   == "True": flags.append("DiskPressure")
+                status_str = status + (f" ⚠️ {','.join(flags)}" if flags else "")
+                rows.append(f"| `{node.metadata.name}` | {roles} | {status_str} | {cpu} | {mem} | {gpu} |")
+            report.extend(_table_cap(rows, hdr))
+
+            # Node capacity (allocatable vs requested)
+            report.append("")
+            report.append("**Node Capacity (Allocatable vs Requested)**")
+            hdr2 = ["| NODE | CPU ALLOC | CPU REQ | CPU AVAIL | RAM ALLOC (Gi) | RAM REQ (Gi) | RAM AVAIL (Gi) |",
+                    "|---|---|---|---|---|---|---|"]
+            rows2 = []
+            for node in sorted(nodes, key=lambda n: n.metadata.name):
+                alloc     = node.status.allocatable or {}
+                cpu_alloc = _parse_cpu_cores(alloc.get("cpu", 0))
+                mem_alloc = _parse_mem_gib(alloc.get("memory", "0Ki"))
+                pods_on   = _core.list_pod_for_all_namespaces(
+                    field_selector=f"spec.nodeName={node.metadata.name}").items
+                cpu_req   = sum(_parse_cpu_cores((c.resources.requests or {}).get("cpu", 0))
+                                for p in pods_on for c in (p.spec.containers or []) if c.resources)
+                mem_req   = sum(_parse_mem_gib((c.resources.requests or {}).get("memory", "0"))
+                                for p in pods_on for c in (p.spec.containers or []) if c.resources)
+                cpu_avail = round(cpu_alloc - cpu_req, 2)
+                mem_avail = round(mem_alloc - mem_req, 2)
+                pct       = lambda a, b: f"({round(a/b*100,1)}%)" if b > 0 else "(0%)"
+                rows2.append(
+                    f"| `{node.metadata.name}` | {round(cpu_alloc,2)} "
+                    f"| {round(cpu_req,2)} {pct(cpu_req,cpu_alloc)} "
+                    f"| {cpu_avail} {pct(cpu_avail,cpu_alloc)} "
+                    f"| {round(mem_alloc,2)} "
+                    f"| {round(mem_req,2)} {pct(mem_req,mem_alloc)} "
+                    f"| {mem_avail} {pct(mem_avail,mem_alloc)} |"
+                )
+            report.extend(_table_cap(rows2, hdr2))
+
+            # Node taints — only if any exist
+            tainted = [(n.metadata.name, t) for n in nodes for t in (n.spec.taints or [])]
+            if tainted:
+                report.append("")
+                report.append("**Node Taints**")
+                hdr3 = ["| NODE | KEY | VALUE | EFFECT |", "|---|---|---|---|"]
+                rows3 = [f"| `{nm}` | {t.key or '<any>'} | {t.value or '-'} | {t.effect or '-'} |"
+                         for nm, t in tainted]
+                report.extend(_table_cap(rows3, hdr3))
+            else:
+                report.append("✅ No node taints defined.")
+
+            # GPU — only if GPU nodes exist
+            gpu_nodes = [n for n in nodes
+                         if any("gpu" in k.lower() for k in (n.status.allocatable or {}))]
+            if gpu_nodes:
+                report.append("")
+                report.append("**GPU Nodes**")
+                hdr4 = ["| NODE | PRODUCT | COUNT | VRAM | ALLOCATABLE |", "|---|---|---|---|---|"]
+                rows4 = []
+                for node in gpu_nodes:
+                    labels   = node.metadata.labels or {}
+                    alloc    = node.status.allocatable or {}
+                    gpu_key  = next((k for k in alloc if "gpu" in k.lower()), None)
+                    gpu_alloc = alloc.get(gpu_key, "0") if gpu_key else "0"
+                    product  = (labels.get(f"{gpu_key}.product") or
+                                labels.get("gpu.product") or "Unknown") if gpu_key else "Unknown"
+                    count    = (labels.get(f"{gpu_key}.count") or
+                                labels.get("gpu.count") or gpu_alloc) if gpu_key else gpu_alloc
+                    memory   = (labels.get(f"{gpu_key}.memory") or
+                                labels.get("gpu.memory") or "n/a") if gpu_key else "n/a"
+                    rows4.append(f"| `{node.metadata.name}` | {product} | {count} | {memory}Mi | {gpu_alloc} |")
+                report.extend(_table_cap(rows4, hdr4))
+            else:
+                report.append("✅ No GPU nodes detected.")
+
+    except Exception as e:
+        report.append(f"⚠️  Could not gather node data: {e}")
+
+    # ── Section 3: Resource Capacity ─────────────────────────────────────────
+    report.append(_section("3. Resource Capacity"))
+    try:
+        # Namespace resource summary — top 10 by CPU request
+        all_ns = [ns.metadata.name for ns in _core.list_namespace().items]
+        ns_data = []
+        for ns in all_ns:
+            try:
+                pods = _core.list_namespaced_pod(namespace=ns, limit=1000).items
+                cpu_req = mem_req = cpu_lim = mem_lim = 0
+                for pod in pods:
+                    for c in list(pod.spec.containers or []) + list(pod.spec.init_containers or []):
+                        req = (c.resources.requests or {}) if c.resources else {}
+                        lim = (c.resources.limits   or {}) if c.resources else {}
+                        cpu_req += _parse_cpu_to_millicores(req.get("cpu",    "0"))
+                        mem_req += _parse_mem_to_mib(req.get("memory", "0"))
+                        cpu_lim += _parse_cpu_to_millicores(lim.get("cpu",    "0"))
+                        mem_lim += _parse_mem_to_mib(lim.get("memory", "0"))
+                if pods:
+                    ns_data.append((ns, len(pods), cpu_req, mem_req, cpu_lim, mem_lim))
+            except Exception:
+                pass
+
+        ns_data.sort(key=lambda x: x[2], reverse=True)
+        report.append("**Namespace Resource Requests vs Limits (top namespaces by CPU request)**")
+        hdr = ["| NAMESPACE | PODS | CPU REQ | MEM REQ | CPU LIM | MEM LIM |",
+               "|---|---|---|---|---|---|"]
+        rows = []
+        for ns, pod_count, cpu_req, mem_req, cpu_lim, mem_lim in ns_data:
+            rows.append(
+                f"| `{ns}` | {pod_count} "
+                f"| {cpu_req}m | {mem_req:.0f}Mi "
+                f"| {cpu_lim or 'none'}{'m' if cpu_lim else ''} "
+                f"| {mem_lim:.0f}Mi |"
+            )
+        report.extend(_table_cap(rows, hdr))
+
+    except Exception as e:
+        report.append(f"⚠️  Could not gather resource data: {e}")
+
+    try:
+        # Resource quotas — only namespaces that have them
+        q_items = _core.list_resource_quota_for_all_namespaces().items
+        if q_items:
+            report.append("")
+            report.append("**Resource Quotas**")
+            hdr = ["| NAMESPACE | QUOTA | RESOURCE | USED | HARD | % |",
+                   "|---|---|---|---|---|---|"]
+            rows = []
+            for q in sorted(q_items, key=lambda x: (x.metadata.namespace, x.metadata.name)):
+                hard = q.status.hard or {}
+                used = q.status.used or {}
+                for res in sorted(hard.keys()):
+                    hard_val = hard.get(res, "0")
+                    used_val = used.get(res, "0")
+                    # Compute % for cpu/memory/pods where possible
+                    try:
+                        if "cpu" in res:
+                            pct = round(_parse_cpu_to_millicores(str(used_val)) /
+                                        max(_parse_cpu_to_millicores(str(hard_val)), 1) * 100, 1)
+                        elif "memory" in res:
+                            pct = round(_parse_mem_to_mib(str(used_val)) /
+                                        max(_parse_mem_to_mib(str(hard_val)), 1) * 100, 1)
+                        else:
+                            pct = round(int(str(used_val).split(".")[0]) /
+                                        max(int(str(hard_val).split(".")[0]), 1) * 100, 1)
+                        pct_str = f"{'🔴' if pct >= 90 else '⚠️' if pct >= 80 else '✅'} {pct}%"
+                    except Exception:
+                        pct_str = "-"
+                    rows.append(
+                        f"| `{q.metadata.namespace}` | `{q.metadata.name}` "
+                        f"| {res} | {used_val} | {hard_val} | {pct_str} |"
+                    )
+            report.extend(_table_cap(rows, hdr))
+        else:
+            report.append("✅ No ResourceQuotas defined.")
+    except Exception as e:
+        report.append(f"⚠️  Could not gather quota data: {e}")
+
+    try:
+        # LimitRanges — only show if defined
+        lr_items = _core.list_limit_range_for_all_namespaces().items
+        if lr_items:
+            report.append("")
+            report.append("**LimitRanges**")
+            hdr = ["| NAMESPACE | LIMITRANGE | TYPE | CPU DEFAULT | MEM DEFAULT | CPU MAX | MEM MAX |",
+                   "|---|---|---|---|---|---|---|"]
+            rows = []
+            def _g(v, key): return (v or {}).get(key, "-")
+            for lr in sorted(lr_items, key=lambda x: (x.metadata.namespace, x.metadata.name)):
+                for item in (lr.spec.limits or []):
+                    rows.append(
+                        f"| `{lr.metadata.namespace}` | `{lr.metadata.name}` | {item.type} "
+                        f"| {_g(item.default,'cpu')} | {_g(item.default,'memory')} "
+                        f"| {_g(item.max,'cpu')} | {_g(item.max,'memory')} |"
+                    )
+            report.extend(_table_cap(rows, hdr))
+        else:
+            report.append("✅ No LimitRanges defined.")
+    except Exception as e:
+        report.append(f"⚠️  Could not gather LimitRange data: {e}")
+
+    # ── Section 4: Storage Health ─────────────────────────────────────────────
+    report.append(_section("4. Storage Health"))
+    try:
+        # Storage classes
+        scs = _storage.list_storage_class().items
+        if scs:
+            report.append("**Storage Classes**")
+            hdr = ["| NAME | PROVISIONER | RECLAIM POLICY | EXPANSION | DEFAULT |",
+                   "|---|---|---|---|---|"]
+            rows = []
+            for sc in scs:
+                is_default = (sc.metadata.annotations or {}).get(
+                    "storageclass.kubernetes.io/is-default-class") == "true"
+                rows.append(
+                    f"| `{sc.metadata.name}` | {sc.provisioner} "
+                    f"| {sc.reclaim_policy or 'Delete'} "
+                    f"| {'✅ Yes' if sc.allow_volume_expansion else 'No'} "
+                    f"| {'★ Default' if is_default else '-'} |"
+                )
+            report.extend(_table_cap(rows, hdr))
+        else:
+            report.append("✅ No StorageClasses defined.")
+    except Exception as e:
+        report.append(f"⚠️  Could not gather StorageClass data: {e}")
+
+    try:
+        # PVCs — split into Bound and non-Bound
+        pvcs = _core.list_persistent_volume_claim_for_all_namespaces().items
+        bound   = [p for p in pvcs if p.status.phase == "Bound"]
+        unbound = [p for p in pvcs if p.status.phase != "Bound"]
+        report.append("")
+        if unbound:
+            report.append(f"**PersistentVolumeClaims — 🔴 {len(unbound)} not Bound**")
+            hdr = ["| NAMESPACE | PVC | PHASE | CLASS | CAPACITY |",
+                   "|---|---|---|---|---|"]
+            rows = [
+                f"| `{p.metadata.namespace}` | `{p.metadata.name}` "
+                f"| {p.status.phase or 'Unknown'} "
+                f"| {p.spec.storage_class_name or '-'} "
+                f"| {(p.status.capacity or {}).get('storage','?')} |"
+                for p in unbound
+            ]
+            report.extend(_table_cap(rows, hdr))
+            report.append(f"✅ {len(bound)} PVCs Bound.")
+        else:
+            report.append(f"✅ All {len(bound)} PVCs Bound.")
+    except Exception as e:
+        report.append(f"⚠️  Could not gather PVC data: {e}")
+
+    try:
+        # PV usage via df — best-effort, skips PVCs with no mounted pod
+        report.append("")
+        report.append("**PV Disk Usage** _(requires running pod with mounted volume)_")
+        from kubernetes.stream import stream as _k8s_stream
+
+        def _exec_df_inner(pod_name, ns, mount_path, container=None):
+            try:
+                kwargs = dict(
+                    command=["/bin/sh", "-c",
+                             f"df -k --output=used,avail {mount_path} 2>/dev/null | tail -1"],
+                    stderr=False, stdin=False, stdout=True, tty=False, _preload_content=True)
+                if container:
+                    kwargs["container"] = container
+                resp = _k8s_stream(_core.connect_get_namespaced_pod_exec,
+                                   pod_name, ns, **kwargs)
+                return resp.strip() if isinstance(resp, str) else ""
+            except Exception:
+                return ""
+
+        pv_rows = []
+        pv_skip = 0
+        all_pvcs = _core.list_persistent_volume_claim_for_all_namespaces().items
+        for pvc in all_pvcs:
+            ns, pvc_name = pvc.metadata.namespace, pvc.metadata.name
+            pod_hit = pod_container = mount_path = None
+            try:
+                pods_in_ns = _core.list_namespaced_pod(namespace=ns).items
+                for pod in pods_in_ns:
+                    if pod.status.phase != "Running":
+                        continue
+                    for vol in (pod.spec.volumes or []):
+                        if (vol.persistent_volume_claim and
+                                vol.persistent_volume_claim.claim_name == pvc_name):
+                            for container in (pod.spec.containers or []):
+                                for vm in (container.volume_mounts or []):
+                                    if vm.name == vol.name:
+                                        pod_hit       = pod.metadata.name
+                                        pod_container = container.name
+                                        mount_path    = vm.mount_path
+                                        break
+                                if pod_hit: break
+                        if pod_hit: break
+            except Exception:
+                pass
+
+            if not pod_hit:
+                pv_skip += 1
+                continue
+
+            df_out = _exec_df_inner(pod_hit, ns, mount_path, container=pod_container)
+            if not df_out:
+                pv_skip += 1
+                continue
+
+            parts = df_out.split()
+            if len(parts) < 2:
+                pv_skip += 1
+                continue
+
+            try:
+                used_kb  = int(parts[0])
+                avail_kb = int(parts[1])
+                total_kb = used_kb + avail_kb
+                pct      = round(used_kb / total_kb * 100, 1) if total_kb > 0 else 0.0
+            except (ValueError, ZeroDivisionError):
+                pv_skip += 1
+                continue
+
+            used_gib  = round(used_kb  / (1024 * 1024), 2)
+            total_gib = round(total_kb / (1024 * 1024), 2)
+            flag      = "🔴" if pct >= 90 else ("⚠️" if pct >= 80 else "✅")
+            pv_rows.append((pct, f"| {flag} | `{ns}/{pvc_name}` | {pct}% | {used_gib}Gi | {total_gib}Gi |"))
+
+        pv_rows.sort(key=lambda x: x[0], reverse=True)
+        if pv_rows:
+            hdr = ["| | NAMESPACE / PVC | USAGE | USED | TOTAL |", "|---|---|---|---|---|"]
+            report.extend(_table_cap([r[1] for r in pv_rows], hdr))
+        else:
+            report.append("✅ No volume usage data available (no mounted running pods found).")
+        if pv_skip:
+            report.append(f"_({pv_skip} PVC(s) skipped — no running pod with mount found.)_")
+    except Exception as e:
+        report.append(f"⚠️  Could not gather PV usage data: {e}")
+
+    # ── Section 5: Workload Health ────────────────────────────────────────────
+    report.append(_section("5. Workload Health"))
+
+    def _workload_section(kind, items, desired_fn, ready_fn, avail_fn):
+        """Generic workload table — healthy = one line, degraded = full table."""
+        if not items:
+            report.append(f"✅ No {kind}s found.")
+            return
+        degraded = [i for i in items
+                    if (desired_fn(i) or 0) > 0 and (ready_fn(i) or 0) < (desired_fn(i) or 0)]
+        if not degraded:
+            report.append(f"✅ {len(items)} {kind}(s) — all healthy.")
+            return
+        report.append(f"⚠️  {len(degraded)}/{len(items)} {kind}(s) degraded:")
+        hdr = [f"| NAMESPACE | NAME | DESIRED | READY | AVAILABLE |",
+               "|---|---|---|---|---|"]
+        rows = [
+            f"| `{i.metadata.namespace}` | `{i.metadata.name}` "
+            f"| {desired_fn(i) or 0} | {ready_fn(i) or 0} | {avail_fn(i) or 0} |"
+            for i in degraded
+        ]
+        report.extend(_table_cap(rows, hdr))
+
+    try:
+        _workload_section("Deployment",
+                          _apps.list_deployment_for_all_namespaces().items,
+                          lambda d: d.spec.replicas or 0,
+                          lambda d: d.status.ready_replicas or 0,
+                          lambda d: d.status.available_replicas or 0)
+    except Exception as e:
+        report.append(f"⚠️  Deployments: {e}")
+
+    try:
+        _workload_section("DaemonSet",
+                          _apps.list_daemon_set_for_all_namespaces().items,
+                          lambda d: d.status.desired_number_scheduled or 0,
+                          lambda d: d.status.number_ready or 0,
+                          lambda d: d.status.number_available or 0)
+    except Exception as e:
+        report.append(f"⚠️  DaemonSets: {e}")
+
+    try:
+        _workload_section("StatefulSet",
+                          _apps.list_stateful_set_for_all_namespaces().items,
+                          lambda s: s.spec.replicas or 0,
+                          lambda s: s.status.ready_replicas or 0,
+                          lambda s: getattr(s.status, "available_replicas", None) or 0)
+    except Exception as e:
+        report.append(f"⚠️  StatefulSets: {e}")
+
+    try:
+        # Orphaned ReplicaSets only (no owner reference)
+        all_rs  = _apps.list_replica_set_for_all_namespaces().items
+        orphaned = [r for r in all_rs
+                    if not r.metadata.owner_references
+                    and (r.spec.replicas or 0) > 0
+                    and (r.status.ready_replicas or 0) < (r.spec.replicas or 0)]
+        if orphaned:
+            report.append(f"⚠️  {len(orphaned)} orphaned/degraded ReplicaSet(s):")
+            hdr = ["| NAMESPACE | NAME | DESIRED | READY |", "|---|---|---|---|"]
+            rows = [f"| `{r.metadata.namespace}` | `{r.metadata.name}` "
+                    f"| {r.spec.replicas or 0} | {r.status.ready_replicas or 0} |"
+                    for r in orphaned]
+            report.extend(_table_cap(rows, hdr))
+        else:
+            report.append("✅ No orphaned/degraded ReplicaSets.")
+    except Exception as e:
+        report.append(f"⚠️  ReplicaSets: {e}")
+
+    try:
+        # Jobs — failed/stuck only (exclude completed)
+        jobs = _batch.list_job_for_all_namespaces().items
+        failed_jobs = [j for j in jobs
+                       if not any(o.kind == "CronJob" for o in (j.metadata.owner_references or []))
+                       and (j.status.failed or 0) > 0
+                       and not (j.status.succeeded or 0) > 0]
+        if failed_jobs:
+            report.append(f"⚠️  {len(failed_jobs)} failed Job(s):")
+            hdr = ["| NAMESPACE | NAME | ACTIVE | SUCCEEDED | FAILED |", "|---|---|---|---|---|"]
+            rows = [f"| `{j.metadata.namespace}` | `{j.metadata.name}` "
+                    f"| {j.status.active or 0} | {j.status.succeeded or 0} | {j.status.failed or 0} |"
+                    for j in failed_jobs]
+            report.extend(_table_cap(rows, hdr))
+        else:
+            report.append("✅ No failed Jobs.")
+    except Exception as e:
+        report.append(f"⚠️  Jobs: {e}")
+
+    try:
+        # CronJobs
+        cjs = _batch.list_cron_job_for_all_namespaces().items
+        if cjs:
+            report.append("")
+            report.append(f"**CronJobs ({len(cjs)} total)**")
+            hdr = ["| NAMESPACE | NAME | SCHEDULE | SUSPENDED | LAST RUN |",
+                   "|---|---|---|---|---|"]
+            rows = []
+            for cj in cjs:
+                last = cj.status.last_schedule_time
+                if last:
+                    diff = datetime.datetime.now(timezone.utc) - last
+                    d, s = diff.days, diff.seconds
+                    last_str = (f"{d}d {s//3600}h ago" if d > 0 else f"{s//3600}h {(s%3600)//60}m ago")
+                else:
+                    last_str = "Never"
+                rows.append(
+                    f"| `{cj.metadata.namespace}` | `{cj.metadata.name}` "
+                    f"| `{cj.spec.schedule}` "
+                    f"| {'⏸️ Yes' if cj.spec.suspend else '▶️ No'} "
+                    f"| {last_str} |"
+                )
+            report.extend(_table_cap(rows, hdr))
+        else:
+            report.append("✅ No CronJobs defined.")
+    except Exception as e:
+        report.append(f"⚠️  CronJobs: {e}")
+
+    try:
+        # Non-running pods
+        report.append("")
+        non_running = []
+        for phase in _NOT_RUNNING_PHASES:
+            try:
+                non_running += _core.list_pod_for_all_namespaces(
+                    field_selector=f"status.phase={phase}").items
+            except Exception:
+                pass
+        if non_running:
+            report.append(f"**🔴 Non-Running Pods ({len(non_running)} total)**")
+            hdr = ["| NAMESPACE | NAME | PHASE | READY | RESTARTS | REASON |",
+                   "|---|---|---|---|---|---|"]
+            rows = []
+            for pod in sorted(non_running,
+                              key=lambda p: (p.metadata.namespace, p.metadata.name)):
+                phase    = pod.status.phase or "Unknown"
+                restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
+                ready    = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
+                total    = len(pod.spec.containers)
+                reason   = ""
+                for cs in (pod.status.container_statuses or []):
+                    if cs.state and cs.state.waiting and cs.state.waiting.reason:
+                        reason = cs.state.waiting.reason; break
+                    if cs.state and cs.state.terminated and cs.state.terminated.reason:
+                        reason = cs.state.terminated.reason; break
+                rows.append(
+                    f"| `{pod.metadata.namespace}` | `{pod.metadata.name}` "
+                    f"| {phase} | {ready}/{total} | {restarts} | {reason or '-'} |"
+                )
+            report.extend(_table_cap(rows, hdr))
+        else:
+            report.append("✅ All pods are Running — no Pending/Failed/Unknown pods.")
+    except Exception as e:
+        report.append(f"⚠️  Non-running pods: {e}")
+
+    # ── Section 6: Networking & DNS ───────────────────────────────────────────
+    report.append(_section("6. Networking & DNS"))
+
+    try:
+        # CoreDNS
+        DNS_NS       = "kube-system"
+        DNS_PATTERNS = ["coredns", "core-dns", "kube-dns"]
+        dns_pods = [p for p in _core.list_namespaced_pod(namespace=DNS_NS).items
+                    if any(pat in p.metadata.name.lower() for pat in DNS_PATTERNS)
+                    and "autoscaler" not in p.metadata.name.lower()
+                    and (p.status.phase or "").lower() != "succeeded"]
+        if dns_pods:
+            not_ready_dns = [p for p in dns_pods
+                             if sum(1 for cs in (p.status.container_statuses or []) if cs.ready)
+                             < len(p.spec.containers or [])]
+            if not_ready_dns:
+                report.append(f"⚠️  CoreDNS: {len(not_ready_dns)}/{len(dns_pods)} pods not ready — "
+                               f"{_cap([p.metadata.name for p in not_ready_dns])}")
+            else:
+                report.append(f"✅ CoreDNS: {len(dns_pods)}/{len(dns_pods)} pods ready")
+        else:
+            report.append("⚠️  CoreDNS: no DNS pods found in kube-system")
+    except Exception as e:
+        report.append(f"⚠️  CoreDNS check failed: {e}")
+
+    try:
+        # Ingresses
+        ings = _net.list_ingress_for_all_namespaces().items
+        no_lb = [i for i in ings
+                 if not (i.status.load_balancer and i.status.load_balancer.ingress)]
+        if no_lb:
+            report.append(f"⚠️  {len(no_lb)}/{len(ings)} Ingresses missing LB IP:")
+            hdr = ["| NAMESPACE | NAME | HOSTS |", "|---|---|---|"]
+            rows = []
+            for i in no_lb:
+                hosts = ", ".join(r.host or "*" for r in (i.spec.rules or []))
+                rows.append(f"| `{i.metadata.namespace}` | `{i.metadata.name}` | {hosts or '-'} |")
+            report.extend(_table_cap(rows, hdr))
+        elif ings:
+            report.append(f"✅ {len(ings)} Ingresses — all have LB IP")
+        else:
+            report.append("✅ No Ingresses defined")
+    except Exception as e:
+        report.append(f"⚠️  Ingresses: {e}")
+
+    try:
+        # NetworkPolicies — report namespaces with no policy
+        nps      = _net.list_network_policy_for_all_namespaces().items
+        covered  = {np.metadata.namespace for np in nps}
+        all_ns_names = {n.metadata.name for n in _core.list_namespace().items}
+        uncovered = sorted(all_ns_names - covered)
+        if uncovered:
+            report.append(f"⚠️  {len(uncovered)} namespace(s) have no NetworkPolicy: "
+                          f"{_cap(uncovered)}")
+        else:
+            report.append(f"✅ All namespaces have NetworkPolicies ({len(nps)} total)")
+    except Exception as e:
+        report.append(f"⚠️  NetworkPolicies: {e}")
+
+    # ── Section 7: Certificates & RBAC ───────────────────────────────────────
+    report.append(_section("7. Certificates & RBAC"))
+
+    try:
+        custom = _k8s.CustomObjectsApi()
+        certs  = custom.list_cluster_custom_object(
+            "cert-manager.io", "v1", "certificates").get("items", [])
+        if certs:
+            not_ready_certs = []
+            expiring_soon   = []
+            for cert in certs:
+                meta    = cert.get("metadata", {})
+                status  = cert.get("status", {})
+                conditions = status.get("conditions", [])
+                ready   = next((c for c in conditions if c.get("type") == "Ready"), None)
+                is_ready = ready and ready.get("status") == "True"
+                not_after = status.get("notAfter")
+                if not is_ready:
+                    not_ready_certs.append(
+                        f"`{meta.get('namespace')}/{meta.get('name')}`")
+                elif not_after:
+                    try:
+                        exp = datetime.datetime.fromisoformat(
+                            not_after.replace("Z", "+00:00"))
+                        days_left = (exp - datetime.datetime.now(timezone.utc)).days
+                        if days_left <= 30:
+                            expiring_soon.append(
+                                f"`{meta.get('namespace')}/{meta.get('name')}` ({days_left}d)")
+                    except Exception:
+                        pass
+
+            if not_ready_certs:
+                report.append(f"🔴 {len(not_ready_certs)} cert(s) not Ready: "
+                               f"{_cap(not_ready_certs)}")
+            if expiring_soon:
+                report.append(f"⚠️  {len(expiring_soon)} cert(s) expiring within 30 days: "
+                               f"{_cap(expiring_soon)}")
+            if not not_ready_certs and not expiring_soon:
+                report.append(f"✅ {len(certs)} cert-manager certificate(s) — all Ready and not expiring soon")
+        else:
+            report.append("✅ No cert-manager Certificates found (cert-manager may not be installed)")
+    except Exception as e:
+        if "404" in str(e):
+            report.append("✅ cert-manager not installed — skipping certificate check")
+        else:
+            report.append(f"⚠️  Certificates: {e}")
+
+    try:
+        # Admission webhooks with Fail policy
+        adm_api    = _k8s.AdmissionregistrationV1Api()
+        mutating   = adm_api.list_mutating_webhook_configuration().items
+        validating = adm_api.list_validating_webhook_configuration().items
+        fail_webhooks = []
+        for config in mutating + validating:
+            for wh in (config.webhooks or []):
+                if wh.failure_policy == "Fail":
+                    fail_webhooks.append(
+                        f"`{config.metadata.name}/{wh.name}`")
+        if fail_webhooks:
+            report.append(f"⚠️  {len(fail_webhooks)} webhook(s) with FailurePolicy=Fail "
+                          f"(may block deployments): {_cap(fail_webhooks)}")
+        else:
+            report.append("✅ No Fail-policy admission webhooks")
+    except Exception as e:
+        report.append(f"⚠️  Webhooks: {e}")
+
+    # ── Section 8: Recent Diagnostics ────────────────────────────────────────
+    report.append(_section("8. Recent Diagnostics"))
+
+    try:
+        # Control plane
+        pods = _core.list_namespaced_pod(namespace="kube-system").items
+        core_components = ["kube-apiserver", "etcd", "kube-controller-manager", "kube-scheduler"]
+        cp_pods = [p for p in pods if any(comp in p.metadata.name for comp in core_components)]
+        if cp_pods:
+            cp_bad = [p for p in cp_pods
+                      if sum(1 for cs in (p.status.container_statuses or []) if cs.ready)
+                      < len(p.spec.containers or [])]
+            if cp_bad:
+                report.append(f"🔴 Control plane: {len(cp_bad)} pod(s) not ready — "
+                               f"{_cap([p.metadata.name for p in cp_bad])}")
+            else:
+                report.append(f"✅ Control plane: {len(cp_pods)} pod(s) ready")
+        else:
+            report.append("✅ Control plane pods not visible (managed cluster)")
+    except Exception as e:
+        report.append(f"⚠️  Control plane: {e}")
+
+    try:
+        # Top warning events — deduplicated, capped at 15
+        events = _core.list_event_for_all_namespaces(
+            field_selector="type=Warning", limit=500).items
+        seen: dict = {}
+        for e in events:
+            if _is_noisy_event(e.message or ""):
+                continue
+            key  = (e.reason or "", getattr(e.involved_object, "name", ""))
+            prev = seen.get(key)
+            if prev is None or (e.count or 1) > (prev[0] or 1):
+                seen[key] = (e.count or 1, e.metadata.namespace,
+                             e.reason or "-", key[1], e.message or "")
+        top = sorted(seen.values(), key=lambda x: x[0], reverse=True)[:15]
+        if top:
+            report.append(f"\n**Top Warning Events ({len(top)} unique)**")
+            hdr = ["| COUNT | REASON | NAMESPACE / OBJECT | MESSAGE |",
+                   "|---|---|---|---|"]
+            rows = []
+            for count, ns, reason, obj, msg in top:
+                short_msg = msg[:70] + "…" if len(msg) > 70 else msg
+                rows.append(f"| x{count} | {reason} | `{ns}/{obj}` | {short_msg} |")
+            report.extend(_table_cap(rows, hdr))
+        else:
+            report.append("✅ No recent warning events")
+    except Exception as e:
+        report.append(f"⚠️  Warning events: {e}")
+
+    # ── Footer ────────────────────────────────────────────────────────────────
+    report.append(f"\n{_DIV}")
+    report.append("💬 This is your complete health check report.")
+    report.append("📋 Ask the chatbot to drill into any flagged area for deeper diagnostics.")
+
+    return "\n".join(report)
 
 
 def get_control_plane_status() -> str:
