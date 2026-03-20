@@ -2181,7 +2181,7 @@ def run_cluster_health() -> str:
             ) if taints else "<none>"
 
             out.append(
-                f"  {'🔴' if not ready else '✅'} {node.metadata.name}"
+                f"  🖥️  {node.metadata.name}"
                 f" | {status}{pressure_str}"
                 f" | CPU: {cpu_str}"
                 f" | RAM: {mem_str}"
@@ -2487,6 +2487,7 @@ def run_cluster_health() -> str:
     out.append("🤖 Check out ECS Knowledge Bot to find out about known issues, Dos and Don'ts, and best practices.")
 
     return "\n".join(out)
+
 
 def generate_healthcheck_report() -> str:
     """
