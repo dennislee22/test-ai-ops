@@ -15,7 +15,6 @@ import yaml as _yaml
 from kubernetes import client as _k8s, config as _k8s_cfg
 from kubernetes.client.rest import ApiException
 
-
 _KUBECTL_MAX_OUT     = 4_000
 _KUBECTL_READ_VERBS  = {
     "get", "describe", "logs", "top", "rollout", "auth",
@@ -50,10 +49,8 @@ _EVENT_NOISE_PATTERNS = ["cgroup", "cgroupv", "cgroup v1", "cgroup v2"]
 _PG_SYSTEM_DBS        = {"postgres", "template0", "template1"}
 _MYSQL_SYSTEM_DBS     = {"information_schema", "performance_schema", "mysql", "sys"}
 
-
 logging.basicConfig(level=logging.INFO)
 _log = logging.getLogger("k8s")
-
 
 _version_api: _k8s.VersionApi
 _storage:      _k8s.StorageV1Api
@@ -63,7 +60,6 @@ _batch:        _k8s.BatchV1Api
 _rbac:         _k8s.RbacAuthorizationV1Api
 _net:          _k8s.NetworkingV1Api
 _autoscaling:  _k8s.AutoscalingV2Api
-
 
 def _init_api_clients() -> None:
     """(Re-)initialise all module-level API client singletons."""
@@ -77,7 +73,6 @@ def _init_api_clients() -> None:
     _net         = _k8s.NetworkingV1Api()
     _autoscaling = _k8s.AutoscalingV2Api()
 
-
 def _load_initial_k8s() -> None:
     kc = os.getenv("KUBECONFIG_PATH", "").strip()
     if kc and Path(os.path.expanduser(kc)).exists():
@@ -89,14 +84,11 @@ def _load_initial_k8s() -> None:
     else:
         _log.warning("No valid KUBECONFIG_PATH found at startup. Awaiting dynamic reload_kubeconfig().")
 
-
 _load_initial_k8s()
 _init_api_clients()
 
-
 def _api_error(e: ApiException) -> str:
     return f"[K8s API error {e.status}] {e.reason}"
-
 
 def _ns_header(kind: str, namespace: str, search: str | None = None) -> str:
     """
@@ -117,12 +109,10 @@ def _ns_header(kind: str, namespace: str, search: str | None = None) -> str:
     filt   = f" (filter: `{search}`)" if search else ""
     return f"Showing {prefix}{kind} in {scope}{filt}."
 
-
 def _list_pods(namespace: str = "all") -> list:
     return (_core.list_pod_for_all_namespaces().items
             if namespace == "all"
             else _core.list_namespaced_pod(namespace=namespace).items)
-
 
 def _filter_pods(pods: list, search: str | None) -> list:
     if not search:
@@ -132,7 +122,6 @@ def _filter_pods(pods: list, search: str | None) -> list:
                 if s in p.metadata.name.lower() or s in p.metadata.namespace.lower()]
     return filtered if filtered else pods
 
-
 def _get_gpu_requests(pod) -> str:
     reqs = [
         f"{c.name}:{v}"
@@ -141,7 +130,6 @@ def _get_gpu_requests(pod) -> str:
         if "gpu" in k.lower()
     ]
     return ", ".join(reqs) if reqs else "-"
-
 
 def _to_mebibytes(val: str) -> str:
     try:
@@ -153,10 +141,8 @@ def _to_mebibytes(val: str) -> str:
     except (ValueError, TypeError):
         return "0Mi"
 
-
 def _as_yaml(obj) -> str:
     return f"```yaml\n{_yaml.safe_dump(obj.to_dict(), sort_keys=False)}```"
-
 
 def _fmt_kv(label: str, d: dict | None, sep: str = "=", pad: int = 17) -> str:
     if not d:
@@ -164,7 +150,6 @@ def _fmt_kv(label: str, d: dict | None, sep: str = "=", pad: int = 17) -> str:
     indent = " " * pad
     pairs  = f"\n{indent}".join(f"{k}{sep}{v}" for k, v in d.items())
     return f"{label:<{pad}} {pairs}"
-
 
 def _age(ts) -> str:
     if not ts:
@@ -179,7 +164,6 @@ def _age(ts) -> str:
     except Exception:
         return "<unknown>"
 
-
 def _safe_reason(e) -> str:
     try:
         reason = getattr(e, "reason", None) or ""
@@ -188,18 +172,15 @@ def _safe_reason(e) -> str:
     except Exception:
         return "Unknown API error"
 
-
 def _b64decode_safe(val: str) -> str:
     try:
         return base64.b64decode(val).decode("utf-8", errors="replace").strip()
     except Exception:
         return val.strip()
 
-
 def _is_noisy_event(message: str) -> bool:
     msg = (message or "").lower()
     return any(p in msg for p in _EVENT_NOISE_PATTERNS)
-
 
 def _parse_cpu_to_millicores(v: str) -> int:
     if not v or v in ("none", "<none>", "0"): return 0
@@ -208,7 +189,6 @@ def _parse_cpu_to_millicores(v: str) -> int:
         return int(v[:-1]) if v.endswith("m") else int(float(v) * 1000)
     except (ValueError, TypeError):
         return 0
-
 
 def _parse_mem_to_mib(v: str) -> float:
     if not v or v in ("none", "<none>", "0"): return 0.0
@@ -222,12 +202,10 @@ def _parse_mem_to_mib(v: str) -> float:
     try:    return float(v) / (1024 * 1024)
     except: return 0.0
 
-
 def _parse_cpu_cores(val) -> float:
     if not val: return 0.0
     s = str(val)
     return float(s[:-1]) / 1000.0 if s.endswith("m") else float(s)
-
 
 def _parse_mem_gib(val) -> float:
     if not val: return 0.0
@@ -238,7 +216,6 @@ def _parse_mem_gib(val) -> float:
     if s.endswith("Ti"): return float(s[:-2]) * 1024.0
     if s.isdigit():      return float(s) / (1024**3)
     return 0.0
-
 
 def _parse_storage_to_gib(s: str) -> float:
     s = s.strip()
@@ -253,14 +230,12 @@ def _parse_storage_to_gib(s: str) -> float:
     except ValueError: pass
     return 0.0
 
-
 def _obj_to_yaml(obj) -> str:
     try:
         d = _k8s.ApiClient().sanitize_for_serialization(obj)
         return _yaml.dump(d, default_flow_style=False, allow_unicode=True)
     except Exception:
         return str(obj)
-
 
 def _paginate(list_fn, *args, field_selector="", **kwargs):
     items, _cont = [], None
@@ -273,7 +248,6 @@ def _paginate(list_fn, *args, field_selector="", **kwargs):
         _cont = page.metadata._continue if page.metadata and page.metadata._continue else None
         if not _cont: break
     return items
-
 
 def _is_high_restart(pod, restart_count: int) -> bool:
     if restart_count == 0: return False
@@ -297,7 +271,6 @@ def _is_high_restart(pod, restart_count: int) -> bool:
     if run_start is None: return restart_count > 10
     return (restart_count / max((now - run_start).total_seconds() / 86400, 0.1)) > 3.0
 
-
 def _list_namespaced_or_all(list_ns_fn, list_all_fn, namespace: str) -> list:
     if namespace != "all":
         try:
@@ -307,14 +280,12 @@ def _list_namespaced_or_all(list_ns_fn, list_all_fn, namespace: str) -> list:
             return list_all_fn().items
     return list_all_fn().items
 
-
 def _search_filter(items: list, search: str | None, fallback: bool = True) -> list:
     if not search: return items
     s = search.lower()
     filtered = [i for i in items
                 if s in i.metadata.name.lower() or s in (i.metadata.namespace or "").lower()]
     return filtered if filtered else (items if fallback else [])
-
 
 def reload_kubeconfig(yaml_content: str) -> dict:
     global _core, _apps, _batch, _rbac, _net, _autoscaling
@@ -336,7 +307,6 @@ def reload_kubeconfig(yaml_content: str) -> dict:
         raise ValueError(f"Kubeconfig loaded but cluster unreachable: {e}")
     _log.info(f"[kubeconfig] Reloaded — server={server_url}")
     return {"ok": True, "server": server_url or "unknown"}
-
 
 def get_pod_tolerations(namespace: str = "all", pod_name: str | None = None,
                         search: str | None = None) -> str:
@@ -383,7 +353,6 @@ def get_pod_tolerations(namespace: str = "all", pod_name: str | None = None,
     except ApiException as e:
         return _api_error(e)
 
-
 def get_pod_resource_requests(namespace: str = "all", search: str | None = None) -> str:
     try:
         pods = _list_pods(namespace)
@@ -420,7 +389,6 @@ def get_pod_resource_requests(namespace: str = "all", search: str | None = None)
     except ApiException as e:
         return _api_error(e)
 
-
 def get_pod_containers_resources(namespace: str = "all", search: str | None = None) -> str:
     try:
         pods = _list_pods(namespace)
@@ -448,7 +416,6 @@ def get_pod_containers_resources(namespace: str = "all", search: str | None = No
     except ApiException as e:
         return _api_error(e)
 
-
 _NOT_RUNNING_PHASES = ("Pending", "Failed", "Unknown")
 _NOT_RUNNING_WORDS  = {
     "notrunning", "not_running", "not-running",
@@ -456,7 +423,6 @@ _NOT_RUNNING_WORDS  = {
     "pending", "unknown",
     "bad", "broken", "down", "stuck", "problem", "issue",
 }
-
 
 def get_pod_status(namespace: str = "all", search: str | None = None,
                    phase: str | None = None) -> str:
@@ -580,7 +546,6 @@ def get_pod_status(namespace: str = "all", search: str | None = None,
     except ApiException as e:
         return _api_error(e)
 
-
 def get_pod_logs(namespace: str = "all", search: str | None = None,
                  tail_lines: int = 50, container: str = "") -> str:
     tail_lines = min(tail_lines, 100)
@@ -619,7 +584,6 @@ def get_pod_logs(namespace: str = "all", search: str | None = None,
         return header + "\n\n".join(log_entries)
     except ApiException as e:
         return _api_error(e)
-
 
 def describe_pod(pod_name: str, namespace: str = "all", search: str | None = None,
                  show_yaml: bool = False) -> str:
@@ -712,7 +676,6 @@ def describe_pod(pod_name: str, namespace: str = "all", search: str | None = Non
     except Exception as e:
         return f"`Error fetching pod: {e}`"
 
-
 def get_pod_images(namespace: str = "all", search: str | None = None) -> str:
     try:
         pods = (_core.list_pod_for_all_namespaces()
@@ -735,7 +698,6 @@ def get_pod_images(namespace: str = "all", search: str | None = None) -> str:
     lines = [_ns_header("Pod Images", namespace, search)]
     lines.extend(rows)
     return "\n".join(lines)
-
 
 def get_pod_storage(namespace: str = "all", search: str | None = None) -> str:
     try:
@@ -768,7 +730,6 @@ def get_pod_storage(namespace: str = "all", search: str | None = None) -> str:
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
-
 
 def get_unhealthy_pods_detail(namespace: str = "all") -> str:
     def _collect():
@@ -893,7 +854,6 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
         out.append("")
     return "\n".join(out)
 
-
 def describe_pv(name: str, show_yaml: bool = False) -> str:
     try:
         pvs = _core.list_persistent_volume().items
@@ -952,7 +912,6 @@ def describe_pv(name: str, show_yaml: bool = False) -> str:
     except Exception as e:
         return f"`Error fetching PV: {e}`"
 
-
 def describe_pvc(name: str, namespace: str = "all", show_yaml: bool = False) -> str:
     try:
         pvcs = (_core.list_persistent_volume_claim_for_all_namespaces().items
@@ -1007,7 +966,6 @@ def describe_pvc(name: str, namespace: str = "all", show_yaml: bool = False) -> 
     except Exception as e:
         return f"`Error fetching PVC: {e}`"
 
-
 def describe_sc(name: str, show_yaml: bool = False) -> str:
     try:
         matching = [sc for sc in _storage.list_storage_class().items if sc.metadata.name == name]
@@ -1034,7 +992,6 @@ def describe_sc(name: str, show_yaml: bool = False) -> str:
     except Exception as e:
         return f"`Error fetching StorageClass: {e}`"
 
-
 def get_storage_classes() -> str:
     try:
         scs = _storage.list_storage_class()
@@ -1054,7 +1011,6 @@ def get_storage_classes() -> str:
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
-
 
 def get_pvc_status(namespace: str = "all", show_all: bool = False,
                    search: str | None = None) -> str:
@@ -1095,7 +1051,6 @@ def get_pvc_status(namespace: str = "all", show_all: bool = False,
     except ApiException as e:
         return _api_error(e)
 
-
 def get_persistent_volumes() -> str:
     _AM = {"ReadWriteOnce":"RWO","ReadWriteMany":"RWX","ReadOnlyMany":"ROX","ReadWriteOncePod":"RWOP"}
     try:
@@ -1115,7 +1070,6 @@ def get_persistent_volumes() -> str:
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
-
 
 def get_pv_usage(threshold: int = 80) -> str:
     from kubernetes.stream import stream as _k8s_stream
@@ -1231,7 +1185,6 @@ def get_pv_usage(threshold: int = 80) -> str:
         output.extend(f"- {err}" for err in errors)
     return "\n".join(output)
 
-
 def get_pdb_status(namespace: str = "all") -> str:
     try:
         policy_api = _k8s.PolicyV1Api()
@@ -1255,7 +1208,6 @@ def get_pdb_status(namespace: str = "all") -> str:
         return "\n".join(lines)
     except Exception as e:
         return f"K8s API error fetching PDBs: {e}"
-
 
 def get_endpoints(namespace: str = "all", search: str | None = None) -> str:
     try:
@@ -1293,7 +1245,6 @@ def get_endpoints(namespace: str = "all", search: str | None = None) -> str:
     except ApiException as e:
         return _api_error(e)
 
-
 def get_service(namespace: str = "all", search: str = None) -> str:
     try:
         svcs = (_core.list_service_for_all_namespaces()
@@ -1326,7 +1277,6 @@ def get_service(namespace: str = "all", search: str = None) -> str:
         return "\n".join(md_lines)
     except ApiException as e:
         return _api_error(e)
-
 
 def get_ingress(namespace: str = "all", name: str = "", port: int = 0) -> str:
     def _get_ports(ing) -> list:
@@ -1428,7 +1378,6 @@ def get_ingress(namespace: str = "all", name: str = "", port: int = 0) -> str:
     except ApiException as e:
         return _api_error(e)
 
-
 def get_network_policy_status(namespace: str = "all") -> str:
     try:
         nps = (_net.list_network_policy_for_all_namespaces().items
@@ -1456,7 +1405,6 @@ def get_network_policy_status(namespace: str = "all") -> str:
         return "\n".join(lines)
     except Exception as e:
         return f"K8s API error fetching NetworkPolicies: {e}"
-
 
 def get_node_capacity() -> str:
     try:
@@ -1489,7 +1437,6 @@ def get_node_capacity() -> str:
     except ApiException as e:
         return _api_error(e)
 
-
 def get_node_labels(search: str = None) -> str:
     try:
         nodes = _core.list_node().items
@@ -1514,7 +1461,6 @@ def get_node_labels(search: str = None) -> str:
         return "\n".join(results) if results else f"No nodes or labels found matching '{search}'."
     except ApiException as e:
         return _api_error(e)
-
 
 def get_node_taints(search: str = None) -> str:
     try:
@@ -1542,7 +1488,6 @@ def get_node_taints(search: str = None) -> str:
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
-
 
 def get_node_info(node_name: str = None) -> str:
     headers = ["NODE","ROLES","STATUS","CPU","MEMORY","GPU"]
@@ -1572,7 +1517,6 @@ def get_node_info(node_name: str = None) -> str:
     except Exception as e:
         return f"Unexpected error: {e}"
 
-
 def _workload_table(namespace, kind, items, desired_fn, ready_fn, avail_fn, search=None):
     if not items:
         return f"No {kind}s in '{namespace}'."
@@ -1592,7 +1536,6 @@ def _workload_table(namespace, kind, items, desired_fn, ready_fn, avail_fn, sear
                      f"| {status} | {desired} | {ready} | {available} |")
     return "\n".join(lines)
 
-
 def get_deployment(namespace: str = "all", search: str = None) -> str:
     try:
         items = (_apps.list_deployment_for_all_namespaces() if namespace == "all"
@@ -1603,7 +1546,6 @@ def get_deployment(namespace: str = "all", search: str = None) -> str:
                                lambda d: d.status.available_replicas or 0, search)
     except ApiException as e:
         return _api_error(e)
-
 
 def get_daemonset(namespace: str = "all") -> str:
     try:
@@ -1616,7 +1558,6 @@ def get_daemonset(namespace: str = "all") -> str:
     except ApiException as e:
         return _api_error(e)
 
-
 def get_replicaset(namespace: str = "all", search: str = None) -> str:
     try:
         items = (_apps.list_replica_set_for_all_namespaces() if namespace == "all"
@@ -1628,7 +1569,6 @@ def get_replicaset(namespace: str = "all", search: str = None) -> str:
     except Exception as e:
         return f"Unexpected error: {e}"
 
-
 def get_statefulset(namespace: str = "all", search: str = None) -> str:
     try:
         items = (_apps.list_stateful_set_for_all_namespaces() if namespace == "all"
@@ -1639,7 +1579,6 @@ def get_statefulset(namespace: str = "all", search: str = None) -> str:
                                lambda s: getattr(s.status, "available_replicas", None) or 0, search)
     except ApiException as e:
         return _api_error(e)
-
 
 def get_hpa_status(namespace: str = "all") -> str:
     try:
@@ -1660,7 +1599,6 @@ def get_hpa_status(namespace: str = "all") -> str:
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
-
 
 def get_adhoc_job_status(namespace: str = "all", show_all: bool = False,
                          raw_output: bool = False, failed_only: bool = False,
@@ -1721,7 +1659,6 @@ def get_adhoc_job_status(namespace: str = "all", show_all: bool = False,
     except Exception as e:
         return f"K8s API error: {e}"
 
-
 def get_cronjob_status(namespace: str = "all", search: str = None) -> str:
     try:
         cjs = (_batch.list_cron_job_for_all_namespaces().items
@@ -1750,7 +1687,6 @@ def get_cronjob_status(namespace: str = "all", search: str = None) -> str:
     except Exception as e:
         return f"K8s API error fetching CronJobs: {e}"
 
-
 def get_cluster_version() -> str:
     try:
         v = _version_api.get_code()
@@ -1758,7 +1694,6 @@ def get_cluster_version() -> str:
                 f"GitCommit: {v.git_commit}, BuildDate: {v.build_date}")
     except Exception as e:
         return f"[ERROR] Failed to get cluster version: {e}"
-
 
 def get_namespace_status(namespace: str = "all", show_all: bool = False,
                          sort_by: str | None = None, limit: int | None = None) -> str:
@@ -1809,7 +1744,6 @@ def get_namespace_status(namespace: str = "all", show_all: bool = False,
     except ApiException as e:
         return f"[ERROR] K8s API error listing namespaces: {e.reason}"
 
-
 def get_events(namespace: str = "all", search: str | None = None, type: str = "All") -> str:
     try:
         type_upper = type.capitalize()
@@ -1851,7 +1785,6 @@ def get_events(namespace: str = "all", search: str | None = None, type: str = "A
     except Exception as e:
         return f"`Error fetching events: {e}`"
 
-
 def get_gpu_info() -> str:
     try:
         nodes = _core.list_node().items
@@ -1886,7 +1819,6 @@ def get_gpu_info() -> str:
         return "\n".join(lines) if has_gpu else "No GPU nodes detected in the cluster."
     except ApiException as e:
         return _api_error(e)
-
 
 def find_resource(name_substring: str, resource_type: str = None, namespace: str = None) -> str:
     try:
@@ -2027,10 +1959,8 @@ def find_resource(name_substring: str, resource_type: str = None, namespace: str
     except Exception as e:
         return f"Unexpected error: {e}"
 
-
 _SYSTEM_NAMESPACES = ("kube-system", "coredns", "longhorn-system", "ingress-nginx")
 _MAX_DETAIL_ITEMS  = 5
-
 
 def _cap(items: list, max_n: int = _MAX_DETAIL_ITEMS) -> str:
     """Render up to max_n items inline; suffix with (+N more) if list is longer."""
@@ -2038,7 +1968,6 @@ def _cap(items: list, max_n: int = _MAX_DETAIL_ITEMS) -> str:
     rest  = len(items) - max_n
     s     = ", ".join(f"`{x}`" for x in shown)
     return s + (f" (+{rest} more)" if rest > 0 else "")
-
 
 def run_cluster_health() -> str:
     """
@@ -2396,7 +2325,6 @@ def run_cluster_health() -> str:
     out.append("```")
 
     return "\n".join(out)
-
 
 def generate_healthcheck_report() -> str:
     """
@@ -3082,7 +3010,6 @@ def generate_healthcheck_report() -> str:
 
     return "\n".join(report)
 
-
 def get_control_plane_status() -> str:
     try:
         lines = ["### Control Plane Health\n"]
@@ -3120,7 +3047,6 @@ def get_control_plane_status() -> str:
     except Exception as e:
         return f"K8s API error fetching Control Plane status: {e}"
 
-
 def get_webhook_health() -> str:
     try:
         adm_api   = _k8s.AdmissionregistrationV1Api()
@@ -3147,7 +3073,6 @@ def get_webhook_health() -> str:
         return "\n".join(lines)
     except Exception as e:
         return f"K8s API error fetching Webhooks: {e}"
-
 
 def get_certificate_status(namespace: str = "all") -> str:
     try:
@@ -3181,7 +3106,6 @@ def get_certificate_status(namespace: str = "all") -> str:
     except Exception as e:
         return f"K8s API error fetching Certificates: {e}"
 
-
 def _list_namespaced_or_all(list_ns_fn, list_all_fn, namespace: str) -> list:
     if namespace != "all":
         try:
@@ -3191,14 +3115,12 @@ def _list_namespaced_or_all(list_ns_fn, list_all_fn, namespace: str) -> list:
             return list_all_fn().items
     return list_all_fn().items
 
-
 def _search_filter(items: list, search: str | None, fallback: bool = True) -> list:
     if not search: return items
     s = search.lower()
     filtered = [i for i in items
                 if s in i.metadata.name.lower() or s in (i.metadata.namespace or "").lower()]
     return filtered if filtered else (items if fallback else [])
-
 
 def get_configmap_list(namespace: str = "all", search: str | None = None,
                        filter_keys: list = None) -> str:
@@ -3229,7 +3151,6 @@ def get_configmap_list(namespace: str = "all", search: str | None = None,
         return "\n".join(lines) if len(lines) > 2 else "No matching ConfigMaps found."
     except ApiException as e:
         return _api_error(e)
-
 
 def get_secret_list(namespace: str = "all", name: str = "", pod_name: str = None,
                     filter_keys: list = None, decode: bool = False) -> str:
@@ -3309,7 +3230,6 @@ def get_secret_list(namespace: str = "all", name: str = "", pod_name: str = None
     except ApiException as e:
         return _api_error(e)
 
-
 def get_resource_quotas(namespace: str = "all", search: str | None = None) -> str:
     try:
         items = _list_namespaced_or_all(
@@ -3329,7 +3249,6 @@ def get_resource_quotas(namespace: str = "all", search: str | None = None) -> st
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
-
 
 def get_limit_ranges(namespace: str = "all", search: str | None = None) -> str:
     try:
@@ -3353,7 +3272,6 @@ def get_limit_ranges(namespace: str = "all", search: str | None = None) -> str:
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
-
 
 def get_serviceaccounts(namespace: str = "all", search: str | None = None) -> str:
     try:
@@ -3383,7 +3301,6 @@ def get_serviceaccounts(namespace: str = "all", search: str | None = None) -> st
     except Exception as e:
         return f"K8s error: {e}"
 
-
 def get_cluster_role_bindings() -> str:
     try:
         crbs = _rbac.list_cluster_role_binding()
@@ -3396,7 +3313,6 @@ def get_cluster_role_bindings() -> str:
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
-
 
 def get_namespace_resource_summary(namespace: str) -> str:
     try:
@@ -3436,7 +3352,6 @@ def get_namespace_resource_summary(namespace: str) -> str:
         "| POD NAME | CPU REQ | MEM REQ | CPU LIM | MEM LIM |",
         "|---|---|---|---|---|",
     ] + table_rows)
-
 
 def get_coredns_health() -> str:
     from kubernetes.stream import stream as _k8s_stream
@@ -3554,7 +3469,6 @@ def get_coredns_health() -> str:
         lines.extend(f"       {oline}" for oline in output.splitlines())
 
     return "\n".join(lines)
-
 
 def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h",
                               step: str = "60s", namespace: str = "") -> str:
@@ -3762,7 +3676,6 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h",
         separators=(",", ":"))
     return "\n".join(summary_lines) + f"\n§GRAPH§{graph_payload}§GRAPH§"
 
-
 def _find_db_credentials(namespace: str, pod_name: str) -> dict:
     creds: dict = {k: None for k in ("user","password","database","host","port")}
 
@@ -3820,7 +3733,6 @@ def _find_db_credentials(namespace: str, pod_name: str) -> dict:
                     pass
     return creds
 
-
 def _detect_db_type(pod_name: str, namespace: str, container_hint: str = "") -> str | None:
     try:
         pod = _core.read_namespaced_pod(name=pod_name, namespace=namespace)
@@ -3844,7 +3756,6 @@ def _detect_db_type(pod_name: str, namespace: str, container_hint: str = "") -> 
             if n.startswith(("mysql","mariadb")): return "mysql"
     return None
 
-
 def _find_db_container(pod_name: str, namespace: str, db_type: str) -> str:
     try:
         pod = _core.read_namespaced_pod(name=pod_name, namespace=namespace)
@@ -3858,7 +3769,6 @@ def _find_db_container(pod_name: str, namespace: str, db_type: str) -> str:
         if db_type == "mysql"    and any(h in cname for h in ("mysql","mariadb","db")): return c.name
         if db_type == "postgres" and any(h in cname for h in ("postgres","pg","db")):   return c.name
     return (pod.spec.containers or [{}])[0].name if pod.spec.containers else ""
-
 
 def _find_db_pod(namespace: str, hint: str = "") -> tuple[str | None, str | None]:
     try:
@@ -3876,7 +3786,6 @@ def _find_db_pod(namespace: str, hint: str = "") -> tuple[str | None, str | None
                 if db_type: return pname, db_type
     return None, None
 
-
 def _exec_simple_query(pod_name: str, namespace: str, container_name: str, cmd: str) -> str:
     from kubernetes.stream import stream as _k8s_stream
     try:
@@ -3888,7 +3797,6 @@ def _exec_simple_query(pod_name: str, namespace: str, container_name: str, cmd: 
         return resp.strip() if isinstance(resp, str) else ""
     except Exception:
         return ""
-
 
 def _discover_pg_database(pod_name: str, namespace: str, container_name: str,
                            user: str, password: str) -> str:
@@ -3903,7 +3811,6 @@ def _discover_pg_database(pod_name: str, namespace: str, container_name: str,
         if db and db.lower() not in _PG_SYSTEM_DBS: return db
     return "postgres"
 
-
 def _discover_mysql_database(pod_name: str, namespace: str, container_name: str,
                               user: str, password: str, host: str, port: str) -> str:
     pass_arg = f"-p'{password}'" if password else ""
@@ -3914,7 +3821,6 @@ def _discover_mysql_database(pod_name: str, namespace: str, container_name: str,
         db = db.strip()
         if db and db.lower() not in _MYSQL_SYSTEM_DBS: return db
     return ""
-
 
 def exec_db_query(namespace: str, sql: str, pod_name: str = "", database: str = "",
                   container: str = "") -> str:
@@ -4010,7 +3916,6 @@ def exec_db_query(namespace: str, sql: str, pod_name: str = "", database: str = 
               + (f" · db={db_name}" if db_name else "") + "]\n" + "-" * 60 + "\n")
     return header + output
 
-
 def _resolve_crd_version(group: str, plural: str) -> str:
     try:
         ext = _k8s.ApiextensionsV1Api()
@@ -4021,13 +3926,11 @@ def _resolve_crd_version(group: str, plural: str) -> str:
     except Exception:
         return "v1"
 
-
 def _list_custom_all(plural: str, group: str, version: str) -> list:
     try:
         return _k8s.CustomObjectsApi().list_cluster_custom_object(group, version, plural).get("items", [])
     except Exception:
         return []
-
 
 def _list_custom_ns(ns: str, plural: str, group: str, version: str) -> list:
     try:
@@ -4035,12 +3938,10 @@ def _list_custom_ns(ns: str, plural: str, group: str, version: str) -> list:
     except Exception:
         return []
 
-
 def _get_custom(name: str, ns: str, plural: str, group: str, version: str) -> dict:
     custom = _k8s.CustomObjectsApi()
     if ns: return custom.get_namespaced_custom_object(group, version, ns, plural, name)
     return custom.get_cluster_custom_object(group, version, plural, name)
-
 
 def _get_resource_fns(resource: str):
     r = resource.lower()
@@ -4090,7 +3991,6 @@ def _get_resource_fns(resource: str):
         )
     return None
 
-
 def _fmt_pod(p) -> str:
     ns, name  = p.metadata.namespace or "", p.metadata.name
     ready_cs  = p.status.container_statuses or []
@@ -4101,14 +4001,12 @@ def _fmt_pod(p) -> str:
     row = f"{name:<50} {ready}/{total}  {restarts:<6} {p.status.phase or 'Unknown':<12} {p.spec.node_name or '<none>':<30} {age}"
     return (f"{ns:<30} " + row) if ns else row
 
-
 def _fmt_node(n) -> str:
     role  = (",".join(k.split("/")[-1] for k in (n.metadata.labels or {})
                       if "node-role.kubernetes.io" in k) or "worker")
     conds = {c.type: c.status for c in (n.status.conditions or [])}
     ver   = n.status.node_info.kubelet_version if n.status and n.status.node_info else ""
     return f"{n.metadata.name:<40} {role:<20} {'Ready' if conds.get('Ready')=='True' else 'NotReady':<10} {_age(n.metadata.creation_timestamp):<10} {ver}"
-
 
 def _fmt_deployment(d) -> str:
     ns, name  = d.metadata.namespace or "", d.metadata.name
@@ -4118,7 +4016,6 @@ def _fmt_deployment(d) -> str:
     age       = _age(d.metadata.creation_timestamp)
     row = f"{name:<50} {ready}/{desired}  available={available}  {age}"
     return (f"{ns:<30} " + row) if ns else row
-
 
 def _obj_to_table(items, kind: str) -> str:
     if not items:
@@ -4160,7 +4057,6 @@ def _obj_to_table(items, kind: str) -> str:
                 lines.append(f"  {item.metadata.name:<50} {_age(item.metadata.creation_timestamp)}")
     return "\n".join(lines)
 
-
 def _custom_to_table(items: list, kind: str) -> str:
     if not items:
         return f"No {kind} resources found."
@@ -4185,7 +4081,6 @@ def _custom_to_table(items: list, kind: str) -> str:
             lines.append(f"  {item.get('metadata',{}).get('name',''):<50} <n/a>")
     return "\n".join(lines)
 
-
 def _handle_get(p: dict) -> str:
     fns = _get_resource_fns(p["resource"])
     if fns is None:
@@ -4209,7 +4104,6 @@ def _handle_get(p: dict) -> str:
     except ApiException as e:
         return f"[ERROR] API error getting {p['resource']}: {_safe_reason(e)}"
 
-
 def _handle_describe(p: dict) -> str:
     fns = _get_resource_fns(p["resource"])
     if fns is None:
@@ -4220,7 +4114,6 @@ def _handle_describe(p: dict) -> str:
     except ApiException as e:
         return f"[ERROR] API error describing {p['resource']}/{p['name']}: {e.reason}"
 
-
 def _handle_logs(p: dict) -> str:
     pod_ref  = p["resource"]
     pod_name = pod_ref.split("/", 1)[1] if "/" in pod_ref else pod_ref
@@ -4230,7 +4123,6 @@ def _handle_logs(p: dict) -> str:
         return _core.read_namespaced_pod_log(pod_name, p["namespace"], **kw) or "(empty log)"
     except ApiException as e:
         return f"[ERROR] Cannot get logs for {pod_name} in {p['namespace']}: {e.reason}"
-
 
 def _handle_top(p: dict) -> str:
     custom = _k8s.CustomObjectsApi()
@@ -4257,7 +4149,6 @@ def _handle_top(p: dict) -> str:
     except ApiException as e:
         return f"[ERROR] Metrics not available: {e.reason}. Is metrics-server installed?"
 
-
 def _handle_rollout(p: dict) -> str:
     subverb = p["args"][1] if len(p["args"]) > 1 else p["subcommand"]
     ref     = p["args"][2] if len(p["args"]) > 2 else ""
@@ -4276,10 +4167,8 @@ def _handle_rollout(p: dict) -> str:
     except ApiException as e:
         return f"[ERROR] {e.reason}"
 
-
 def _handle_auth_cani(p: dict) -> str:
     return "[INFO] auth can-i is not implemented via API mode."
-
 
 def _handle_api_resources() -> str:
     try:
@@ -4292,10 +4181,8 @@ def _handle_api_resources() -> str:
     except ApiException as e:
         return f"[ERROR] {e.reason}"
 
-
 def _handle_version() -> str:
     return get_cluster_version()
-
 
 def _parse_kubectl(command: str) -> dict:
     tokens = shlex.split(command.strip())
@@ -4335,7 +4222,6 @@ def _parse_kubectl(command: str) -> dict:
         if len(positional) >= 2: result["name"]       = positional[1]
         if len(positional) >= 3: result["subcommand"] = positional[2]
     return result
-
 
 def kubectl_exec(command: str) -> str:
     command = command.strip()
