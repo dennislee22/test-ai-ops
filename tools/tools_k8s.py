@@ -1785,14 +1785,16 @@ def get_top_nodes(limit: int = 0, ascending: bool = False,
     lines.append("```")
     return "\n".join(lines)
 
-def get_node_taints(search: str = None, tainted_only: bool = False) -> str:
+def get_node_taints(search: str = None, tainted_only: bool = False,
+                    taint_search: str = None) -> str:
     """
     List node taints.
 
-    search       — filters by NODE NAME (partial match), not taint content.
-                   Ignored when Claude passes vague words like 'tainted', 'any', 'all'.
-    tainted_only — when True (or when search implies it), show only nodes that
-                   actually have at least one taint.
+    search       — filters by NODE NAME (partial match).
+    taint_search — filters by TAINT KEY or VALUE content (partial match).
+                   Use when the user asks for nodes tainted with a specific key/value
+                   e.g. 'cde', 'gpu', 'dedicated'.
+    tainted_only — when True, show only nodes that have at least one taint.
     """
     _TAINT_INTENT_WORDS = {
         "tainted", "taint", "any", "all", "which", "show", "list", "every", "what"
@@ -1808,9 +1810,9 @@ def get_node_taints(search: str = None, tainted_only: bool = False) -> str:
             return "No nodes found."
 
         if search:
-            nodes = [n for n in nodes if search.lower() in n.metadata.name.lower()]
-            if not nodes:
-                nodes = _core.list_node().items
+            matched = [n for n in nodes if search.lower() in n.metadata.name.lower()]
+            if matched:
+                nodes = matched
 
         rows = []
         for node in nodes:
@@ -1818,19 +1820,27 @@ def get_node_taints(search: str = None, tainted_only: bool = False) -> str:
             if tainted_only and not taints:
                 continue
             if not taints:
-                rows.append((node.metadata.name, "<none>", "-", "-"))
+                if not taint_search:
+                    rows.append((node.metadata.name, "<none>", "-", "-"))
             else:
                 for t in taints:
-                    rows.append((node.metadata.name,
-                                 t.key    or "<any>",
-                                 t.value  or "-",
-                                 t.effect or "-"))
+                    key    = t.key    or "<any>"
+                    val    = t.value  or "-"
+                    effect = t.effect or "-"
+                    if taint_search:
+                        ts = taint_search.lower()
+                        if ts not in key.lower() and ts not in val.lower():
+                            continue
+                    rows.append((node.metadata.name, key, val, effect))
 
         if not rows:
+            if taint_search:
+                return f"No nodes found with a taint matching `{taint_search}`."
             return "No tainted nodes found." if tainted_only else "No nodes found."
 
         scope = "tainted nodes" if tainted_only else "nodes"
-        lines = [_ns_header(f"Node Taints ({scope})", "all", search),
+        filter_note = taint_search or search
+        lines = [_ns_header(f"Node Taints ({scope})", "all", filter_note),
                  "| NODE | KEY | VALUE | EFFECT |", "|---|---|---|---|"]
         for node_name, key, val, effect in rows:
             lines.append(f"| `{node_name}` | {key} | {val} | {effect} |")
@@ -2109,7 +2119,7 @@ def get_events(namespace: str = "all", search: str | None = None, type: str = "A
                                or s in (e.metadata.namespace or "").lower()
                                or s in getattr(e.involved_object, "name", "").lower()]
         if not matching:
-            return f"`No events matching '{search}' found in namespace '{namespace}'.`"
+            return f"`No such events matching '{search}' found in namespace '{namespace}'.`"
         sorted_evs = sorted(matching, key=lambda e: e.last_timestamp or e.event_time or "", reverse=True)
         lines = [_ns_header("Events", namespace, search), "```"]
         shown = suppressed = 0
@@ -2127,7 +2137,7 @@ def get_events(namespace: str = "all", search: str | None = None, type: str = "A
         if suppressed:
             lines.append(f"_({suppressed} noisy/background event(s) suppressed)_")
         if shown == 0:
-            return f"`No actionable events in '{namespace}' (all were background noise).`"
+            return f"`No such events in '{namespace}' (all were background noise).`"
         lines.append("```")
         return "\n".join(lines)
     except ApiException as e:
