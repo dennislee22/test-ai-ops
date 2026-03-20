@@ -2863,13 +2863,9 @@ inpEl.addEventListener('keydown', e=>{
     }, 3500);
 
     try {
-      const res = await fetch('/api/ask', {
-        method: 'POST',
+      const res = await fetch('/api/healthcheck-report', {
+        method: 'GET',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          q: 'Call generate_healthcheck_report to produce the comprehensive cluster health check report. Do not call run_cluster_health.',
-          skip_synthesise: true
-        })
       });
 
       clearInterval(stepTimer);
@@ -2878,11 +2874,11 @@ inpEl.addEventListener('keydown', e=>{
 
       if (!res.ok) {
         const e = await res.json().catch(() => ({}));
-        throw new Error(e.detail || 'HTTP ' + res.status);
+        throw new Error(e.error || 'HTTP ' + res.status);
       }
 
       const data = await res.json();
-      const reportText = data.response || data.answer || '';
+      const reportText = data.report || '';
 
       if (!reportText || reportText.startsWith('[ERROR]')) {
         throw new Error(reportText || 'No report content returned.');
@@ -3132,14 +3128,13 @@ window.glCopy = function(btn, text) {
     setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('copied'); }, 1500);
   });
 }
-
 // ═══════════════════════════════════════════════════════════════════════════
 })();
 </script>
 <div id="tooltip-skip-synthesis" class="section-tooltip">
   <div style="font-weight: 400; margin-bottom: 4px; color: #fff;">Skip Synthesis</div>
   <div style="font-size: 12px; color: #cbd5e1; line-height: 1.4;">
-    Bypass the AI’s final reasoning step to deliver raw data straight from the cluster tools. This is much faster and avoids the LLM summarizing or omitting details. However, the output may not directly answer the question.
+    Bypass the AI's final reasoning step to deliver raw data straight from the cluster tools. This is much faster and avoids the LLM summarizing or omitting details. However, the output may not directly answer the question.
   </div>
 </div>
 </body>
