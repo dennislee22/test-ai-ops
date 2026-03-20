@@ -2879,10 +2879,39 @@ inpEl.addEventListener('keydown', e=>{
 
       const data = await res.json();
       const reportText = data.report || '';
+      const topCpu     = data.top_cpu || [];
+      const topMem     = data.top_mem || [];
 
       if (!reportText || reportText.startsWith('[ERROR]')) {
         throw new Error(reportText || 'No report content returned.');
       }
+
+      // ── Build SVG horizontal bar chart ────────────────────────────────────
+      function buildBarChart(rows, valueKey, unit, title, color) {
+        if (!rows.length) return `<p style="color:#64748b;font-size:11px">No metrics-server data available.</p>`;
+        const maxVal = Math.max(...rows.map(r => r[valueKey]), 1);
+        const BAR_W  = 340, ROW_H = 22, LABEL_W = 260, PAD = 8;
+        const H      = rows.length * ROW_H + PAD * 2;
+        const W      = LABEL_W + BAR_W + 80;
+        let bars = '';
+        rows.forEach((r, i) => {
+          const y    = PAD + i * ROW_H;
+          const bw   = Math.max(2, (r[valueKey] / maxVal) * BAR_W);
+          const lbl  = r.label.length > 42 ? r.label.slice(0, 40) + '…' : r.label;
+          const val  = unit === 'm' ? `${r[valueKey]}m` : `${Math.round(r[valueKey])}Mi`;
+          bars += `<text x="${LABEL_W - 6}" y="${y + 14}" text-anchor="end" font-size="9" font-family="Consolas,monospace" fill="#334155">${lbl}</text>`;
+          bars += `<rect x="${LABEL_W}" y="${y + 4}" width="${bw}" height="${ROW_H - 8}" rx="2" fill="${color}" opacity="0.85"/>`;
+          bars += `<text x="${LABEL_W + bw + 5}" y="${y + 14}" font-size="9" font-family="Consolas,monospace" fill="#0369a1" font-weight="600">${val}</text>`;
+        });
+        return `<div style="margin:8px 0 16px">
+          <div style="font-size:11px;font-weight:700;color:#075985;margin-bottom:4px">${title}</div>
+          <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:700px;height:auto;display:block">
+            ${bars}
+          </svg></div>`;
+      }
+
+      const chartsCpu = buildBarChart(topCpu, 'cpu', 'm',   'Top 10 Pods — CPU Usage (millicores, live)', '#0369a1');
+      const chartsMem = buildBarChart(topMem, 'mem', 'MiB', 'Top 10 Pods — Memory Usage (MiB, live)',    '#0891b2');
 
       // ── Build a styled print-ready HTML page and trigger print-to-PDF ──
       const now = new Date().toLocaleString();
@@ -2890,39 +2919,60 @@ inpEl.addEventListener('keydown', e=>{
 <html><head><meta charset="UTF-8"/>
 <title>ECS Cluster Health Report — ${now}</title>
 <style>
-  @page { margin: 18mm 16mm; }
-  body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 12px; color: #1e293b; line-height: 1.65; }
-  h1 { font-size: 20px; color: #0369a1; border-bottom: 2px solid #0369a1; padding-bottom: 6px; margin-bottom: 4px; }
-  h2 { font-size: 14px; color: #075985; border-bottom: 1px solid #bae6fd; padding-bottom: 3px; margin: 20px 0 8px; page-break-after: avoid; }
-  h3 { font-size: 12px; color: #0c4a6e; margin: 12px 0 4px; }
-  p  { margin: 4px 0 8px; }
-  pre, code { font-family: 'Consolas', 'Courier New', monospace; font-size: 11px; }
-  pre { background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 4px; padding: 8px 10px; overflow-wrap: break-word; white-space: pre-wrap; margin: 6px 0 10px; }
-  code { background: #f0f9ff; border: 1px solid #e0f2fe; border-radius: 3px; padding: 1px 4px; }
-  table { border-collapse: collapse; width: 100%; margin: 8px 0 14px; font-size: 11px; page-break-inside: avoid; }
-  th { background: #0369a1; color: #fff; padding: 5px 8px; text-align: left; font-weight: 600; }
-  td { padding: 4px 8px; border: 1px solid #e2e8f0; vertical-align: top; }
-  tr:nth-child(even) td { background: #f0f9ff; }
-  .report-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 20px; }
-  .report-meta { font-size: 10px; color: #64748b; }
-  @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+  @page { margin: 15mm 14mm; size: A4; }
+  * { box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 11.5px; color: #1e293b; line-height: 1.6; }
+  h1 { font-size: 19px; color: #0369a1; border-bottom: 2px solid #0369a1; padding-bottom: 5px; margin: 0 0 3px; }
+  h2 { font-size: 13px; color: #075985; border-bottom: 1px solid #bae6fd; padding-bottom: 3px; margin: 18px 0 7px; page-break-after: avoid; }
+  h3 { font-size: 12px; color: #0c4a6e; margin: 10px 0 4px; page-break-after: avoid; }
+  p  { margin: 3px 0 7px; }
+  hr { border: none; border-top: 1px solid #e2e8f0; margin: 10px 0; }
+  pre { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 3px; padding: 6px 8px;
+        overflow-wrap: break-word; white-space: pre-wrap; margin: 4px 0 8px;
+        font-family: 'Consolas','Courier New',monospace; font-size: 10.5px; }
+  code { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 2px;
+         padding: 1px 4px; font-family: 'Consolas','Courier New',monospace; font-size: 10.5px; }
+  table { border-collapse: collapse; width: 100%; margin: 6px 0 12px; font-size: 10.5px; page-break-inside: avoid; }
+  th { background: #0369a1; color: #fff; padding: 5px 7px; text-align: left; font-weight: 600; font-size: 10px; }
+  td { padding: 4px 7px; border-bottom: 1px solid #e2e8f0; border-right: 1px solid #f1f5f9; vertical-align: top; word-break: break-word; }
+  tr:nth-child(even) td { background: #f8fafc; }
+  tr:last-child td { border-bottom: 1px solid #e2e8f0; }
+  .report-header { margin-bottom: 18px; }
+  .report-meta { font-size: 10px; color: #64748b; margin-top: 2px; }
+  .charts-section { page-break-before: avoid; margin: 14px 0; }
+  .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media print {
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    h2, h3 { page-break-after: avoid; }
+    table { page-break-inside: avoid; }
+    .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  }
 </style>
 </head><body>
 <div class="report-header">
-  <div>
-    <h1>ECS AI Ops — Cluster Health Report</h1>
-    <div class="report-meta">Generated: ${now} &nbsp;·&nbsp; Timezone: ${USER_TIMEZONE}</div>
+  <h1>&#128203; ECS AI Ops — Cluster Health Report</h1>
+  <div class="report-meta">Generated: ${now} &nbsp;·&nbsp; Timezone: ${USER_TIMEZONE}</div>
+</div>
+
+<div class="charts-section">
+  <h2>&#128200; Live Resource Usage (Top 10 Pods)</h2>
+  <div class="charts-grid">
+    ${chartsCpu}
+    ${chartsMem}
   </div>
 </div>
+
+<hr/>
+
 ${marked.parse(reportText)}
 </body></html>`;
 
-      const printWindow = window.open('', '_blank', 'width=960,height=750');
+      const printWindow = window.open('', '_blank', 'width=1000,height=800');
       if (printWindow) {
         printWindow.document.write(htmlContent);
         printWindow.document.close();
         printWindow.focus();
-        setTimeout(() => { printWindow.print(); printWindow.close(); }, 250);
+        setTimeout(() => { printWindow.print(); printWindow.close(); }, 500);
       } else {
         const blob = new Blob([htmlContent], { type: 'text/html' });
         const url  = URL.createObjectURL(blob);
