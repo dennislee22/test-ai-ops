@@ -13,7 +13,31 @@ from tools.tools_k8s import (
     get_certificate_status, get_control_plane_status, get_network_policy_status, get_webhook_health,
 )
 
+_P_NS = {
+    "type":        "string",
+    "default":     "all",
+    "description": "Namespace to query. Defaults to 'all' — only override when the user explicitly names a namespace.",
+}
+
+_P_SEARCH = {
+    "type":        "string",
+    "default":     None,
+    "description": "Optional keyword to filter by name (partial, case-insensitive match).",
+}
+
+_P_YAML = {
+    "type":        "boolean",
+    "default":     False,
+    "description": "If true, output the full object as YAML instead of the human-readable summary.",
+}
+
+_VERBATIM = (
+    "CRITICAL: Output the exact Markdown table returned by this tool. "
+    "Do NOT reformat, summarise, or remove table headers."
+)
+
 K8S_TOOL_METADATA: dict = {
+
     "find_resource": {
         "fn":          find_resource,
         "description": (
@@ -22,14 +46,9 @@ K8S_TOOL_METADATA: dict = {
             "services, ingresses, PVCs, configmaps, and secrets. "
             "Use this as the PRIMARY tool whenever the user mentions a specific resource name or "
             "asks where something is running. Examples: "
-            "'where is grafana', "
-            "'find the nginx deployment', "
-            "'is there a redis statefulset', "
-            "'which node is prometheus running on', "
-            "'show me the grafana service', "
-            "'locate ingress Y', "
-            "'is there anything named prometheus', "
-            "'find all resources named cdp'. "
+            "'where is grafana', 'find the nginx deployment', 'is there a redis statefulset', "
+            "'which node is prometheus running on', 'show me the grafana service', "
+            "'locate ingress Y', 'is there anything named prometheus', 'find all resources named cdp'. "
             "Also use this when the user asks to list ALL resources with no specific name — "
             "pass name_substring='' to show everything. "
             "Vague intent words like 'all', 'any', 'everything' are automatically treated as "
@@ -57,16 +76,9 @@ K8S_TOOL_METADATA: dict = {
                 "default":     None,
                 "description": (
                     "Optional resource type to restrict the search. Accepted values: "
-                    "'pod', "
-                    "'deployment' or 'deploy', "
-                    "'daemonset' or 'ds', "
-                    "'statefulset' or 'sts', "
-                    "'replicaset' or 'rs', "
-                    "'svc' or 'service', "
-                    "'ingress', "
-                    "'pvc', "
-                    "'configmap' or 'cm', "
-                    "'secret'. "
+                    "'pod', 'deployment' or 'deploy', 'daemonset' or 'ds', "
+                    "'statefulset' or 'sts', 'replicaset' or 'rs', "
+                    "'svc' or 'service', 'ingress', 'pvc', 'configmap' or 'cm', 'secret'. "
                     "Omit (None) to search all supported types at once. "
                     "IMPORTANT: only set this if the user explicitly mentioned a resource type "
                     "(e.g. 'find the grafana deployment', 'is there a grafana service'). "
@@ -75,14 +87,7 @@ K8S_TOOL_METADATA: dict = {
                     "Never infer a type from context."
                 ),
             },
-            "namespace":      {
-                "type":        "string",
-                "default":     None,
-                "description": (
-                    "Optional namespace to restrict the search. "
-                    "Omit (None) to search across all namespaces."
-                ),
-            },
+            "namespace":      _P_NS,
         },
     },
 
@@ -97,8 +102,8 @@ K8S_TOOL_METADATA: dict = {
             "Always includes requested CPU in m and memory in Mi, as defined in pod.spec.resources."
         ),
         "parameters":  {
-            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to all namespaces — only override when the user explicitly names a namespace."},
-            "search":    {"type": "string", "description": "Partial pod name or namespace to filter results. Leave empty to show all pods."}
+            "namespace": _P_NS,
+            "search":    {**_P_SEARCH, "description": "Partial pod name or namespace to filter results. Leave empty to show all pods."},
         },
     },
 
@@ -108,14 +113,9 @@ K8S_TOOL_METADATA: dict = {
             "List Kubernetes pods with their phase, readiness, restart count, and conditions. "
             "This is the PRIMARY tool for listing pods and checking pod health. "
             "Use this tool for queries like: "
-            "'list pods', "
-            "'list all pods', "
-            "'list pods in namespace X', "
-            "'show pods in cdp namespace', "
-            "'any pod not running', "
-            "'any broken or stuck pods', "
-            "'show me failed pods', "
-            "'are there any pending pods'. "
+            "'list pods', 'list all pods', 'list pods in namespace X', "
+            "'show pods in cdp namespace', 'any pod not running', "
+            "'any broken or stuck pods', 'show me failed pods', 'are there any pending pods'. "
             "Supports filtering by partial pod name via search, and by phase via the phase parameter. "
             "When phase='notrunning', fetches only Pending/Failed/Unknown pods using server-side "
             "field selectors — efficient even on large clusters. "
@@ -128,23 +128,9 @@ K8S_TOOL_METADATA: dict = {
             "or deep diagnostics on a specific pod."
         ),
         "parameters":  {
-            "namespace": {
-                "type":        "string",
-                "default":     "all",
-                "description": (
-                    "Namespace to query. Defaults to 'all' namespaces — "
-                    "only override when the user explicitly specifies one."
-                ),
-            },
-            "search": {
-                "type":        "string",
-                "default":     None,
-                "description": (
-                    "Optional keyword to filter pods by name (partial, case-insensitive match). "
-                    "Omit when the user is not filtering by a specific name."
-                ),
-            },
-            "phase": {
+            "namespace": _P_NS,
+            "search":    {**_P_SEARCH, "description": "Optional keyword to filter pods by name (partial, case-insensitive match). Omit when not filtering by a specific name."},
+            "phase":     {
                 "type":        "string",
                 "default":     None,
                 "description": (
@@ -160,7 +146,7 @@ K8S_TOOL_METADATA: dict = {
             },
         },
     },
-    
+
     "get_pod_storage": {
         "fn":          get_pod_storage,
         "description": (
@@ -172,13 +158,11 @@ K8S_TOOL_METADATA: dict = {
             "'what PVCs are attached to pod Y', 'storage summary for pods in namespace Z'."
         ),
         "parameters":  {
-            "namespace": {"type": "string", "default": "all",
-                          "description": "Namespace to query. Defaults to 'all' namespaces — override only when explicitly specified."},
-            "search":    {"type": "string", "default": None,
-                          "description": "Optional search term to filter pods by name or namespace (partial matches allowed)."},
+            "namespace": _P_NS,
+            "search":    _P_SEARCH,
         },
     },
-    
+
     "get_pod_logs": {
         "fn":          get_pod_logs,
         "description": (
@@ -190,13 +174,13 @@ K8S_TOOL_METADATA: dict = {
             "Defaults to searching across all namespaces if namespace is not specified."
         ),
         "parameters":  {
-            "search":     {"type": "string", "description": "Partial pod name to search for (e.g., 'prometheus-server')."},
-            "namespace":  {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
+            "search":     {**_P_SEARCH, "description": "Partial pod name to search for (e.g., 'prometheus-server')."},
+            "namespace":  _P_NS,
             "tail_lines": {"type": "integer", "default": 50, "description": "Number of log lines to return (max 100)."},
             "container":  {"type": "string",  "default": "", "description": "Container name. Leave empty to auto-select the main app container."},
         },
     },
-    
+
     "describe_pod": {
         "fn":          describe_pod,
         "description": (
@@ -209,13 +193,13 @@ K8S_TOOL_METADATA: dict = {
             "This is the ONLY tool that shows per-pod resource limits and termination reasons."
         ),
         "parameters":  {
-            "pod_name":   {"type": "string",  "description": "Exact pod name to fetch details for. Optional if using 'search'."},
-            "search":     {"type": "string",  "description": "Partial pod name to search for across namespaces. Optional if using 'pod_name'."},
-            "namespace":  {"type": "string",  "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "show_yaml":  {"type": "boolean", "default": False, "description": "true = output full pod YAML instead of human-readable describe-style summary."},
+            "pod_name":  {"type": "string", "description": "Exact pod name to fetch details for. Optional if using 'search'."},
+            "search":    {**_P_SEARCH, "description": "Partial pod name to search for across namespaces. Optional if using 'pod_name'."},
+            "namespace": _P_NS,
+            "show_yaml": _P_YAML,
         },
     },
-    
+
     "get_node_info": {
         "fn":          get_node_info,
         "description": (
@@ -223,12 +207,12 @@ K8S_TOOL_METADATA: dict = {
             "Returns a Markdown table with columns: NODE, ROLES, STATUS (including Ready/NotReady and Cordon/SchedulingDisabled), CPU, RAM (Gi), GPU. "
             "Supports filtering for a specific node by partial name match. "
             "Use for questions like: 'are nodes healthy', 'is ecs-w-01 cordoned', or 'why are pods pending'. "
-            "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
+            + _VERBATIM
         ),
         "parameters":  {
             "node_name": {
-                "type": "string",
-                "default": None,
+                "type":        "string",
+                "default":     None,
                 "description": (
                     "Optional specific node to query (partial match supported). "
                     "Leave empty or null to list ALL nodes. "
@@ -237,7 +221,7 @@ K8S_TOOL_METADATA: dict = {
             },
         },
     },
-    
+
     "get_gpu_info": {
         "fn":          get_gpu_info,
         "description": (
@@ -247,7 +231,7 @@ K8S_TOOL_METADATA: dict = {
             "and whether the GPU is currently in use. "
             "Use this to answer: 'what kind of GPUs do we have', 'how much VRAM is on ecs-w-03', "
             "'which pod is attached to GPU', 'which pod is using GPU', or 'is the GPU in use'. "
-            "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
+            + _VERBATIM
         ),
         "parameters":  {},
     },
@@ -261,13 +245,10 @@ K8S_TOOL_METADATA: dict = {
             "to get ALL labels for that specific node, OR pass a label keyword (e.g., 'gpu', 'cde') "
             "to find which nodes have that specific label. "
             "IMPORTANT: If the user asks for 'labels', 'label', 'all', or similar general terms, do NOT pass these words as the search term. Leave the search parameter empty (null). "
-            "CRITICAL: You must output the exact text returned by this tool. Use bulleted list. Do NOT try to convert this list into a table, modify the formatting, summarize the data, or omit ANY labels."
+            "CRITICAL: Output the exact text returned by this tool. Use bulleted list. Do NOT convert to a table, modify formatting, summarise, or omit ANY labels."
         ),
         "parameters":  {
-            "search": {
-                "type": "string", 
-                "description": "Optional keyword to filter by node name OR label content. Leave empty (or null) to list ALL nodes and ALL their labels."
-            },
+            "search": {**_P_SEARCH, "description": "Optional keyword to filter by node name OR label content. Leave empty (or null) to list ALL nodes and ALL their labels."},
         },
     },
 
@@ -277,11 +258,8 @@ K8S_TOOL_METADATA: dict = {
             "List taints on all Kubernetes nodes. "
             "Returns the taint key, value, and effect for each node. "
             "Use this for questions like: "
-            "'which node is tainted', "
-            "'show node taints', "
-            "'are any nodes tainted', "
-            "'what taints are on the cluster', "
-            "'which nodes prevent pod scheduling'. "
+            "'which node is tainted', 'show node taints', 'are any nodes tainted', "
+            "'what taints are on the cluster', 'which nodes prevent pod scheduling'. "
             "Pass tainted_only=True when the user asks which nodes ARE tainted — "
             "this filters out untainted nodes so only nodes with active taints are shown. "
             "Pass search to filter by NODE NAME (partial match), not taint content. "
@@ -289,23 +267,11 @@ K8S_TOOL_METADATA: dict = {
             "they are stripped automatically. Use tainted_only=True instead."
         ),
         "parameters":  {
-            "search": {
-                "type":        "string",
-                "default":     None,
-                "description": (
-                    "Optional node name filter (partial match, e.g., 'ecs-m-01'). "
-                    "Do NOT pass taint-content words or intent words like 'tainted', 'gpu', 'any' — "
-                    "pass tainted_only=True for taint presence queries instead."
-                ),
-            },
+            "search":       {**_P_SEARCH, "description": "Optional node name filter (partial match, e.g., 'ecs-m-01'). Do NOT pass taint-content words or intent words like 'tainted', 'gpu', 'any' — use tainted_only=True for taint presence queries instead."},
             "tainted_only": {
                 "type":        "boolean",
                 "default":     False,
-                "description": (
-                    "When True, only show nodes that have at least one taint. "
-                    "Set this to True for queries like 'which node is tainted', "
-                    "'show tainted nodes', 'are any nodes tainted'."
-                ),
+                "description": "When True, only show nodes that have at least one taint. Set this to True for queries like 'which node is tainted', 'show tainted nodes', 'are any nodes tainted'.",
             },
         },
     },
@@ -319,12 +285,11 @@ K8S_TOOL_METADATA: dict = {
             "or 'is this the default storage class?'."
         ),
         "parameters":  {
-            "name":       {"type": "string", "description": "Name of the StorageClass to describe."},
-            "show_yaml":  {"type": "boolean", "default": False,
-                           "description": "If true, output full YAML of the StorageClass instead of human-readable summary."},
+            "name":      {"type": "string", "description": "Name of the StorageClass to describe."},
+            "show_yaml": _P_YAML,
         },
     },
-    
+
     "describe_pvc": {
         "fn":          describe_pvc,
         "description": (
@@ -333,11 +298,9 @@ K8S_TOOL_METADATA: dict = {
             "Use for: 'show me details of PVC X', 'which pod is using PVC X?', or 'what is the storage class and size of PVC X?'."
         ),
         "parameters":  {
-            "name":       {"type": "string", "description": "Name of the PVC to describe."},
-            "namespace":  {"type": "string", "default": "all",
-                           "description": "Namespace of the PVC. Defaults to 'all' — only override if a specific namespace is needed."},
-            "show_yaml":  {"type": "boolean", "default": False,
-                           "description": "If true, output full YAML of the PVC instead of human-readable summary."},
+            "name":      {"type": "string", "description": "Name of the PVC to describe."},
+            "namespace": _P_NS,
+            "show_yaml": _P_YAML,
         },
     },
 
@@ -352,7 +315,7 @@ K8S_TOOL_METADATA: dict = {
         ),
         "parameters":  {
             "name":      {"type": "string",  "description": "Partial or full name of the PersistentVolume to describe."},
-            "show_yaml": {"type": "boolean", "default": False, "description": "If true, returns the full PV object as YAML."},
+            "show_yaml": _P_YAML,
         },
     },
 
@@ -366,12 +329,9 @@ K8S_TOOL_METADATA: dict = {
             "type='All' (default) returns all events."
         ),
         "parameters":  {
-            "namespace": {"type": "string", "default": "all",
-                          "description": "Namespace to query. Defaults to 'all' namespaces — override only when explicitly specified."},
-            "search":    {"type": "string", "default": None,
-                          "description": "Optional search term to filter events by pod, namespace, object, or message."},
-            "type":      {"type": "string", "default": "All",
-                          "description": "Event type to fetch: 'Warning', 'Normal', or 'All' (default)."},
+            "namespace": _P_NS,
+            "search":    {**_P_SEARCH, "description": "Optional search term to filter events by pod, namespace, object, or message."},
+            "type":      {"type": "string", "default": "All", "description": "Event type to fetch: 'Warning', 'Normal', or 'All' (default)."},
         },
     },
 
@@ -379,67 +339,32 @@ K8S_TOOL_METADATA: dict = {
         "fn":          get_deployment,
         "description": (
             "List Deployments and their health status (desired, ready, available pods). "
-            "Supports filtering by partial name match. "
-            "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
+            "Supports filtering by partial name match. " + _VERBATIM
         ),
-        "parameters": {
-            "namespace": {
-                "type": "string", 
-                "default": "all", 
-                "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."
-            },
-            "search": {
-                "type": "string", 
-                "description": "Optional keyword to filter deployments by name (partial match)."
-            }
+        "parameters":  {
+            "namespace": _P_NS,
+            "search":    {**_P_SEARCH, "description": "Optional keyword to filter deployments by name (partial match)."},
         },
     },
-    
+
     "get_statefulset": {
         "fn":          get_statefulset,
-        "description": (
-            "List StatefulSets and their health status (desired vs ready pods). "
-            "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
-        ),
-        "parameters": {
-            "namespace": {
-                "type": "string", 
-                "default": "all", 
-                "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."
-            }
-        },
+        "description": "List StatefulSets and their health status (desired vs ready pods). " + _VERBATIM,
+        "parameters":  {"namespace": _P_NS},
     },
 
     "get_daemonset": {
         "fn":          get_daemonset,
-        "description": (
-            "List DaemonSets and their health status (desired, ready, available pods). "
-            "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
-        ),
-        "parameters": {
-            "namespace": {
-                "type": "string", 
-                "default": "all", 
-                "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."
-            }
-        },
+        "description": "List DaemonSets and their health status (desired, ready, available pods). " + _VERBATIM,
+        "parameters":  {"namespace": _P_NS},
     },
 
     "get_replicaset": {
         "fn":          get_replicaset,
-        "description": (
-            "List ReplicaSets and their health status (desired, ready, available pods). "
-            "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
-        ),
-        "parameters": {
-            "namespace": {
-                "type": "string", 
-                "default": "all", 
-                "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."
-            }
-        },
+        "description": "List ReplicaSets and their health status (desired, ready, available pods). " + _VERBATIM,
+        "parameters":  {"namespace": _P_NS},
     },
-    
+
     "get_pdb_status": {
         "fn":          get_pdb_status,
         "description": (
@@ -448,9 +373,7 @@ K8S_TOOL_METADATA: dict = {
             "Flags PDBs that are blocking node evictions or upgrades (Allowed Disruptions = 0). "
             "Use for queries like: 'show me pod disruption budgets', 'why can't I drain this node', or 'are there any PDBs blocking evictions'."
         ),
-        "parameters":  {
-            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to all namespaces — only override when explicitly named."}
-        },
+        "parameters":  {"namespace": _P_NS},
     },
 
     "get_webhook_health": {
@@ -472,8 +395,8 @@ K8S_TOOL_METADATA: dict = {
             "Use for queries like: 'show me cronjobs', 'are any cronjobs suspended', or 'when did my nightly batch last run'."
         ),
         "parameters":  {
-            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to all namespaces — only override when explicitly named."},
-            "search":    {"type": "string", "description": "Partial CronJob name to filter results. Leave empty to show all CronJobs."}
+            "namespace": _P_NS,
+            "search":    {**_P_SEARCH, "description": "Partial CronJob name to filter results. Leave empty to show all CronJobs."},
         },
     },
 
@@ -485,9 +408,7 @@ K8S_TOOL_METADATA: dict = {
             "When checking all namespaces, it outputs a critical warning listing namespaces that have zero network policies securing them. "
             "Use for queries like: 'show network policies', 'audit cluster network security', or 'which namespaces are open to lateral movement'."
         ),
-        "parameters":  {
-            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to all namespaces — only override when explicitly named."}
-        },
+        "parameters":  {"namespace": _P_NS},
     },
 
     "get_control_plane_status": {
@@ -508,9 +429,7 @@ K8S_TOOL_METADATA: dict = {
             "Requires cert-manager custom resource definitions (CRDs) to be installed on the cluster. "
             "Use for queries like: 'check certificate expirations', 'are any cert-manager certificates failing', or 'show TLS cert status'."
         ),
-        "parameters":  {
-            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to all namespaces — only override when explicitly named."}
-        },
+        "parameters":  {"namespace": _P_NS},
     },
 
     "get_adhoc_job_status": {
@@ -522,21 +441,25 @@ K8S_TOOL_METADATA: dict = {
             "Use for queries like: 'show failed jobs', 'list running jobs', or 'check one-off job status'."
         ),
         "parameters":  {
-            "namespace":        {"type": "string", "default": "all", "description": "Namespace to query. Defaults to all namespaces — only override when explicitly named."},
+            "namespace":        _P_NS,
             "show_all":         {"type": "boolean", "default": False, "description": "Set to True to show healthy/completed jobs in the summary output."},
             "raw_output":       {"type": "boolean", "default": False, "description": "Set to True to get a raw table format instead of a summary."},
             "failed_only":      {"type": "boolean", "default": False, "description": "Set to True to only return jobs that have failed."},
             "running_only":     {"type": "boolean", "default": False, "description": "Set to True to only return jobs that are currently running."},
-            "exclude_cronjobs": {"type": "boolean", "default": True, "description": "Set to False to include historical Jobs spawned by CronJobs."}
+            "exclude_cronjobs": {"type": "boolean", "default": True,  "description": "Set to False to include historical Jobs spawned by CronJobs."},
         },
     },
-    
+
     "get_hpa_status": {
         "fn":          get_hpa_status,
-        "description": "Check HorizontalPodAutoscaler targets and whether any are pinned at max replicas.",
-        "parameters":  {"namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}},
+        "description": (
+            "Check HorizontalPodAutoscaler (HPA) status across a namespace (or all namespaces). "
+            "Shows current, desired, min, and max replica counts and flags any HPAs pinned at max replicas. "
+            "Use for queries like: 'check autoscaling', 'are any HPAs maxed out', 'show HPA status in namespace X'."
+        ),
+        "parameters":  {"namespace": _P_NS},
     },
-    
+
     "get_pvc_status": {
         "fn":          get_pvc_status,
         "description": (
@@ -547,15 +470,12 @@ K8S_TOOL_METADATA: dict = {
             "Use show_all=True to include all PVC details regardless of search."
         ),
         "parameters":  {
-            "namespace": {"type": "string", "default": "all",
-                          "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "show_all":  {"type": "boolean", "default": False,
-                          "description": "Include detailed info for all PVCs in the output."},
-            "search":    {"type": "string",
-                          "description": "Optional keyword to filter PVCs by name (partial match). If no match, all PVCs are shown."}
+            "namespace": _P_NS,
+            "show_all":  {"type": "boolean", "default": False, "description": "Include detailed info for all PVCs in the output."},
+            "search":    {**_P_SEARCH, "description": "Optional keyword to filter PVCs by name (partial match). If no match, all PVCs are shown."},
         },
     },
-    
+
     "get_cluster_version": {
         "fn":          get_cluster_version,
         "description": (
@@ -567,7 +487,7 @@ K8S_TOOL_METADATA: dict = {
         ),
         "parameters":  {},
     },
-    
+
     "get_storage_classes": {
         "fn":          get_storage_classes,
         "description": (
@@ -579,27 +499,19 @@ K8S_TOOL_METADATA: dict = {
         ),
         "parameters":  {},
     },
-    
+
     "get_endpoints": {
         "fn":          get_endpoints,
         "description": (
             "List Kubernetes Endpoints and show underlying pod IP:port mappings. "
-            "Supports filtering by partial name match. "
-            "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
+            "Supports filtering by partial name match. " + _VERBATIM
         ),
-        "parameters": {
-            "namespace": {
-                "type": "string", 
-                "default": "all", 
-                "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."
-            },
-            "search": {
-                "type": "string", 
-                "description": "Optional keyword to filter endpoints by name (partial match)."
-            }
+        "parameters":  {
+            "namespace": _P_NS,
+            "search":    {**_P_SEARCH, "description": "Optional keyword to filter endpoints by name (partial match)."},
         },
     },
-    
+
     "get_node_capacity": {
         "fn":          get_node_capacity,
         "description": (
@@ -611,7 +523,7 @@ K8S_TOOL_METADATA: dict = {
         ),
         "parameters":  {},
     },
-    
+
     "get_persistent_volumes": {
         "fn":          get_persistent_volumes,
         "description": (
@@ -627,22 +539,14 @@ K8S_TOOL_METADATA: dict = {
         "fn":          get_service,
         "description": (
             "List Services and highlight those with no pod selector (potential misconfigs). "
-            "Supports filtering by partial name match. "
-            "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
+            "Supports filtering by partial name match. " + _VERBATIM
         ),
-        "parameters": {
-            "namespace": {
-                "type": "string", 
-                "default": "all", 
-                "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."
-            },
-            "search": {
-                "type": "string", 
-                "description": "Optional keyword to filter services by name (partial match)."
-            }
+        "parameters":  {
+            "namespace": _P_NS,
+            "search":    {**_P_SEARCH, "description": "Optional keyword to filter services by name (partial match)."},
         },
     },
-    
+
     "get_ingress": {
         "fn":          get_ingress,
         "description": (
@@ -650,25 +554,31 @@ K8S_TOOL_METADATA: dict = {
             "Can find which ingress and namespace serve a specific hostname (FQDN) or port. "
             "ALWAYS search ALL namespaces by default. "
             "Use cases: "
-            "'which namespace has ingress port 443' → get_ingress_status(port=443) "
-            "'which namespace serves hostname X' → get_ingress_status(name='X.example.com') "
-            "'list all ingresses in cdp namespace' → get_ingress_status(namespace='cdp') "
-            "'list all cluster ingresses' → get_ingress_status(namespace='all')"
+            "'which namespace has ingress port 443' → get_ingress(port=443) "
+            "'which namespace serves hostname X' → get_ingress(name='X.example.com') "
+            "'list all ingresses in cdp namespace' → get_ingress(namespace='cdp') "
+            "'list all cluster ingresses' → get_ingress(namespace='all')"
         ),
         "parameters":  {
-            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "name":      {"type": "string", "default": "",
-                          "description": (
-                              "Ingress name OR hostname/FQDN. "
-                              "If it contains dots it is treated as a hostname and ALL namespaces are searched. "
-                              "Example: 'console-cdp.apps.dlee155.cldr.example'"
-                          )},
-            "port":      {"type": "integer", "default": 0,
-                          "description": (
-                              "Filter ingresses by port number. "
-                              "Use port=443 to find all ingresses exposing HTTPS/TLS. "
-                              "Use port=80 to find HTTP-only ingresses."
-                          )},
+            "namespace": _P_NS,
+            "name":      {
+                "type":    "string",
+                "default": "",
+                "description": (
+                    "Ingress name OR hostname/FQDN. "
+                    "If it contains dots it is treated as a hostname and ALL namespaces are searched. "
+                    "Example: 'console-cdp.apps.dlee155.cldr.example'"
+                ),
+            },
+            "port":      {
+                "type":    "integer",
+                "default": 0,
+                "description": (
+                    "Filter ingresses by port number. "
+                    "Use port=443 to find all ingresses exposing HTTPS/TLS. "
+                    "Use port=80 to find HTTP-only ingresses."
+                ),
+            },
         },
     },
 
@@ -682,15 +592,12 @@ K8S_TOOL_METADATA: dict = {
             "Returns a Markdown table with namespace, ConfigMap name, keys, and type (cert or regular)."
         ),
         "parameters":  {
-            "namespace":   {"type": "string", "default": "all",
-                            "description": "Namespace to query. Defaults to 'all' namespaces — only override when explicitly specified."},
-            "search":      {"type": "string", "default": None,
-                            "description": "Optional search term to filter ConfigMaps by name or namespace (partial matches allowed)."},
-            "filter_keys": {"type": "array",  "default": None,
-                            "description": "Optional list of key name substrings to filter by."},
+            "namespace":   _P_NS,
+            "search":      {**_P_SEARCH, "description": "Optional search term to filter ConfigMaps by name or namespace (partial matches allowed)."},
+            "filter_keys": {"type": "array", "default": None, "description": "Optional list of key name substrings to filter by."},
         },
     },
-    
+
     "get_secret_list": {
         "fn":          get_secret_list,
         "description": (
@@ -702,17 +609,13 @@ K8S_TOOL_METADATA: dict = {
             "Whether secret values are shown or hidden is controlled by the user's Security settings — do NOT pass a decode argument."
         ),
         "parameters":  {
-            "namespace":   {"type": "string", "default": "all",
-                            "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "name":        {"type": "string", "default": "",
-                            "description": "Optional name of a secret to fetch."},
-            "pod_name":    {"type": "string", "default": None,
-                            "description": "Optional pod name to list all secrets and configmaps attached to that pod."},
-            "filter_keys": {"type": "array",  "default": None,
-                            "description": "Optional list of key name substrings to filter secrets by."},
+            "namespace":   _P_NS,
+            "name":        {"type": "string", "default": "",   "description": "Optional name of a secret to fetch."},
+            "pod_name":    {"type": "string", "default": None, "description": "Optional pod name to list all secrets and configmaps attached to that pod."},
+            "filter_keys": {"type": "array",  "default": None, "description": "Optional list of key name substrings to filter secrets by."},
         },
     },
-    
+
     "get_resource_quotas": {
         "fn":          get_resource_quotas,
         "description": (
@@ -725,19 +628,11 @@ K8S_TOOL_METADATA: dict = {
             "'quota usage for cpu/memory', or 'find quota Y'."
         ),
         "parameters":  {
-            "namespace": {
-                "type": "string",
-                "default": "all",
-                "description": "Namespace to query. Defaults to 'all' namespaces — override only when explicitly specified."
-            },
-            "search": {
-                "type": "string",
-                "default": None,
-                "description": "Optional search term to filter quotas by name or namespace (partial matches allowed)."
-            },
+            "namespace": _P_NS,
+            "search":    _P_SEARCH,
         },
     },
-    
+
     "get_limit_ranges": {
         "fn":          get_limit_ranges,
         "description": (
@@ -749,20 +644,12 @@ K8S_TOOL_METADATA: dict = {
             "'default resource limits', or 'find limitrange Y'."
         ),
         "parameters":  {
-            "namespace": {
-                "type": "string",
-                "default": "all",
-                "description": "Namespace to query. Defaults to 'all' namespaces — override only when explicitly specified."
-            },
-            "search": {
-                "type": "string",
-                "default": None,
-                "description": "Optional search term to filter LimitRanges by name or namespace (partial matches allowed)."
-            },
+            "namespace": _P_NS,
+            "search":    _P_SEARCH,
         },
     },
 
-    "get_servicesaccounts": {
+    "get_serviceaccounts": {
         "fn":          get_serviceaccounts,
         "description": (
             "List Kubernetes ServiceAccounts across namespaces with their attached Roles and ClusterRoles. "
@@ -773,19 +660,11 @@ K8S_TOOL_METADATA: dict = {
             "'which roles are attached to serviceaccount Y', or 'find serviceaccount Z'."
         ),
         "parameters":  {
-            "namespace": {
-                "type": "string",
-                "default": "all",
-                "description": "Namespace to query. Defaults to 'all' namespaces — override only when explicitly specified."
-            },
-            "search": {
-                "type": "string",
-                "default": None,
-                "description": "Optional search term to filter ServiceAccounts by name or namespace (partial matches allowed)."
-            },
+            "namespace": _P_NS,
+            "search":    _P_SEARCH,
         },
     },
-    
+
     "get_cluster_role_bindings": {
         "fn":          get_cluster_role_bindings,
         "description": "List ClusterRoleBindings — useful for auditing broad RBAC permissions.",
@@ -805,37 +684,22 @@ K8S_TOOL_METADATA: dict = {
             "'namespaces with number of pods', or wants a namespace count."
         ),
         "parameters":  {
-            "namespace": {
-                "type": "string",
-                "default": "all",
-                "description": (
-                    "Namespace to query. Defaults to 'all' namespaces — only override when "
-                    "the user explicitly names a namespace."
-                )
+            "namespace": _P_NS,
+            "show_all":  {
+                "type":        "boolean",
+                "default":     False,
+                "description": "Include all pods in counts and show the full breakdown per namespace. If False, only show a compact summary with total and unhealthy pods.",
             },
-            "show_all": {
-                "type": "boolean",
-                "default": False,
-                "description": (
-                    "Include all pods in counts and show the full breakdown per namespace. "
-                    "If False, only show a compact summary with total and unhealthy pods."
-                )
+            "sort_by":   {
+                "type":        "string",
+                "default":     None,
+                "description": "Sort namespaces by 'pods_asc', 'pods_desc', 'name_asc', or 'name_desc'. Defaults to alphabetical order if not specified.",
             },
-            "sort_by": {
-                "type": "string",
-                "default": None,
-                "description": (
-                    "Sort namespaces by 'pods_asc', 'pods_desc', 'name_asc', or 'name_desc'. "
-                    "Defaults to alphabetical order if not specified."
-                )
+            "limit":     {
+                "type":        "integer",
+                "default":     None,
+                "description": "Limit the number of namespaces returned. Useful for top/bottom N queries.",
             },
-            "limit": {
-                "type": "integer",
-                "default": None,
-                "description": (
-                    "Limit the number of namespaces returned. Useful for top/bottom N queries."
-                )
-            }
         },
     },
 
@@ -847,16 +711,15 @@ K8S_TOOL_METADATA: dict = {
             "Supports filtering by pod name or partial toleration key. "
             "Use for: 'which pods tolerate taints', 'show tolerations for pod X', "
             "'pods that tolerate NoSchedule or NoExecute', or 'which pod has cde toleration'. "
-            "Helps diagnose why pods can run on tainted nodes. "
-            "CRITICAL: You must output the exact Markdown table returned by this tool. Do NOT modify the formatting, summarize the data, or remove the table headers."
+            "Helps diagnose why pods can run on tainted nodes. " + _VERBATIM
         ),
         "parameters":  {
-            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
+            "namespace": _P_NS,
             "pod_name":  {"type": "string", "description": "Optional pod name filter."},
-            "search":    {"type": "string", "description": "Optional keyword to filter tolerations by partial match on key/operator/value/effect."},
+            "search":    {**_P_SEARCH, "description": "Optional keyword to filter tolerations by partial match on key/operator/value/effect."},
         },
     },
-    
+
     "get_pod_resource_requests": {
         "fn":          get_pod_resource_requests,
         "description": (
@@ -871,10 +734,8 @@ K8S_TOOL_METADATA: dict = {
             "Do NOT use for runtime health/status — use get_pod_status instead."
         ),
         "parameters":  {
-            "namespace": {"type": "string", "default": "all",
-                          "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-            "search":    {"type": "string",
-                          "description": "Optional string to filter pods or namespaces (partial match)."}
+            "namespace": _P_NS,
+            "search":    {**_P_SEARCH, "description": "Optional string to filter pods or namespaces (partial match)."},
         },
     },
 
@@ -885,12 +746,8 @@ K8S_TOOL_METADATA: dict = {
             "Covers nodes, system pods, workloads, storage, networking, and recent warning events. "
             "Each section emits a single ✅/⚠️/🔴 line — only failures include detail. "
             "Use this tool when the user asks: "
-            "'is my cluster ok', "
-            "'cluster health check', "
-            "'any issues in the cluster', "
-            "'what is failing', "
-            "'is everything running fine', "
-            "'quick cluster status'. "
+            "'is my cluster ok', 'cluster health check', 'any issues in the cluster', "
+            "'what is failing', 'is everything running fine', 'quick cluster status'. "
             "Returns a compact scorecard ending with a summary of critical issues, warnings, "
             "and healthy sections, followed by a prompt to ask follow-up questions or run "
             "the full health check report via ⚙ Settings. "
@@ -911,9 +768,7 @@ K8S_TOOL_METADATA: dict = {
             "Do NOT use for a single pod — use get_pod_resource_requests instead. "
             "Do NOT use for real-time utilization — use query_prometheus_metrics instead."
         ),
-        "parameters":  {
-            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."}
-        },
+        "parameters":  {"namespace": _P_NS},
     },
 
     "get_pod_images": {
@@ -929,9 +784,7 @@ K8S_TOOL_METADATA: dict = {
             "Format: '- `namespace/pod-name` [container]: registry/image:tag'. "
             "NEVER show 'Running | Restarts | Cause' for image queries — those fields do not apply here."
         ),
-        "parameters": {
-            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-        },
+        "parameters":  {"namespace": _P_NS},
     },
 
     "get_unhealthy_pods_detail": {
@@ -958,9 +811,7 @@ K8S_TOOL_METADATA: dict = {
             "After reviewing output: if a pod shows OOMKilled or CrashLoopBackOff, "
             "immediately call rag_search with the error and component name to check known fixes."
         ),
-        "parameters": {
-            "namespace": {"type": "string", "default": "all", "description": "Namespace to query. Defaults to 'all' namespaces — only override when the user explicitly names a namespace."},
-        },
+        "parameters":  {"namespace": _P_NS},
     },
 
     "get_coredns_health": {
@@ -976,7 +827,7 @@ K8S_TOOL_METADATA: dict = {
             "Do NOT use for general pod health, vault, longhorn, prometheus, grafana, "
             "cert-manager, or any non-DNS question — use get_unhealthy_pods_detail for those."
         ),
-        "parameters": {},
+        "parameters":  {},
     },
 
     "get_pv_usage": {
@@ -991,9 +842,9 @@ K8S_TOOL_METADATA: dict = {
             "Do NOT use for listing PVCs or their bound/unbound status — "
             "use kubectl_exec('kubectl get pvc -A') for that."
         ),
-        "parameters": {
+        "parameters":  {
             "threshold": {
-                "type": "integer",
+                "type":    "integer",
                 "default": 80,
                 "description": (
                     "Minimum usage percentage to include in results. "
@@ -1020,9 +871,9 @@ K8S_TOOL_METADATA: dict = {
             "duration sets the time window (e.g. '1h', '6h', '24h', '7d'). "
             "namespace filters to a specific namespace (leave empty for all)."
         ),
-        "parameters": {
-            "metric": {
-                "type": "string",
+        "parameters":  {
+            "metric":    {
+                "type":    "string",
                 "default": "cpu",
                 "description": (
                     "Metric shortcut or raw PromQL. Shortcuts: cpu, memory, pod_cpu, pod_memory, "
@@ -1031,8 +882,8 @@ K8S_TOOL_METADATA: dict = {
                     "'disk I/O' or 'PVC I/O' → 'disk_io'. Default: 'cpu'."
                 ),
             },
-            "duration": {
-                "type": "string",
+            "duration":  {
+                "type":    "string",
                 "default": "1h",
                 "description": (
                     "Time window to query. Extract from user question — "
@@ -1040,8 +891,8 @@ K8S_TOOL_METADATA: dict = {
                     "'last week' → '7d'. Default: '1h'."
                 ),
             },
-            "step": {
-                "type": "string",
+            "step":      {
+                "type":    "string",
                 "default": "60s",
                 "description": (
                     "Query resolution. Use '60s' for ≤6h windows, '5m' for ≤24h, '15m' for >24h. "
@@ -1049,7 +900,7 @@ K8S_TOOL_METADATA: dict = {
                 ),
             },
             "namespace": {
-                "type": "string",
+                "type":    "string",
                 "default": "",
                 "description": (
                     "Filter results to a specific Kubernetes namespace. "
@@ -1097,94 +948,56 @@ K8S_TOOL_METADATA: dict = {
             "MySQL/MariaDB examples: "
             "\"SHOW TABLES\", \"SELECT user, host FROM mysql.user\", \"SHOW DATABASES\""
         ),
-        "parameters": {
-            "namespace": {
-                "type": "string",
-                "description": "Kubernetes namespace where the database pod runs."
-            },
-            "sql": {
-                "type": "string",
+        "parameters":  {
+            "namespace": {"type": "string", "description": "Kubernetes namespace where the database pod runs."},
+            "sql":       {
+                "type":        "string",
                 "description": (
                     "Read-only SQL query to execute. "
                     "Examples: \"SHOW TABLES\", \"SELECT user, host FROM mysql.user\", "
                     "\"SELECT usename FROM pg_catalog.pg_user\", \"DESCRIBE my_table\""
-                )
+                ),
             },
-            "pod_name": {
-                "type": "string",
-                "default": "",
-                "description": (
-                    "Optional: specific DB pod name (e.g., 'db-0'). "
-                    "Leave empty to auto-detect the first running DB pod in the namespace."
-                )
-            },
-            "database": {
-                "type": "string",
-                "default": "",
-                "description": (
-                    "Optional: database/schema name. "
-                    "Leave empty to use the value auto-discovered from the pod's environment."
-                )
-            },
-            "container": {
-                "type": "string",
-                "default": "",
-                "description": (
-                    "Optional: container name inside the pod (e.g., 'db'). "
-                    "Required for multi-container pods if the DB container is not the first. "
-                    "If the tool errors with 'available containers: ...', set this to the DB container name."
-                )
-            }
+            "pod_name":  {"type": "string", "default": "", "description": "Optional: specific DB pod name (e.g., 'db-0'). Leave empty to auto-detect the first running DB pod in the namespace."},
+            "database":  {"type": "string", "default": "", "description": "Optional: database/schema name. Leave empty to use the value auto-discovered from the pod's environment."},
+            "container": {"type": "string", "default": "", "description": "Optional: container name inside the pod (e.g., 'db'). Required for multi-container pods if the DB container is not the first. If the tool errors with 'available containers: ...', set this to the DB container name."},
         },
     },
-    
+
     "kubectl_exec": {
         "fn":          kubectl_exec,
         "description": (
-            "Execute a read-only kubectl command against the cluster. Use this as the general-purpose "
-            "tool for any cluster state query not covered by a more specific tool. "
+            "Fallback tool for kubectl queries not covered by any dedicated tool. "
+            "Use ONLY when no specific tool exists for the query. "
+            "Dedicated tools already cover: pods, nodes, deployments, daemonsets, statefulsets, "
+            "replicasets, services, endpoints, ingresses, PVCs, PVs, configmaps, secrets, "
+            "events, HPAs, jobs, cronjobs, namespaces, resource quotas, limitranges, "
+            "serviceaccounts, clusterrolebindings, network policies, webhooks, certificates, "
+            "cluster version, node labels, node taints, CoreDNS. Always prefer those. "
+            "Reserve kubectl_exec ONLY for: "
+            "'kubectl rollout status/history deployment X', "
+            "'kubectl top nodes/pods' (live metrics-server data), "
+            "'kubectl api-resources' (lists all resource types including CRDs), "
+            "'kubectl get <resource> -o yaml' for resource types with no dedicated describe tool, "
+            "'kubectl describe <resource>' for resource types with no dedicated describe tool. "
+            "Do NOT use for: logs (use get_pod_logs), version (use get_cluster_version), "
+            "auth can-i (not implemented). "
             "IMPORTANT: Commands run via the Kubernetes API — NOT a shell. "
-            "Pipes (|), grep, awk, &&, || are NOT supported. Use -n <namespace> or -A for all namespaces. "
-            "Use for the following (with example commands): "
-            "• Node health/status/conditions: 'kubectl get nodes -o wide' or 'kubectl describe node <name>' "
-            "• Pod location ('where is X?', 'which node is X on?', 'find X pod'): "
-            "  ALWAYS use 'kubectl get pod -A -o wide' — never assume the namespace. "
-            "  The -A flag searches all namespaces so grafana/vault/etc will be found regardless of namespace. "
-            "• Deployments/replicas: 'kubectl get deployments -n <ns>' "
-            "• ReplicaSets: 'kubectl get replicasets -n <ns>' "
-            "• DaemonSets: 'kubectl get daemonsets -A' "
-            "• StatefulSets: 'kubectl get statefulsets -A' "
-            "• Jobs/CronJobs: 'kubectl get jobs -A' or 'kubectl get cronjobs -A' "
-            "• HPA/autoscaling: 'kubectl get hpa -A' "
-            "• Services/endpoints: 'kubectl get services -A' or 'kubectl get endpoints -n <ns>' "
-            "• Ingress: 'kubectl get ingress -A' "
-            "• ConfigMaps: 'kubectl get configmaps -n <ns>' "
-            "• Secrets (names only, not values): 'kubectl get secrets -n <ns>' "
-            "• RBAC: 'kubectl get clusterrolebindings' or 'kubectl get rolebindings -n <ns>' "
-            "• ServiceAccounts: 'kubectl get serviceaccounts -n <ns>' "
-            "• Namespaces: 'kubectl get namespaces' "
-            "• Resource quotas: 'kubectl get resourcequota -n <ns>' "
-            "• LimitRanges: 'kubectl get limitrange -n <ns>' "
-            "• PVCs (list/status): 'kubectl get pvc -A' "
-            "• PVs: 'kubectl get pv' "
-            "• Events: 'kubectl get events -n <ns> --sort-by=.lastTimestamp' "
-            "• GPU info: 'kubectl describe nodes | grep -A5 nvidia' — NOTE: grep not supported, "
-            "  use 'kubectl describe node <nodename>' instead "
-            "• Cluster version: 'kubectl version' "
-            "• API resources: 'kubectl api-resources' "
-            "Resolve namespace aliases before calling: "
-            "vault → vault-system, longhorn → longhorn-system, rancher/cattle → cattle-system, "
-            "cert-manager/cert → cert-manager, coredns/dns → kube-system, "
-            "prometheus/grafana/alertmanager/monitoring → monitoring."
+            "Pipes (|), grep, awk, &&, || are NOT supported. "
+            "Use -n <namespace> for a specific namespace or -A for all namespaces."
         ),
-        "parameters": {
+        "parameters":  {
             "command": {
-                "type": "string",
+                "type":        "string",
                 "description": (
                     "Full kubectl command. No shell pipes or redirects. "
-                    "Examples: 'kubectl get nodes -o wide', 'kubectl get pod -A -o wide', "
-                    "'kubectl describe node ecs-w-01.dlee155.cldr.example', "
-                    "'kubectl get deployments -n cdp', 'kubectl get events -n vault-system --sort-by=.lastTimestamp'"
+                    "Examples: "
+                    "'kubectl rollout status deployment grafana -n monitoring', "
+                    "'kubectl top nodes', "
+                    "'kubectl top pods -A', "
+                    "'kubectl api-resources', "
+                    "'kubectl get lease -n kube-node-lease', "
+                    "'kubectl get priorityclass'"
                 ),
             },
         },
