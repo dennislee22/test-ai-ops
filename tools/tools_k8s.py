@@ -1553,7 +1553,24 @@ def get_top_pods(namespace: str = "all", limit: int = 10,
     for ns_v, name, cpu_m, mem_mib in rows:
         lines.append(f"{ns_v:<{col_ns}}  {name:<{col_pod}}  {cpu_m:>8}m  {mem_mib:>10.0f}Mi")
     lines.append("```")
-    return "\n".join(lines)
+
+    import time as _time
+    now_ts   = int(_time.time())
+    sk_label = "CPU(m)" if sort_by.lower() in ("cpu", "cpu_m") else "Memory(MiB)"
+    series_out = [
+        {
+            "label":  f"{ns_v}/{name}" if ns_v != "-" else name,
+            "values": [[now_ts, float(cpu_m if sort_by.lower() in ("cpu","cpu_m") else mem_mib)]],
+        }
+        for ns_v, name, cpu_m, mem_mib in rows
+    ]
+    graph_json = _json.dumps(
+        {"title": f"{direction.title()} {len(rows)} pods — {sk_label} live",
+         "unit":  "m" if sort_by.lower() in ("cpu","cpu_m") else "MiB",
+         "duration": "live", "series": series_out},
+        separators=(",", ":"))
+
+    return "\n".join(lines) + f"\n§GRAPH§{graph_json}§GRAPH§"
 
 
 def _get_top_pods_prometheus(namespace: str, limit: int, sort_by: str,
@@ -1649,7 +1666,7 @@ def _get_top_pods_prometheus(namespace: str, limit: int, sort_by: str,
         vals = [float(v[1]) for v in r.get("values", []) if v[1] != "NaN"]
         return sum(vals) / len(vals) if vals else 0.0
 
-    rows = []
+    ranked = []
     for r in results:
         ml    = r.get("metric", {})
         ns_v  = ml.get("namespace", "-")
@@ -1657,14 +1674,16 @@ def _get_top_pods_prometheus(namespace: str, limit: int, sort_by: str,
         if search and search.lower() not in pod_v.lower() \
                   and search.lower() not in ns_v.lower():
             continue
-        rows.append((ns_v, pod_v, _mean(r)))
+        ranked.append((ns_v, pod_v, _mean(r), r.get("values", [])))
 
-    if not rows:
+    if not ranked:
         return (f"No Prometheus data matching `{search}` over the last {duration}."
                 if search else f"No Prometheus data over the last {duration}.")
 
-    rows.sort(key=lambda x: x[2], reverse=not ascending)
-    rows = rows[:max(1, limit)]
+    ranked.sort(key=lambda x: x[2], reverse=not ascending)
+    ranked = ranked[:max(1, limit)]
+
+    rows = [(ns_v, pod_v, mean_v) for ns_v, pod_v, mean_v, _ in ranked]
 
     unit = "m" if sort_key_label == "CPU" else "Mi"
     try:
@@ -1687,7 +1706,20 @@ def _get_top_pods_prometheus(namespace: str, limit: int, sort_by: str,
     for ns_v, pod_v, mean_v in rows:
         lines.append(f"{ns_v:<{col_ns}}  {pod_v:<{col_pod}}  {mean_v:>12.1f}{unit}")
     lines.append("```")
-    return "\n".join(lines)
+
+    series_out = [
+        {
+            "label":  f"{ns_v}/{pod_v}" if ns_v != "-" else pod_v,
+            "values": [[float(ts), float(v)] for ts, v in vals if v != "NaN"],
+        }
+        for ns_v, pod_v, _, vals in ranked
+    ]
+    title      = f"Top {len(rows)} pods — avg {sort_key_label} ({from_str}–{to_str})"
+    graph_json = _json.dumps(
+        {"title": title, "unit": unit, "duration": duration, "series": series_out},
+        separators=(",", ":"))
+
+    return "\n".join(lines) + f"\n§GRAPH§{graph_json}§GRAPH§"
 
 
 def get_top_nodes(limit: int = 0, ascending: bool = False,
