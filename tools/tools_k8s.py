@@ -2488,7 +2488,6 @@ def run_cluster_health() -> str:
 
     return "\n".join(out)
 
-
 def generate_healthcheck_report() -> str:
     """
     Full, multi-section cluster health report. Covers every layer from nodes
