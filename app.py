@@ -512,7 +512,7 @@ def build_agent():
                 
         # SKIP SYNTHESISE
         if forced_skip and direct_answer is None and results:
-            updates.append("⚡ Skip Synthesise toggled: LLM synthesis bypassed")
+            updates.append("⚡ Skip Synthesis toggled: LLM synthesis bypassed")
             config.logger.info(f"[REQ:{state.get('req_id', '')}] [tool_node] Skip Synthesise is ON for query: {user_q!r}. Overriding normal sequence...")
             
             parts = []
