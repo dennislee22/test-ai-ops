@@ -11,6 +11,7 @@ from tools.tools_k8s import (
     get_coredns_health, get_pv_usage, find_resource, get_pod_containers_resources, get_cronjob_status,
     query_prometheus_metrics, kubectl_exec, exec_db_query, get_pod_storage, get_pdb_status,
     get_certificate_status, get_control_plane_status, get_network_policy_status, get_webhook_health,
+    get_top_pods, get_top_nodes,
 )
 
 _P_NS = {
@@ -961,6 +962,92 @@ K8S_TOOL_METADATA: dict = {
             "pod_name":  {"type": "string", "default": "", "description": "Optional: specific DB pod name (e.g., 'db-0'). Leave empty to auto-detect the first running DB pod in the namespace."},
             "database":  {"type": "string", "default": "", "description": "Optional: database/schema name. Leave empty to use the value auto-discovered from the pod's environment."},
             "container": {"type": "string", "default": "", "description": "Optional: container name inside the pod (e.g., 'db'). Required for multi-container pods if the DB container is not the first. If the tool errors with 'available containers: ...', set this to the DB container name."},
+        },
+    },
+
+    "get_top_pods": {
+        "fn":          get_top_pods,
+        "description": (
+            "Show live or historical CPU and memory usage for pods, ranked highest or lowest. "
+            "When duration is empty: uses metrics-server for a live snapshot (instant, like kubectl top pods). "
+            "When duration is set: queries Prometheus for average usage over that period — "
+            "use this when the user says 'past 1 hour', 'last 6 hours', 'over the last day'. "
+            "Supports filtering by pod name and sorting in either direction. "
+            "Use for queries like: "
+            "'top 10 pods by cpu', "
+            "'which pods use the most memory', "
+            "'top pods for the past 1 hour', "
+            "'top 5 pods in cdp namespace', "
+            "'show cpu usage for grafana pods', "
+            "'lowest cpu pods', "
+            "'which pods use the least memory over the last 6 hours'. "
+            "Do NOT use query_prometheus_metrics for ranked pod lists — use this tool."
+        ),
+        "parameters":  {
+            "namespace": _P_NS,
+            "limit":     {
+                "type":        "integer",
+                "default":     10,
+                "description": "Number of pods to return. Extract from user question — 'top 5' → 5, 'top 20' → 20. Default 10.",
+            },
+            "sort_by":   {
+                "type":        "string",
+                "default":     "cpu",
+                "description": "Sort metric: 'cpu' (default) or 'memory'. Extract from user question.",
+            },
+            "ascending": {
+                "type":        "boolean",
+                "default":     False,
+                "description": "When True, show lowest consumers first. Set True for: 'lowest pods', 'least cpu', 'bottom pods', 'minimum usage'.",
+            },
+            "search":    {**_P_SEARCH, "description": "Optional pod name or namespace filter (partial match). Use when user asks about a specific pod or component, e.g. 'grafana', 'prometheus'."},
+            "duration":  {
+                "type":        "string",
+                "default":     "",
+                "description": (
+                    "Time window for historical average from Prometheus. "
+                    "Leave empty for live metrics-server snapshot. "
+                    "Set when user mentions a time period: "
+                    "'past 1 hour' → '1h', 'last 6 hours' → '6h', 'last day' → '24h', 'last week' → '7d'."
+                ),
+            },
+            "user_timezone": {
+                "type":        "string",
+                "default":     "UTC",
+                "description": "User's IANA timezone (e.g. 'Asia/Kuala_Lumpur'). Auto-injected from browser — do not set manually.",
+            },
+        },
+    },
+
+    "get_top_nodes": {
+        "fn":          get_top_nodes,
+        "description": (
+            "Show live CPU and memory usage per node via metrics-server. "
+            "Supports ascending sort to show least-loaded nodes first. "
+            "Requires metrics-server to be installed on the cluster. "
+            "Use for queries like: "
+            "'top nodes', 'which node uses the most cpu', "
+            "'node resource usage', 'how loaded are the nodes', "
+            "'which node has the least load', 'lowest node cpu'. "
+            "Do NOT use get_node_capacity for live usage — that shows allocatable vs requested. "
+            "Use this tool for actual live consumption."
+        ),
+        "parameters":  {
+            "limit":     {
+                "type":        "integer",
+                "default":     0,
+                "description": "Max nodes to show. 0 (default) means show all nodes.",
+            },
+            "ascending": {
+                "type":        "boolean",
+                "default":     False,
+                "description": "When True, show least-loaded nodes first. Set True for: 'lowest node', 'least load', 'which node has most headroom'.",
+            },
+            "user_timezone": {
+                "type":        "string",
+                "default":     "UTC",
+                "description": "User's IANA timezone. Auto-injected from browser — do not set manually.",
+            },
         },
     },
 
