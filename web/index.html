@@ -588,6 +588,14 @@ button{cursor:pointer;font-family:inherit}
 .graph-legend-label{word-break:break-all;flex:1}
 .graph-legend-val{font-weight:700;white-space:nowrap;flex-shrink:0}
 .graph-no-data{font-size:12px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;padding:8px 0}
+.graph-tooltip{
+  position:fixed;pointer-events:none;z-index:9999;
+  background:var(--tooltipBg,#0a1628);border:1px solid var(--accent);
+  border-radius:7px;padding:7px 11px;font-family:'IBM Plex Mono',monospace;
+  font-size:11px;color:var(--textMain);line-height:1.6;
+  box-shadow:0 4px 16px rgba(0,0,0,.6);
+  opacity:0;transition:opacity .1s;white-space:nowrap;
+}
 
 /* Thinking status */
 .status-box{
@@ -967,25 +975,24 @@ NUM_GPU=0</code></pre>
 
         <table>
           <tr><th>Method</th><th>Path</th><th>Description</th></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/health</code></td><td>Model, GPU, cluster status</td></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/system</code></td><td>Live CPU / RAM / GPU metrics</td></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/tools</code></td><td>List all registered tools</td></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/rag/stats</code></td><td>RAG vector store statistics</td></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/rag/files</code></td><td>List ingested files</td></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/rag/query</code></td><td>RAG-only query (Knowledge Bot)</td></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/config</code></td><td>Read current runtime config</td></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/prompt</code></td><td>Read current system prompt</td></tr>
-          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/ask</code></td><td>Ask the AI (blocking JSON response)</td></tr>
-          <tr><td><span class="badge badge-post">POST</span></td><td><code>/chat/stream</code></td><td>Ask the AI (SSE streaming)</td></tr>
-          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/tool</code></td><td>Call a tool directly by name</td></tr>
-          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/kubeconfig</code></td><td>Apply a new kubeconfig</td></tr>
-          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/ingest/upload</code></td><td>Upload docs to LanceDB</td></tr>
-          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/kb/ask</code></td><td>Knowledge Bot query (blocking)</td></tr>
-          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/kb/stream</code></td><td>Knowledge Bot query (SSE streaming)</td></tr>
-          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/config</code></td><td>Update runtime config (max chars, tokens, timeout)</td></tr>
-          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/reload-prompt</code></td><td>Hot-reload system_prompt.txt</td></tr>
-          <tr><td><span class="badge badge-put">PUT</span></td><td><code>/api/prompt</code></td><td>Update system prompt</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/ask</code></td><td>Ask the AI chatbot (blocking JSON response)</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/tool</code></td><td>Call a specific K8s tool directly by name</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/tools</code></td><td>List all registered tools and their signatures</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/rag/stats</code></td><td>LanceDB document and Excel row statistics</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/rag/files</code></td><td>List all previously ingested filenames</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/rag/query</code></td><td>RAG-only query for Knowledge Bot (no LLM, no truncation)</td></tr>
         </table>
+
+        <h3>Examples</h3>
+        <pre><code># Ask the AI chatbot (blocking)
+curl -s -X POST http://localhost:9000/api/ask \
+     -H "Content-Type: application/json" \
+     -d '{"q":"list all pods with problems", "skip_synthesise": true}'
+
+# Call a specific K8s tool directly
+curl -s -X POST http://localhost:9000/api/tool \
+     -H "Content-Type: application/json" \
+     -d '{"name":"get_pod_status","args":{"namespace":"all","show_all":true}}'</code></pre>
 
         <!-- ── Configuration ──────────────────────────────────────────── -->
         <h2>Environment Variables</h2>
@@ -1113,8 +1120,6 @@ NUM_GPU=0</code></pre>
 
         <h3>Resources &amp; Compute</h3>
         <span class="gl-tag gl-tag-resource">RESOURCE</span>
-        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-cluster"></div><div class="gl-ex-body"><span class="gl-ex-text">list all statefulset in cdp namespace</span><button class="gl-copy-btn" onclick="glCopy(this,'list all statefulset in cdp namespace')">copy</button></div></div>
-        <div class="gl-ex-note">Lists StatefulSets in cdp with desired vs ready replica counts.</div>
         <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-cluster"></div><div class="gl-ex-body"><span class="gl-ex-text">list all replicaset in cdp-keda namespace</span><button class="gl-copy-btn" onclick="glCopy(this,'list all replicaset in cdp-keda namespace')">copy</button></div></div>
         <div class="gl-ex-note">Lists ReplicaSets in cdp-keda with replica health status.</div>
         <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-resource"></div><div class="gl-ex-body"><span class="gl-ex-text">what's the cpu and ram request for cdp-embedded-db pod in cdp namespace?</span><button class="gl-copy-btn" onclick="glCopy(this,'what\'s the cpu and ram request for cdp-embedded-db pod in cdp namespace?')">copy</button></div></div>
@@ -2479,9 +2484,107 @@ function renderGraphBlock(payload, container) {
   container.innerHTML =
       `<div class="graph-title">${esc(title)}</div>`
     + `<div class="graph-body">`
-    + `<div class="graph-svg-wrap">${svg}</div>`
+    + `<div class="graph-svg-wrap" style="position:relative">${svg}</div>`
     + `<div class="graph-legend">${legend}</div>`
     + `</div>`;
+
+  // ── Hover tooltip ─────────────────────────────────────────────────────────
+  const svgEl = container.querySelector('svg');
+  if (!svgEl) return;
+
+  // Shared tooltip element (one per page, reused)
+  let tip = document.getElementById('graph-global-tooltip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.id = 'graph-global-tooltip';
+    tip.className = 'graph-tooltip';
+    document.body.appendChild(tip);
+  }
+
+  // Crosshair line
+  const crosshair = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  crosshair.setAttribute('y1', MT);
+  crosshair.setAttribute('y2', MT + PH);
+  crosshair.setAttribute('stroke', 'var(--accent)');
+  crosshair.setAttribute('stroke-width', '1');
+  crosshair.setAttribute('stroke-dasharray', '3,3');
+  crosshair.setAttribute('opacity', '0');
+  crosshair.setAttribute('pointer-events', 'none');
+  svgEl.appendChild(crosshair);
+
+  // Invisible overlay rect to capture mouse events
+  const overlay = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  overlay.setAttribute('x', ML);
+  overlay.setAttribute('y', MT);
+  overlay.setAttribute('width', PW);
+  overlay.setAttribute('height', PH);
+  overlay.setAttribute('fill', 'transparent');
+  overlay.setAttribute('style', 'cursor:crosshair');
+  svgEl.appendChild(overlay);
+
+  function onMove(e) {
+    const rect  = svgEl.getBoundingClientRect();
+    const scaleX = W / rect.width;
+    const mouseX = (e.clientX - rect.left) * scaleX;
+    if (mouseX < ML || mouseX > ML + PW) { onLeave(); return; }
+
+    // Convert mouseX → timestamp
+    const t = tMin + ((mouseX - ML) / PW) * (tMax - tMin);
+
+    // Find nearest data point per series
+    let lines = [`<span style="color:var(--accent2);font-weight:700">${new Date(t * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>`];
+    series.slice(0, 8).forEach((s, i) => {
+      if (!s.values.length) return;
+      // Binary search for nearest point
+      let lo = 0, hi = s.values.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (s.values[mid][0] < t) lo = mid + 1; else hi = mid;
+      }
+      if (lo > 0 && Math.abs(s.values[lo-1][0] - t) < Math.abs(s.values[lo][0] - t)) lo--;
+      const [, v] = s.values[lo];
+      const col   = GRAPH_COLORS[i % GRAPH_COLORS.length];
+      const label = s.label.length > 30 ? s.label.slice(0, 28) + '…' : s.label;
+      lines.push(`<span style="color:${col}">● ${label}:</span> <strong>${fmt(parseFloat(v))}</strong>`);
+    });
+
+    tip.innerHTML = lines.join('<br>');
+    tip.style.opacity = '1';
+    tip.style.left = (e.clientX + 14) + 'px';
+    tip.style.top  = (e.clientY - 10) + 'px';
+
+    // Snap crosshair to nearest timestamp
+    const nearestT = series.find(s => s.values.length)?.values[
+      (() => {
+        let lo = 0;
+        const vals = series.find(s => s.values.length)?.values || [];
+        let hi = vals.length - 1;
+        while (lo < hi) { const mid = (lo+hi)>>1; if(vals[mid][0]<t) lo=mid+1; else hi=mid; }
+        if(lo>0 && Math.abs(vals[lo-1][0]-t)<Math.abs(vals[lo][0]-t)) lo--;
+        return lo;
+      })()
+    ]?.[0];
+    if (nearestT !== undefined) {
+      const cx = ML + ((nearestT - tMin) / (tMax - tMin || 1)) * PW;
+      crosshair.setAttribute('x1', cx);
+      crosshair.setAttribute('x2', cx);
+      crosshair.setAttribute('opacity', '0.7');
+    }
+
+    // Keep tooltip inside viewport
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    const vw = window.innerWidth,  vh = window.innerHeight;
+    if (e.clientX + 14 + tw > vw) tip.style.left = (e.clientX - tw - 10) + 'px';
+    if (e.clientY - 10 + th > vh) tip.style.top  = (e.clientY - th - 4)  + 'px';
+  }
+
+  function onLeave() {
+    tip.style.opacity = '0';
+    crosshair.setAttribute('opacity', '0');
+  }
+
+  overlay.addEventListener('mousemove', onMove);
+  overlay.addEventListener('mouseleave', onLeave);
 }
 
 function appendAi(text, tools, iters, elapsed, statusUpdates, isClarification, skipSynth){
@@ -3031,7 +3134,7 @@ window.glCopy = function(btn, text) {
   });
 }
 
-// ═════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
 })();
 </script>
 <div id="tooltip-skip-synthesis" class="section-tooltip">
