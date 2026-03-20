@@ -64,6 +64,7 @@ def save_settings():
 load_settings()
 
 _decode_secrets_ctx: ContextVar[bool] = ContextVar("decode_secrets", default=False)
+_timezone_ctx:       ContextVar[str]  = ContextVar("user_timezone",  default="UTC")
 
 _log_ag = config._log_ag
 _log_rag = config._log_rag
@@ -113,7 +114,7 @@ def _ingest_response(results: list) -> dict:
 # ── 1. SCHEMAS ───────────────────────────────────────────────────────────────
 
 class HistoryMessage(BaseModel): role: str; content: str
-class ChatRequest(BaseModel): message: str; decode_secrets: bool = False; history: list[HistoryMessage] = []; max_new_tokens: int = 0; skip_synthesise: bool = False
+class ChatRequest(BaseModel): message: str; decode_secrets: bool = False; history: list[HistoryMessage] = []; max_new_tokens: int = 0; skip_synthesise: bool = False; timezone: str = "UTC"
 class ChatResponse(BaseModel): response: str; tools_used: list; iterations: int; status_updates: list; elapsed_seconds: float
 class AskRequest(BaseModel): q: str; skip_synthesise: bool = False
 class KbAskRequest(BaseModel): q: str; top_k: int = 50; max_tokens: int = 1312; sheet: Optional[str] = None
@@ -455,6 +456,9 @@ def build_agent():
 
             if name == "get_secret_list":
                 args["decode"] = _decode_secrets_ctx.get()
+
+            if name in ("query_prometheus_metrics", "get_top_pods", "get_top_nodes"):
+                args["user_timezone"] = _timezone_ctx.get()
 
             tools_called.append(name)
 
@@ -965,6 +969,7 @@ async def chat(req: ChatRequest):
 async def chat_stream(req: ChatRequest):
     if not req.message.strip(): raise HTTPException(400, "Empty message")
     _decode_secrets_ctx.set(req.decode_secrets)
+    _timezone_ctx.set(req.timezone or "UTC")
 
     import asyncio
     async def _keepalive_stream():
