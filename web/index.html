@@ -2921,25 +2921,14 @@ inpEl.addEventListener('keydown', e=>{
 ${marked.parse(reportText)}
 </body></html>`;
 
-      const printWin = window.open('', '_blank', 'width=960,height=750');
-      if (printWin) {
-        printWin.document.write(htmlContent);
-        printWin.document.close();
-        printWin.focus();
-        setTimeout(() => {
-          printWin.print();
-          printWin.onafterprint = () => printWin.close();
-        }, 600);
-        statusEl.style.color = '#22c55e';
-        statusEl.textContent = '✓ Report opened — use "Save as PDF" in the print dialog, or close to view only.';
-      } else {
-        // Pop-ups blocked — open as data URI in same tab as fallback
-        const blob = new Blob([htmlContent], { type: 'text/html' });
-        const url  = URL.createObjectURL(blob);
-        window.open(url, '_blank');
-        statusEl.style.color = '#22c55e';
-        statusEl.textContent = '✓ Report ready in new tab — use browser Print → Save as PDF.';
-      }
+      const printWindow = window.open('', '_blank', 'width=960,height=750');
+      printWindow.document.write(htmlContent);
+      printWindow.document.close();
+      printWindow.focus();
+      setTimeout(() => { printWindow.print(); printWindow.close(); }, 250);
+
+      statusEl.style.color = '#22c55e';
+      statusEl.textContent = '✓ Print dialog opened — choose "Save as PDF" to download.';
       setTimeout(() => { progress.style.display = 'none'; barEl.style.width = '0%'; }, 2000);
 
     } catch (err) {
