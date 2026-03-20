@@ -1630,20 +1630,28 @@ def _get_top_pods_prometheus(namespace: str, limit: int, sort_by: str,
     def _exec(cmd, large: bool = False):
         try:
             if large:
-                tmp = "/tmp/_prom_query_$$.json"
-                safe_cmd = (
-                    f"{cmd} > {tmp}; "
-                    f"cat {tmp}; "
-                    f"rm -f {tmp}"
-                )
+                ws = _k8s_stream(
+                    _core.connect_get_namespaced_pod_exec,
+                    prom_pod, prom_ns,
+                    command=["/bin/sh", "-c", cmd],
+                    container=prom_container,
+                    stderr=False, stdin=False, stdout=True, tty=False,
+                    _preload_content=False)
+                chunks = []
+                while ws.is_open():
+                    ws.update(timeout=60)
+                    if ws.peek_stdout():
+                        chunks.append(ws.read_stdout())
+                ws.close()
+                resp = "".join(chunks)
             else:
-                safe_cmd = cmd
-            resp = _k8s_stream(
-                _core.connect_get_namespaced_pod_exec,
-                prom_pod, prom_ns,
-                command=["/bin/sh", "-c", safe_cmd],
-                container=prom_container,
-                stderr=False, stdin=False, stdout=True, tty=False, _preload_content=True)
+                resp = _k8s_stream(
+                    _core.connect_get_namespaced_pod_exec,
+                    prom_pod, prom_ns,
+                    command=["/bin/sh", "-c", cmd],
+                    container=prom_container,
+                    stderr=False, stdin=False, stdout=True, tty=False,
+                    _preload_content=True)
             if isinstance(resp, bytes):
                 resp = resp.decode("utf-8", errors="replace")
             return resp.strip() if isinstance(resp, str) else str(resp).strip()
@@ -1661,10 +1669,7 @@ def _get_top_pods_prometheus(namespace: str, limit: int, sort_by: str,
     raw      = _exec(f"curl -s --max-time 60 '{url}'", large=True)
 
     if not raw:
-        raw2 = _exec(f"curl -s --max-time 60 '{url}'")
-        if not raw2:
-            return "Prometheus returned an empty response. The query may have timed out or the container has no /tmp access."
-        raw = raw2
+        return "Prometheus returned an empty response. The query may have timed out or returned no data."
 
     try:
         data = _json.loads(raw)
@@ -3910,20 +3915,28 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h",
     def _exec(cmd, large: bool = False):
         try:
             if large:
-                tmp = "/tmp/_prom_query_$$.json"
-                safe_cmd = (
-                    f"{cmd} > {tmp}; "
-                    f"cat {tmp}; "
-                    f"rm -f {tmp}"
-                )
+                ws = _k8s_stream(
+                    _core.connect_get_namespaced_pod_exec,
+                    prom_pod, prom_ns,
+                    command=["/bin/sh", "-c", cmd],
+                    container=prom_container,
+                    stderr=False, stdin=False, stdout=True, tty=False,
+                    _preload_content=False)
+                chunks = []
+                while ws.is_open():
+                    ws.update(timeout=60)
+                    if ws.peek_stdout():
+                        chunks.append(ws.read_stdout())
+                ws.close()
+                resp = "".join(chunks)
             else:
-                safe_cmd = cmd
-            resp = _k8s_stream(
-                _core.connect_get_namespaced_pod_exec,
-                prom_pod, prom_ns,
-                command=["/bin/sh", "-c", safe_cmd],
-                container=prom_container,
-                stderr=False, stdin=False, stdout=True, tty=False, _preload_content=True)
+                resp = _k8s_stream(
+                    _core.connect_get_namespaced_pod_exec,
+                    prom_pod, prom_ns,
+                    command=["/bin/sh", "-c", cmd],
+                    container=prom_container,
+                    stderr=False, stdin=False, stdout=True, tty=False,
+                    _preload_content=True)
             if isinstance(resp, bytes): resp = resp.decode("utf-8", errors="replace")
             elif not isinstance(resp, str):
                 try: resp = _json.dumps(resp) if hasattr(resp, "__iter__") else str(resp)
@@ -3963,8 +3976,6 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h",
         enc = urllib.parse.quote(pql, safe="")
         url = f"{api_base}/query_range?query={enc}&start={start_ts}&end={end_ts}&step={step}"
         raw = _exec(f"curl -s --max-time 60 '{url}'", large=True)
-        if not raw or raw.startswith("[exec error"):
-            raw = _exec(f"curl -s --max-time 60 '{url}'")
         if not raw or raw.startswith("[exec error"): return None, raw or "Empty response"
         try:
             return _json.loads(raw), None
