@@ -31,8 +31,9 @@ K8S_TOOL_METADATA: dict = {
             "pass name_substring='' to show everything. "
             "Vague intent words like 'all', 'any', 'everything' are automatically treated as "
             "no filter, so the full resource list is returned. "
-            "If a named search yields no matches, the tool automatically falls back to showing "
-            "all resources of the requested type, with a note explaining the fallback. "
+            "If a typed search yields no matches, the tool automatically widens to all resource "
+            "types and searches again before falling back to showing everything. "
+            "The fallback messages are user-facing — do NOT mention resource_type in your response. "
             "Do NOT use get_pod_status when a specific resource name is mentioned — use this tool. "
             "Returns: scope header, resource type, namespace, name, and status/details per row."
         ),
@@ -52,7 +53,12 @@ K8S_TOOL_METADATA: dict = {
                 "description": (
                     "Optional resource type to restrict the search. "
                     "Accepted values: 'pod', 'svc' or 'service', 'ingress', 'pvc'. "
-                    "Omit (None) to search all supported types at once."
+                    "Omit (None) to search all supported types at once. "
+                    "IMPORTANT: only set this if the user explicitly mentioned a resource type "
+                    "(e.g. 'find the grafana pod', 'is there a grafana service'). "
+                    "If the user says 'find grafana', 'is there a resource named grafana', or "
+                    "any phrasing without a specific type, pass None — the tool will search "
+                    "all types automatically. Never infer a type from context."
                 ),
             },
             "namespace":      {
