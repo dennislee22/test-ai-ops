@@ -463,59 +463,106 @@ def build_agent():
         if tcs: updates.append(f"🔧 {', '.join(tc['name'] for tc in tcs)}")
         return {"messages": [response], "tool_calls_made": state.get("tool_calls_made", []), "iteration": itr, "status_updates": updates}
 
-def tool_node(state: AgentState):
-        last, results, tools_called, updates = state["messages"][-1], [], list(state.get("tool_calls_made", [])), list(state.get("status_updates", []))
-        user_q = next((m.content for m in state["messages"] if isinstance(m, HumanMessage)), "")
-        tcs, direct_answer = getattr(last, "tool_calls", []) or [], None
+    def tool_node(state: AgentState):
+        last = state["messages"][-1]
+        results = []
+        tools_called = list(state.get("tool_calls_made", []))
+        updates = list(state.get("status_updates", []))
 
-        # --- INTERCEPTOR: FORCE THE NAMESPACE ---
+        user_q = next(
+            (m.content for m in state["messages"] if isinstance(m, HumanMessage)),
+            ""
+        )
+
+        tcs = getattr(last, "tool_calls", []) or []
+        direct_answer = None
+
         forced_ns = _extract_namespace(user_q)
         forced_skip = state.get("skip_synthesise", False)
 
         for tc in tcs:
-            name, args = tc["name"], dict(tc.get("args", {}) or {})
+            name = tc["name"]
+            args = dict(tc.get("args", {}) or {})
 
-            # 1. Catch LLM hallucinations before the interceptor runs
             bad_ns = ["cluster", "across the cluster", "entire cluster", "any", "none"]
-            
-            # Safely handle JSON nulls by converting to string or defaulting to empty
             safe_ns = str(args.get("namespace") or "").lower()
-            
+
             if safe_ns in bad_ns:
                 args["namespace"] = "all"
 
-            # 2. Override LLM's namespace choice with our deterministic mapper
             if "namespace" in args and forced_ns != "all":
                 args["namespace"] = forced_ns
-                config.logger.info(f"[REQ:{state.get('req_id', '')}] Overriding LLM namespace -> forced to '{forced_ns}'")
-            
-            if name == "get_secret_list": args["decode"] = _decode_secrets_ctx.get()
-            tools_called.append(name)
-            updates.append(f"$ {args['command']}" if name == "kubectl_exec" and "command" in args else f"⚙️ {name}")
-            
-            # 3. Execute the tool
-            out = _call_tool(name, args, all_tools)
-            _out_str = str(out)
-            _log_ag.info(f"[REQ:{state.get('req_id', '')}] [tool_node] {name} returned {len(_out_str)} chars:\n{_out_str}")
-            
-            results.append(ToolMessage(content=out, tool_call_id=tc["id"], name=name))
+                config.logger.info(
+                    f"[REQ:{state.get('req_id', '')}] Overriding LLM namespace -> forced to '{forced_ns}'"
+                )
 
-            # 4. Routing & Bypass Logic
+            if name == "get_secret_list":
+                args["decode"] = _decode_secrets_ctx.get()
+
+            tools_called.append(name)
+
+            if name == "kubectl_exec" and "command" in args:
+                updates.append(f"$ {args['command']}")
+            else:
+                updates.append(f"⚙️ {name}")
+
+            out = _call_tool(name, args, all_tools)
+            out_str = str(out)
+
+            _log_ag.info(
+                f"[REQ:{state.get('req_id', '')}] [tool_node] {name} returned {len(out_str)} chars:\n{out_str}"
+            )
+
+            results.append(
+                ToolMessage(
+                    content=out,
+                    tool_call_id=tc["id"],
+                    name=name
+                )
+            )
+
             if name == "rag_search" and isinstance(out, str) and out.startswith("KB_EMPTY:"):
                 updates.append("⚠️ Knowledge base is empty")
-                direct_answer = "⚠️ " + _MSG_NO_INGEST + "\n\nUse the ⚙ Settings → RAG Documents panel to upload."
-            
+                direct_answer = (
+                    "⚠️ " + _MSG_NO_INGEST +
+                    "\n\nUse the ⚙ Settings → RAG Documents panel to upload."
+                )
+
             elif forced_skip:
-                # Let our new llm_node formatter handle this!
-                pass 
-            
-            elif len(tcs) == 1 and should_bypass_llm(name, args, out, user_q, req_id=state.get("req_id", "")):
-                # Normal automatic bypass for heavy tools
+                pass
+
+            elif len(tcs) == 1 and should_bypass_llm(
+                name, args, out, user_q, req_id=state.get("req_id", "")
+            ):
                 updates.append("⚡ Direct output (LLM synthesis skipped)")
                 direct_answer = out
 
-        return {"messages": results, "tool_calls_made": tools_called, "status_updates": updates, "direct_answer": direct_answer}
+        if forced_skip and direct_answer is None and results:
+            updates.append("⚡ Skip Synthesis toggled: LLM synthesis bypassed")
 
+            config.logger.info(
+                f"[REQ:{state.get('req_id', '')}] [tool_node] Skip Synthesise is ON for query: {user_q!r}. Overriding normal sequence..."
+            )
+
+            parts = []
+            for r in results:
+                content_str = str(r.content).strip()
+
+                if "\n|" in content_str or content_str.startswith("|") or "|---" in content_str:
+                    parts.append(
+                        f"**Raw output from tool `{r.name}`**:\n\n{content_str}"
+                    )
+
+            direct_answer = "\n\n".join(parts)
+
+        return {
+            "messages": results,
+            "tool_calls_made": tools_called,
+            "iteration": state.get("iteration", 0),
+            "status_updates": updates,
+            "direct_answer": direct_answer,
+        }
+    
     def router(state: AgentState) -> Literal["tools", "end"]:
         if state.get("iteration", 0) >= 6: return "end"
         tcs = getattr(state["messages"][-1], "tool_calls", None)
