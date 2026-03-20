@@ -10,6 +10,7 @@ NEVER_BYPASS = {
 
 BYPASSABLE_TOOLS = {
     "run_cluster_health",
+    "get_node_taints",
     "get_node_info",
     "get_namespace_status",
     "get_namespace_resource_summary",
@@ -33,6 +34,7 @@ BYPASSABLE_TOOLS = {
     "query_prometheus_metrics",
     "get_top_pods",
     "get_top_nodes",
+    "find_resource",
 }
 
 # Note: They must ALSO be listed in BYPASSABLE_TOOLS above.
@@ -47,6 +49,9 @@ UNCONDITIONAL_BYPASS = {
     "query_prometheus_metrics",
     "get_top_pods",
     "get_top_nodes",
+    "get_node_taints",
+    "get_node_info:,
+    "find_resource",
 }
 
 LIST_INTENTS = (
