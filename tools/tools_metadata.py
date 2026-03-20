@@ -969,26 +969,29 @@ K8S_TOOL_METADATA: dict = {
         "fn":          get_top_pods,
         "description": (
             "Show live or historical CPU and memory usage for pods, ranked highest or lowest. "
+            "ALWAYS emits both a ranked table AND a time-series graph in the output. "
             "When duration is empty: uses metrics-server for a live snapshot (instant, like kubectl top pods). "
             "When duration is set: queries Prometheus for average usage over that period — "
-            "use this when the user says 'past 1 hour', 'last 6 hours', 'over the last day'. "
-            "Supports filtering by pod name and sorting in either direction. "
+            "use this when the user mentions a time window OR asks for a graph/chart. "
             "Use for queries like: "
             "'top 10 pods by cpu', "
             "'which pods use the most memory', "
+            "'show me cpu usage graph for top 3 pods', "
             "'top pods for the past 1 hour', "
             "'top 5 pods in cdp namespace', "
             "'show cpu usage for grafana pods', "
             "'lowest cpu pods', "
             "'which pods use the least memory over the last 6 hours'. "
-            "Do NOT use query_prometheus_metrics for ranked pod lists — use this tool."
+            "Do NOT use query_prometheus_metrics for ranked pod lists — use this tool. "
+            "IMPORTANT: When the user asks for a graph or chart of top pods, "
+            "ALWAYS set duration (e.g. '1h') to get the time-series data needed for the graph."
         ),
         "parameters":  {
             "namespace": _P_NS,
             "limit":     {
                 "type":        "integer",
                 "default":     10,
-                "description": "Number of pods to return. Extract from user question — 'top 5' → 5, 'top 20' → 20. Default 10.",
+                "description": "Number of pods to return. Extract from user question — 'top 5' → 5, 'top 3' → 3. Default 10.",
             },
             "sort_by":   {
                 "type":        "string",
@@ -1005,16 +1008,18 @@ K8S_TOOL_METADATA: dict = {
                 "type":        "string",
                 "default":     "",
                 "description": (
-                    "Time window for historical average from Prometheus. "
+                    "Time window for historical data from Prometheus. "
                     "Leave empty for live metrics-server snapshot. "
-                    "Set when user mentions a time period: "
-                    "'past 1 hour' → '1h', 'last 6 hours' → '6h', 'last day' → '24h', 'last week' → '7d'."
+                    "ALWAYS set this when the user asks for a graph, chart, or mentions a time period: "
+                    "'graph' or 'chart' → '1h' (default), "
+                    "'past 1 hour' → '1h', 'last 6 hours' → '6h', "
+                    "'last day' → '24h', 'last week' → '7d'."
                 ),
             },
             "user_timezone": {
                 "type":        "string",
                 "default":     "UTC",
-                "description": "User's IANA timezone (e.g. 'Asia/Kuala_Lumpur'). Auto-injected from browser — do not set manually.",
+                "description": "User's IANA timezone. Auto-injected from browser — do not set manually.",
             },
         },
     },
