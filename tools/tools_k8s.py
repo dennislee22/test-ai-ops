@@ -1628,14 +1628,23 @@ def _get_top_pods_prometheus(namespace: str, limit: int, sort_by: str,
         return "No running Prometheus server pod found."
 
     def _exec(cmd):
+        """
+        Execute a shell command inside the Prometheus pod.
+        For large responses (curl JSON), writes to a temp file and reads back
+        to avoid WebSocket stream frame truncation.
+        """
         try:
+            # Write output to a temp file inside the pod, then cat it back.
+            # This avoids the kubernetes stream buffer limit on large JSON responses.
+            safe_cmd = f"_OUT=$(mktemp); {cmd} > \"$_OUT\" 2>/dev/null; cat \"$_OUT\"; rm -f \"$_OUT\""
             resp = _k8s_stream(
                 _core.connect_get_namespaced_pod_exec,
                 prom_pod, prom_ns,
-                command=["/bin/sh", "-c", cmd],
+                command=["/bin/sh", "-c", safe_cmd],
                 container=prom_container,
                 stderr=False, stdin=False, stdout=True, tty=False, _preload_content=True)
-            if isinstance(resp, bytes): resp = resp.decode("utf-8", errors="replace")
+            if isinstance(resp, bytes):
+                resp = resp.decode("utf-8", errors="replace")
             return resp.strip() if isinstance(resp, str) else str(resp).strip()
         except Exception as exc:
             return f"[exec error: {exc}]"
@@ -3893,10 +3902,11 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h",
 
     def _exec(cmd):
         try:
+            safe_cmd = f"_OUT=$(mktemp); {cmd} > \"$_OUT\" 2>/dev/null; cat \"$_OUT\"; rm -f \"$_OUT\""
             resp = _k8s_stream(
                 _core.connect_get_namespaced_pod_exec,
                 prom_pod, prom_ns,
-                command=["/bin/sh", "-c", cmd],
+                command=["/bin/sh", "-c", safe_cmd],
                 container=prom_container,
                 stderr=False, stdin=False, stdout=True, tty=False, _preload_content=True)
             if isinstance(resp, bytes): resp = resp.decode("utf-8", errors="replace")
