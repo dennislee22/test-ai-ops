@@ -430,7 +430,6 @@ def build_agent():
             tool_system = f"{prompt}\n\nAvailable tools:\n{tools_json}{format_rules}"
             gguf_msgs = [{"role": "system", "content": tool_system}] + chat_msgs[1:]
 
-            # CHANGED: Cleaned up duplicate lines and set temperature=0.1
             resp = model.create_chat_completion(messages=gguf_msgs, max_tokens=_max_new, temperature=0.1, top_p=0.8, top_k=20, repeat_penalty=1.05)
             raw_text = resp["choices"][0]["message"].get("content", "") or ""
         else:
