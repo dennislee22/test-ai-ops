@@ -102,9 +102,17 @@ def _load_initial_k8s() -> None:
 _load_initial_k8s()
 _init_api_clients()
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared helpers  (refactors #1 #2 #3 #7 #8 #9 #10)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# #9 – single consistent error formatter
 def _api_error(e: ApiException) -> str:
     return f"[K8s API error {e.status}] {e.reason}"
 
+
+# Namespace-scope header — prepended to every tool output so Claude and the
+# user always know exactly what was searched, regardless of what was typed.
 def _ns_header(kind: str, namespace: str, search: str | None = None) -> str:
     """
     Returns a single plain sentence describing the query scope.
@@ -470,8 +478,11 @@ def get_pod_containers_resources(namespace: str = "all", search: str | None = No
     except ApiException as e:
         return _api_error(e)
 
-_NOT_RUNNING_PHASES = ("Pending", "Failed", "Unknown")
 
+
+# Phases that map to "not running" intent words
+_NOT_RUNNING_PHASES = ("Pending", "Failed", "Unknown")
+# Words Claude might pass meaning "show only non-Running pods"
 _NOT_RUNNING_WORDS  = {
     "notrunning", "not_running", "not-running",
     "unhealthy", "failed", "failing",
@@ -1952,7 +1963,15 @@ def find_resource(name_substring: str, resource_type: str = None, namespace: str
             name_substring = ""
 
         # Normalise resource_type — unknown/vague values mean "search all types"
-        _VALID_TYPES = {"pod", "svc", "service", "ingress", "pvc"}
+        _VALID_TYPES = {
+            "pod", "svc", "service", "ingress", "pvc",
+            "deployment", "deploy",
+            "replicaset", "rs",
+            "daemonset", "ds",
+            "statefulset", "sts",
+            "configmap", "cm",
+            "secret",
+        }
         if resource_type:
             rt = resource_type.strip().lower()
             resource_type = rt if rt in _VALID_TYPES else None
@@ -1962,27 +1981,73 @@ def find_resource(name_substring: str, resource_type: str = None, namespace: str
         def _build_resources(rt_filter):
             """Build the list of (kind, items, details_fn) for a given type filter."""
             r = []
+
+            def _status(desired, ready):
+                if desired == 0 and ready == 0: return "Scaled to 0"
+                return f"{ready}/{desired} ready" + (" ✅" if ready == desired else " ⚠️")
+
             if not rt_filter or rt_filter == "pod":
                 pods = (_core.list_namespaced_pod(namespace).items if namespace
                         else _core.list_pod_for_all_namespaces().items)
                 r.append(("Pod", pods,
                            lambda p: f"{p.status.phase or 'Unknown'} on {p.spec.node_name or 'n/a'}"))
+
+            if not rt_filter or rt_filter in ("deployment", "deploy"):
+                deps = (_apps.list_namespaced_deployment(namespace).items if namespace
+                        else _apps.list_deployment_for_all_namespaces().items)
+                r.append(("Deployment", deps,
+                           lambda d: _status(d.spec.replicas or 0, d.status.ready_replicas or 0)))
+
+            if not rt_filter or rt_filter in ("daemonset", "ds"):
+                dss = (_apps.list_namespaced_daemon_set(namespace).items if namespace
+                       else _apps.list_daemon_set_for_all_namespaces().items)
+                r.append(("DaemonSet", dss,
+                           lambda d: _status(d.status.desired_number_scheduled or 0,
+                                             d.status.number_ready or 0)))
+
+            if not rt_filter or rt_filter in ("statefulset", "sts"):
+                stss = (_apps.list_namespaced_stateful_set(namespace).items if namespace
+                        else _apps.list_stateful_set_for_all_namespaces().items)
+                r.append(("StatefulSet", stss,
+                           lambda s: _status(s.spec.replicas or 0, s.status.ready_replicas or 0)))
+
+            if not rt_filter or rt_filter in ("replicaset", "rs"):
+                rss = (_apps.list_namespaced_replica_set(namespace).items if namespace
+                       else _apps.list_replica_set_for_all_namespaces().items)
+                r.append(("ReplicaSet", rss,
+                           lambda rs: _status(rs.spec.replicas or 0, rs.status.ready_replicas or 0)))
+
             if not rt_filter or rt_filter in ("svc", "service"):
                 svcs = (_core.list_namespaced_service(namespace).items if namespace
                         else _core.list_service_for_all_namespaces().items)
                 r.append(("Service", svcs,
                            lambda s: f"{s.spec.type} {s.spec.cluster_ip}"))
+
             if not rt_filter or rt_filter == "ingress":
                 ings = (_net.list_namespaced_ingress(namespace).items if namespace
                         else _net.list_ingress_for_all_namespaces().items)
                 r.append(("Ingress", ings,
                            lambda i: ", ".join(h.host for h in (i.spec.rules or []) if h.host) or "-"))
+
             if not rt_filter or rt_filter == "pvc":
                 pvcs = (_core.list_namespaced_persistent_volume_claim(namespace).items if namespace
                         else _core.list_persistent_volume_claim_for_all_namespaces().items)
                 r.append(("PVC", pvcs,
                            lambda p: (f"{p.status.phase or 'Unknown'} "
                                       f"{(p.spec.resources.requests or {}).get('storage', 'n/a') if p.spec.resources else 'n/a'}")))
+
+            if not rt_filter or rt_filter in ("configmap", "cm"):
+                cms = (_core.list_namespaced_config_map(namespace).items if namespace
+                       else _core.list_config_map_for_all_namespaces().items)
+                r.append(("ConfigMap", cms,
+                           lambda c: f"{len(c.data or {})} key(s)"))
+
+            if not rt_filter or rt_filter == "secret":
+                secs = (_core.list_namespaced_secret(namespace).items if namespace
+                        else _core.list_secret_for_all_namespaces().items)
+                r.append(("Secret", secs,
+                           lambda s: s.type or "Opaque"))
+
             return r
 
         def _search(resources, force: bool = False) -> list[str]:
@@ -2001,6 +2066,7 @@ def find_resource(name_substring: str, resource_type: str = None, namespace: str
         results   = _search(resources)
 
         # ── Fallback stage 1: if a typed search found nothing, try ALL types ──
+        # e.g. Claude passed resource_type="svc" but grafana is a Pod
         if not results and name_substring and resource_type:
             all_resources = _build_resources(None)
             results       = _search(all_resources)
@@ -2046,215 +2112,379 @@ def _cap(items: list, max_n: int = _MAX_DETAIL_ITEMS) -> str:
     return s + (f" (+{rest} more)" if rest > 0 else "")
 
 
-def run_cluster_health(namespace: str = "all") -> str:
-    now_str = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    out     = [f"Cluster Health Report — {now_str}", ""]
+def run_cluster_health() -> str:
+    """
+    Scorecard-style cluster health report. One line per check — only failures
+    get extra detail. Designed to be token-efficient while still giving Claude
+    enough signal to answer 'is my cluster ok?' in one sentence.
+    """
+    from kubernetes.stream import stream as _k8s_stream
 
-    criticals = 0   # counts of critical issues
-    warnings  = 0   # counts of warnings
-    healthy   = []  # names of sections that are fully green
+    now_str  = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    out      = [f"Cluster Health Report — {now_str}", ""]
+    criticals: list[str] = []   # descriptions of critical issues
+    warnings:  list[str] = []   # descriptions of warnings
+    healthy:   list[str] = []   # names of fully-green sections
 
     # ── 1. Nodes ─────────────────────────────────────────────────────────────
+    # List every node line-by-line: readiness, CPU/RAM used vs allocatable, taints
     out.append("── Nodes " + "─" * 52)
     try:
         nodes = _core.list_node().items
-        not_ready    = []
-        mem_pressure = []
-        disk_pressure = []
-        for node in nodes:
-            conds = {c.type: c.status for c in (node.status.conditions or [])}
-            if conds.get("Ready") != "True":
-                not_ready.append(node.metadata.name)
-            else:
-                if conds.get("MemoryPressure") == "True":
-                    mem_pressure.append(node.metadata.name)
-                if conds.get("DiskPressure") == "True":
-                    disk_pressure.append(node.metadata.name)
+        node_issues = False
+        for node in sorted(nodes, key=lambda n: n.metadata.name):
+            conds  = {c.type: c.status for c in (node.status.conditions or [])}
+            alloc  = node.status.allocatable or {}
+            cap    = node.status.capacity    or {}
 
-        total = len(nodes)
-        bad   = len(not_ready)
-        if not_ready:
-            out.append(f"🔴 {total - bad}/{total} nodes Ready — Not Ready: {_cap(not_ready)}")
-            criticals += 1
-        else:
-            out.append(f"✅ {total}/{total} nodes Ready")
-        if mem_pressure:
-            out.append(f"⚠️  MemoryPressure: {_cap(mem_pressure)}")
-            warnings += 1
-        if disk_pressure:
-            out.append(f"⚠️  DiskPressure: {_cap(disk_pressure)}")
-            warnings += 1
-        if not not_ready and not mem_pressure and not disk_pressure:
+            # Readiness
+            ready  = conds.get("Ready") == "True"
+            status = "✅ Ready" if ready else "🔴 NotReady"
+
+            # CPU: compute requested across all pods on this node
+            cpu_alloc     = _parse_cpu_cores(alloc.get("cpu", 0))
+            pods_on_node  = _core.list_pod_for_all_namespaces(
+                field_selector=f"spec.nodeName={node.metadata.name}").items
+            cpu_req       = sum(
+                _parse_cpu_cores((c.resources.requests or {}).get("cpu", 0))
+                for p in pods_on_node
+                for c in (p.spec.containers or [])
+                if c.resources
+            )
+            cpu_used_pct  = round((cpu_req / cpu_alloc) * 100) if cpu_alloc > 0 else 0
+            cpu_str       = (f"{round(cpu_req, 2)}C / {round(cpu_alloc, 2)}C"
+                             f" ({cpu_used_pct}% used)")
+
+            # RAM: compute requested across all pods on this node
+            mem_alloc_gib = _parse_mem_gib(alloc.get("memory", "0Ki"))
+            mem_req_gib   = sum(
+                _parse_mem_gib((c.resources.requests or {}).get("memory", "0"))
+                for p in pods_on_node
+                for c in (p.spec.containers or [])
+                if c.resources
+            )
+            mem_used_pct  = round((mem_req_gib / mem_alloc_gib) * 100) if mem_alloc_gib > 0 else 0
+            mem_str       = (f"{round(mem_req_gib, 1)}Gi / {round(mem_alloc_gib, 1)}Gi"
+                             f" ({mem_used_pct}% used)")
+
+            # Pressure flags
+            pressure = []
+            if conds.get("MemoryPressure") == "True": pressure.append("MemPressure")
+            if conds.get("DiskPressure")   == "True": pressure.append("DiskPressure")
+            if conds.get("PIDPressure")    == "True": pressure.append("PIDPressure")
+            pressure_str = f" ⚠️  {', '.join(pressure)}" if pressure else ""
+
+            # Taints — always shown, "<none>" when absent
+            taints    = node.spec.taints or []
+            taint_str = ", ".join(
+                f"{t.key}{'=' + t.value if t.value else ''}:{t.effect}" for t in taints
+            ) if taints else "<none>"
+
+            out.append(
+                f"  {'🔴' if not ready else '✅'} {node.metadata.name}"
+                f" | {status}{pressure_str}"
+                f" | CPU: {cpu_str}"
+                f" | RAM: {mem_str}"
+                f" | Taints: {taint_str}"
+            )
+
+            if not ready:
+                criticals.append(f"Node `{node.metadata.name}` is NotReady")
+                node_issues = True
+            if pressure:
+                warnings.append(f"Node `{node.metadata.name}` has {', '.join(pressure)}")
+                node_issues = True
+
+        if not node_issues:
             healthy.append("Nodes")
+
     except Exception as e:
         out.append(f"⚠️  Could not check nodes: {e}")
-        warnings += 1
+        warnings.append("Node check failed")
 
     # ── 2. System Pods ───────────────────────────────────────────────────────
+    # List each unhealthy pod individually with namespace
     out.append("\n── System Pods " + "─" * 45)
     try:
+        sys_pod_issues = False
         for ns in _SYSTEM_NAMESPACES:
             try:
                 pods = _core.list_namespaced_pod(namespace=ns, limit=500).items
                 if not pods:
                     continue
-                unhealthy = [p.metadata.name for p in pods
-                             if sum(1 for cs in (p.status.container_statuses or []) if cs.ready)
-                             < len(p.spec.containers or [])]
+                unhealthy_pods = [
+                    p for p in pods
+                    if sum(1 for cs in (p.status.container_statuses or []) if cs.ready)
+                    < len(p.spec.containers or [])
+                ]
                 total = len(pods)
-                if unhealthy:
-                    out.append(f"⚠️  {ns}: {len(unhealthy)}/{total} pods not ready — {_cap(unhealthy)}")
-                    warnings += 1
+                if unhealthy_pods:
+                    out.append(f"⚠️  {ns}: {len(unhealthy_pods)}/{total} pods not ready")
+                    for p in unhealthy_pods:
+                        ready   = sum(1 for cs in (p.status.container_statuses or []) if cs.ready)
+                        tot_c   = len(p.spec.containers or [])
+                        restarts = sum(cs.restart_count for cs in (p.status.container_statuses or []))
+                        # Surface first waiting/terminated reason
+                        reason  = ""
+                        for cs in (p.status.container_statuses or []):
+                            if cs.state and cs.state.waiting and cs.state.waiting.reason:
+                                reason = cs.state.waiting.reason; break
+                            if cs.state and cs.state.terminated and cs.state.terminated.reason:
+                                reason = cs.state.terminated.reason; break
+                        reason_str = f" ({reason})" if reason else ""
+                        out.append(
+                            f"    🔴 Namespace: {ns} | Pod: {p.metadata.name}"
+                            f" | Ready: {ready}/{tot_c}"
+                            f" | Restarts: {restarts}{reason_str}"
+                        )
+                    warnings.append(f"{ns}: {len(unhealthy_pods)} pod(s) not ready")
+                    sys_pod_issues = True
                 else:
                     out.append(f"✅ {ns}: {total}/{total} pods ready")
             except Exception:
                 pass
+        if not sys_pod_issues:
+            healthy.append("System Pods")
     except Exception as e:
         out.append(f"⚠️  Could not check system pods: {e}")
-        warnings += 1
+        warnings.append("System pod check failed")
 
     # ── 3. Workloads ─────────────────────────────────────────────────────────
     out.append("\n── Workloads " + "─" * 47)
     try:
+        workload_issues = False
+
         # Deployments
-        deps = _apps.list_deployment_for_all_namespaces().items
+        deps    = _apps.list_deployment_for_all_namespaces().items
         dep_bad = [f"{d.metadata.namespace}/{d.metadata.name}" for d in deps
                    if (d.spec.replicas or 0) > 0
                    and (d.status.ready_replicas or 0) < (d.spec.replicas or 0)]
         if dep_bad:
             out.append(f"⚠️  {len(dep_bad)}/{len(deps)} Deployments degraded — {_cap(dep_bad)}")
-            warnings += 1
+            warnings.append(f"{len(dep_bad)} Deployment(s) degraded: {', '.join(dep_bad)}")
+            workload_issues = True
         else:
             out.append(f"✅ {len(deps)} Deployments healthy")
 
         # DaemonSets
-        dss = _apps.list_daemon_set_for_all_namespaces().items
+        dss    = _apps.list_daemon_set_for_all_namespaces().items
         ds_bad = [f"{d.metadata.namespace}/{d.metadata.name}" for d in dss
                   if (d.status.desired_number_scheduled or 0) > 0
                   and (d.status.number_ready or 0) < (d.status.desired_number_scheduled or 0)]
         if ds_bad:
             out.append(f"⚠️  {len(ds_bad)}/{len(dss)} DaemonSets degraded — {_cap(ds_bad)}")
-            warnings += 1
+            warnings.append(f"{len(ds_bad)} DaemonSet(s) degraded: {', '.join(ds_bad)}")
+            workload_issues = True
         else:
             out.append(f"✅ {len(dss)} DaemonSets healthy")
 
         # StatefulSets
-        stss = _apps.list_stateful_set_for_all_namespaces().items
+        stss    = _apps.list_stateful_set_for_all_namespaces().items
         sts_bad = [f"{s.metadata.namespace}/{s.metadata.name}" for s in stss
                    if (s.spec.replicas or 0) > 0
                    and (s.status.ready_replicas or 0) < (s.spec.replicas or 0)]
         if sts_bad:
             out.append(f"⚠️  {len(sts_bad)}/{len(stss)} StatefulSets degraded — {_cap(sts_bad)}")
-            warnings += 1
+            warnings.append(f"{len(sts_bad)} StatefulSet(s) degraded: {', '.join(sts_bad)}")
+            workload_issues = True
         else:
             out.append(f"✅ {len(stss)} StatefulSets healthy")
 
-        # Unhealthy pods (non-Running, non-Succeeded, or high-restart Running)
+        # Non-running pods
         failed_pods = []
-        for phase in ("Pending", "Failed", "Unknown"):
+        for phase in _NOT_RUNNING_PHASES:
             try:
                 result = _core.list_pod_for_all_namespaces(
                     field_selector=f"status.phase={phase}").items
-                failed_pods.extend(
-                    f"{p.metadata.namespace}/{p.metadata.name} ({phase})"
-                    for p in result)
+                failed_pods.extend(result)
             except Exception:
                 pass
         if failed_pods:
-            out.append(f"🔴 {len(failed_pods)} pod(s) not running — {_cap(failed_pods)}")
-            criticals += 1
+            out.append(f"🔴 {len(failed_pods)} pod(s) not running:")
+            for p in failed_pods:
+                phase    = p.status.phase or "Unknown"
+                restarts = sum(cs.restart_count for cs in (p.status.container_statuses or []))
+                reason   = ""
+                for cs in (p.status.container_statuses or []):
+                    if cs.state and cs.state.waiting and cs.state.waiting.reason:
+                        reason = cs.state.waiting.reason; break
+                    if cs.state and cs.state.terminated and cs.state.terminated.reason:
+                        reason = cs.state.terminated.reason; break
+                reason_str = f" ({reason})" if reason else ""
+                out.append(
+                    f"    🔴 Namespace: {p.metadata.namespace} | Pod: {p.metadata.name}"
+                    f" | Phase: {phase} | Restarts: {restarts}{reason_str}"
+                )
+            pod_labels = [f"{p.metadata.namespace}/{p.metadata.name}" for p in failed_pods]
+            criticals.append(f"{len(failed_pods)} pod(s) not running: {', '.join(pod_labels[:5])}"
+                             + (f" (+{len(failed_pods)-5} more)" if len(failed_pods) > 5 else ""))
+            workload_issues = True
         else:
             out.append("✅ No failed/pending pods")
 
-        if not dep_bad and not ds_bad and not sts_bad and not failed_pods:
+        if not workload_issues:
             healthy.append("Workloads")
 
     except Exception as e:
         out.append(f"⚠️  Could not check workloads: {e}")
-        warnings += 1
+        warnings.append("Workload check failed")
 
     # ── 4. Storage ───────────────────────────────────────────────────────────
     out.append("\n── Storage " + "─" * 49)
+    storage_issues = False
     try:
-        pvcs = _core.list_persistent_volume_claim_for_all_namespaces().items
+        pvcs    = _core.list_persistent_volume_claim_for_all_namespaces().items
         bound   = [p for p in pvcs if p.status.phase == "Bound"]
         unbound = [f"{p.metadata.namespace}/{p.metadata.name}"
                    for p in pvcs if p.status.phase != "Bound"]
         if unbound:
             out.append(f"🔴 {len(unbound)}/{len(pvcs)} PVCs not Bound — {_cap(unbound)}")
-            criticals += 1
+            criticals.append(f"{len(unbound)} PVC(s) not Bound: {', '.join(unbound[:5])}"
+                             + (f" (+{len(unbound)-5} more)" if len(unbound) > 5 else ""))
+            storage_issues = True
         else:
             out.append(f"✅ {len(bound)}/{len(pvcs)} PVCs Bound")
-        if not unbound:
-            healthy.append("Storage")
     except Exception as e:
         out.append(f"⚠️  Could not check PVCs: {e}")
-        warnings += 1
+        warnings.append("PVC check failed")
+        storage_issues = True
 
-    # ── 5. Networking ────────────────────────────────────────────────────────
-    out.append("\n── Networking " + "─" * 46)
+    # PV disk capacity — volumes above 80%
     try:
-        ings = _net.list_ingress_for_all_namespaces().items
-        no_lb = [f"{i.metadata.namespace}/{i.metadata.name}"
-                 for i in ings
-                 if not (i.status.load_balancer and i.status.load_balancer.ingress)]
-        if no_lb:
-            out.append(f"⚠️  {len(no_lb)}/{len(ings)} Ingresses missing LB IP — {_cap(no_lb)}")
-            warnings += 1
-        elif ings:
-            out.append(f"✅ {len(ings)} Ingresses with LB IP")
-        else:
-            out.append("✅ No Ingresses defined")
-        if not no_lb:
-            healthy.append("Networking")
-    except Exception as e:
-        out.append(f"⚠️  Could not check Ingresses: {e}")
-        warnings += 1
+        def _exec_df_quick(pod_name, ns, mount_path, container=None):
+            try:
+                kwargs = dict(
+                    command=["/bin/sh", "-c",
+                             f"df -k --output=used,avail {mount_path} 2>/dev/null | tail -1"],
+                    stderr=False, stdin=False, stdout=True, tty=False, _preload_content=True)
+                if container:
+                    kwargs["container"] = container
+                resp = _k8s_stream(
+                    _core.connect_get_namespaced_pod_exec, pod_name, ns, **kwargs)
+                return resp.strip() if isinstance(resp, str) else ""
+            except Exception:
+                return ""
 
-    # ── 6. Recent Warning Events ─────────────────────────────────────────────
+        pv_over = []
+        all_pvcs = _core.list_persistent_volume_claim_for_all_namespaces().items
+        for pvc in all_pvcs:
+            ns, pvc_name = pvc.metadata.namespace, pvc.metadata.name
+            pod_hit = pod_container = mount_path = None
+            try:
+                for pod in _core.list_namespaced_pod(namespace=ns).items:
+                    if pod.status.phase != "Running":
+                        continue
+                    for vol in (pod.spec.volumes or []):
+                        if (vol.persistent_volume_claim and
+                                vol.persistent_volume_claim.claim_name == pvc_name):
+                            for container in (pod.spec.containers or []):
+                                for vm in (container.volume_mounts or []):
+                                    if vm.name == vol.name:
+                                        pod_hit       = pod.metadata.name
+                                        pod_container = container.name
+                                        mount_path    = vm.mount_path
+                                        break
+                                if pod_hit: break
+                        if pod_hit: break
+            except Exception:
+                pass
+
+            if not pod_hit:
+                continue
+
+            df_out = _exec_df_quick(pod_hit, ns, mount_path, container=pod_container)
+            if not df_out:
+                continue
+            parts = df_out.split()
+            if len(parts) < 2:
+                continue
+            try:
+                used_kb  = int(parts[0])
+                avail_kb = int(parts[1])
+                total_kb = used_kb + avail_kb
+                pct      = round(used_kb / total_kb * 100, 1) if total_kb > 0 else 0.0
+            except (ValueError, ZeroDivisionError):
+                continue
+
+            if pct >= 80:
+                used_gib  = round(used_kb  / (1024 * 1024), 2)
+                total_gib = round(total_kb / (1024 * 1024), 2)
+                flag      = "🔴" if pct >= 90 else "🟠"
+                pv_over.append((pct, flag, ns, pvc_name, used_gib, total_gib))
+
+        if pv_over:
+            pv_over.sort(key=lambda x: x[0], reverse=True)
+            out.append(f"{'🔴' if any(p[0] >= 90 for p in pv_over) else '🟠'} "
+                       f"{len(pv_over)} PV(s) above 80% capacity:")
+            for pct, flag, ns, pvc_name, used_gib, total_gib in pv_over:
+                out.append(
+                    f"    {flag} Namespace: {ns} | PVC: {pvc_name}"
+                    f" | Usage: {pct}% ({used_gib}Gi / {total_gib}Gi)"
+                )
+            if any(p[0] >= 90 for p in pv_over):
+                criticals.append(
+                    f"{sum(1 for p in pv_over if p[0] >= 90)} PV(s) above 90% capacity")
+            warnings.append(f"{len(pv_over)} PV(s) above 80% capacity")
+            storage_issues = True
+        else:
+            out.append("✅ All PV disk usage within capacity (< 80%)")
+
+    except Exception as e:
+        out.append(f"⚠️  Could not check PV usage: {e}")
+        warnings.append("PV usage check failed")
+        storage_issues = True
+
+    if not storage_issues:
+        healthy.append("Storage")
+
+    # ── 5. Recent Warning Events ─────────────────────────────────────────────
     out.append("\n── Recent Warning Events " + "─" * 36)
     try:
         events = _core.list_event_for_all_namespaces(
             field_selector="type=Warning", limit=200).items
-        # Deduplicate by reason+object, keep highest count
         seen: dict = {}
         for e in events:
             if _is_noisy_event(e.message or ""):
                 continue
-            key = (e.reason or "", getattr(e.involved_object, "name", ""))
+            key  = (e.reason or "", getattr(e.involved_object, "name", ""))
             prev = seen.get(key)
             if prev is None or (e.count or 1) > (prev[0] or 1):
-                seen[key] = (e.count or 1, e.metadata.namespace, e.reason, key[1], e.message or "")
+                seen[key] = (e.count or 1, e.metadata.namespace,
+                             e.reason, key[1], e.message or "")
         top = sorted(seen.values(), key=lambda x: x[0], reverse=True)[:8]
         if top:
             for count, ns, reason, obj, msg in top:
                 short_msg = msg[:60] + "…" if len(msg) > 60 else msg
                 out.append(f"⚠️  {reason:<22} {ns}/{obj}  {short_msg}  (x{count})")
-            warnings += len(top)
+            warnings.append(f"{len(top)} recent warning event type(s)")
         else:
             out.append("✅ No recent warning events")
             healthy.append("Events")
     except Exception as e:
         out.append(f"⚠️  Could not fetch events: {e}")
-        warnings += 1
+        warnings.append("Event check failed")
 
     # ── Summary ───────────────────────────────────────────────────────────────
     out.append("\n── Summary " + "─" * 49)
     if criticals:
-        out.append(f"🔴 {criticals} critical issue(s) require attention")
+        out.append(f"🔴 {len(criticals)} critical issue(s):")
+        for item in criticals:
+            out.append(f"   • {item}")
     if warnings:
-        out.append(f"🟠 {warnings} warning(s) detected")
+        out.append(f"🟠 {len(warnings)} warning(s):")
+        for item in warnings:
+            out.append(f"   • {item}")
     if healthy:
         out.append(f"✅ Healthy: {', '.join(healthy)}")
-    if criticals == 0 and warnings == 0:
+    if not criticals and not warnings:
         out.append("✅ Cluster is healthy — all checks passed")
 
-    # ── Footer ────────────────────────────────────────────────────────────────
+    # ── Next Action Plan ──────────────────────────────────────────────────────
     out.append("")
-    out.append("─" * 60)
-    out.append("💬 Continue asking to drill into any specific area above.")
-    out.append("📋 For a complete and comprehensive health check report,")
-    out.append("   click **Healthcheck Report** via ⚙ Settings.")
+    out.append("── Next Action Plan " + "─" * 41)
+    out.append("💬 Continue asking the chatbot to investigate any specific area reported above.")
+    out.append("📋 For a complete and comprehensive health check report, click `Healthcheck Report` via ⚙ Settings.")
+    out.append("🤖 Check out ECS Knowledge Bot to find out about known issues, Dos and Don'ts, and best practices.")
 
     return "\n".join(out)
 
