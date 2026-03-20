@@ -16,7 +16,7 @@ BYPASSABLE_TOOLS = {
     "get_persistent_volumes",
     "get_pv_usage",
     "get_cluster_role_bindings",
-    "get_service_accounts",
+    "get_serviceaccounts",
     "get_pod_status",
     "get_pvc_status",
     "get_service",
@@ -31,6 +31,8 @@ BYPASSABLE_TOOLS = {
     "describe_sc",
     "get_events",
     "query_prometheus_metrics",
+    "get_top_pods",
+    "get_top_nodes",
 }
 
 # Note: They must ALSO be listed in BYPASSABLE_TOOLS above.
@@ -43,6 +45,8 @@ UNCONDITIONAL_BYPASS = {
     "describe_sc",
     "get_events",
     "query_prometheus_metrics",
+    "get_top_pods",
+    "get_top_nodes",
 }
 
 LIST_INTENTS = (
