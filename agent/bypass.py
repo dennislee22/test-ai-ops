@@ -50,7 +50,7 @@ UNCONDITIONAL_BYPASS = {
     "get_top_pods",
     "get_top_nodes",
     "get_node_taints",
-    "get_node_info:,
+    "get_node_info",
     "find_resource",
 }
 
