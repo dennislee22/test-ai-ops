@@ -1047,6 +1047,16 @@ async def api_ask(req: AskRequest):
         return {"question": req.q, "answer": result["response"], "tools_used": result["tools_used"], "iterations": result["iterations"], "elapsed_seconds": result["elapsed_seconds"]}
     except Exception as e: return _JSONResponse(status_code=500, content={"error": str(e)})
 
+@app.get("/api/healthcheck-report", summary="Run generate_healthcheck_report directly, no LLM involved")
+async def api_healthcheck_report():
+    import asyncio
+    try:
+        report = await asyncio.get_event_loop().run_in_executor(
+            None, _tk.generate_healthcheck_report)
+        return {"report": report}
+    except Exception as e:
+        return _JSONResponse(status_code=500, content={"error": str(e)})
+
 @app.post("/api/tool")
 async def api_tool(req: ToolCallRequest):
     import asyncio, inspect
