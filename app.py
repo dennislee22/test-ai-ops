@@ -991,8 +991,10 @@ def _collect_metrics() -> dict:
     cpu_per = psutil.cpu_percent(interval=0.2, percpu=True)
     mem     = psutil.virtual_memory()
     freq    = psutil.cpu_freq()
+    cpu_total = round(psutil.cpu_percent(interval=None), 1)
     return {
-        "cpu_total_pct":   round(psutil.cpu_percent(interval=None), 1),
+        "cpu_total":       cpu_total,
+        "cpu_total_pct":   cpu_total,
         "cpu_per_core":    [round(p, 1) for p in cpu_per],
         "cpu_count":       psutil.cpu_count(logical=True),
         "freq_mhz":        round(freq.current) if freq else 0,
