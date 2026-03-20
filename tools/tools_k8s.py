@@ -1870,7 +1870,6 @@ def find_resource(name_substring: str, resource_type: str = None, namespace: str
             resource_type = None
 
         def _build_resources(rt_filter):
-            """Build the list of (kind, items, details_fn) for a given type filter."""
             r = []
 
             def _status(desired, ready):
@@ -1887,57 +1886,57 @@ def find_resource(name_substring: str, resource_type: str = None, namespace: str
                 deps = (_apps.list_namespaced_deployment(namespace).items if namespace
                         else _apps.list_deployment_for_all_namespaces().items)
                 r.append(("Deployment", deps,
-                           lambda d: _status(d.spec.replicas or 0, d.status.ready_replicas or 0)))
+                           lambda d, _s=_status: _s(d.spec.replicas or 0, d.status.ready_replicas or 0)))
 
             if not rt_filter or rt_filter in ("daemonset", "ds"):
                 dss = (_apps.list_namespaced_daemon_set(namespace).items if namespace
                        else _apps.list_daemon_set_for_all_namespaces().items)
                 r.append(("DaemonSet", dss,
-                           lambda d: _status(d.status.desired_number_scheduled or 0,
-                                             d.status.number_ready or 0)))
+                           lambda d, _s=_status: _s(d.status.desired_number_scheduled or 0,
+                                                     d.status.number_ready or 0)))
 
             if not rt_filter or rt_filter in ("statefulset", "sts"):
                 stss = (_apps.list_namespaced_stateful_set(namespace).items if namespace
                         else _apps.list_stateful_set_for_all_namespaces().items)
                 r.append(("StatefulSet", stss,
-                           lambda s: _status(s.spec.replicas or 0, s.status.ready_replicas or 0)))
+                           lambda s, _s=_status: _s(s.spec.replicas or 0, s.status.ready_replicas or 0)))
 
             if not rt_filter or rt_filter in ("replicaset", "rs"):
                 rss = (_apps.list_namespaced_replica_set(namespace).items if namespace
                        else _apps.list_replica_set_for_all_namespaces().items)
                 r.append(("ReplicaSet", rss,
-                           lambda rs: _status(rs.spec.replicas or 0, rs.status.ready_replicas or 0)))
+                           lambda rs, _s=_status: _s(rs.spec.replicas or 0, rs.status.ready_replicas or 0)))
 
             if not rt_filter or rt_filter in ("svc", "service"):
                 svcs = (_core.list_namespaced_service(namespace).items if namespace
                         else _core.list_service_for_all_namespaces().items)
                 r.append(("Service", svcs,
-                           lambda s: f"{s.spec.type} {s.spec.cluster_ip}"))
+                           lambda svc: f"{svc.spec.type} {svc.spec.cluster_ip}"))
 
             if not rt_filter or rt_filter == "ingress":
                 ings = (_net.list_namespaced_ingress(namespace).items if namespace
                         else _net.list_ingress_for_all_namespaces().items)
                 r.append(("Ingress", ings,
-                           lambda i: ", ".join(h.host for h in (i.spec.rules or []) if h.host) or "-"))
+                           lambda ing: ", ".join(h.host for h in (ing.spec.rules or []) if h.host) or "-"))
 
             if not rt_filter or rt_filter == "pvc":
                 pvcs = (_core.list_namespaced_persistent_volume_claim(namespace).items if namespace
                         else _core.list_persistent_volume_claim_for_all_namespaces().items)
                 r.append(("PVC", pvcs,
-                           lambda p: (f"{p.status.phase or 'Unknown'} "
-                                      f"{(p.spec.resources.requests or {}).get('storage', 'n/a') if p.spec.resources else 'n/a'}")))
+                           lambda pvc: (f"{pvc.status.phase or 'Unknown'} "
+                                        f"{(pvc.spec.resources.requests or {}).get('storage', 'n/a') if pvc.spec.resources else 'n/a'}")))
 
             if not rt_filter or rt_filter in ("configmap", "cm"):
                 cms = (_core.list_namespaced_config_map(namespace).items if namespace
                        else _core.list_config_map_for_all_namespaces().items)
                 r.append(("ConfigMap", cms,
-                           lambda c: f"{len(c.data or {})} key(s)"))
+                           lambda cm: f"{len(cm.data or {})} key(s)"))
 
             if not rt_filter or rt_filter == "secret":
                 secs = (_core.list_namespaced_secret(namespace).items if namespace
                         else _core.list_secret_for_all_namespaces().items)
                 r.append(("Secret", secs,
-                           lambda s: s.type or "Opaque"))
+                           lambda sec: sec.type or "Opaque"))
 
             return r
 
