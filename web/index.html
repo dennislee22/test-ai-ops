@@ -2922,10 +2922,20 @@ ${marked.parse(reportText)}
 </body></html>`;
 
       const printWindow = window.open('', '_blank', 'width=960,height=750');
-      printWindow.document.write(htmlContent);
-      printWindow.document.close();
-      printWindow.focus();
-      setTimeout(() => { printWindow.print(); printWindow.close(); }, 250);
+      if (printWindow) {
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
+        printWindow.focus();
+        setTimeout(() => { printWindow.print(); printWindow.close(); }, 250);
+      } else {
+        const blob = new Blob([htmlContent], { type: 'text/html' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = 'ecs-health-report.html';
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+      }
 
       statusEl.style.color = '#22c55e';
       statusEl.textContent = '✓ Print dialog opened — choose "Save as PDF" to download.';
