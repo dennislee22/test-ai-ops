@@ -14,34 +14,39 @@ from tools.tools_k8s import (
 )
 
 K8S_TOOL_METADATA: dict = {
-"find_resource": {
+    "find_resource": {
         "fn":          find_resource,
         "description": (
             "Search for Kubernetes resources by name (partial, case-insensitive match) across "
-            "pods, services, ingresses, and PVCs. "
+            "all major resource types: pods, deployments, daemonsets, statefulsets, replicasets, "
+            "services, ingresses, PVCs, configmaps, and secrets. "
             "Use this as the PRIMARY tool whenever the user mentions a specific resource name or "
             "asks where something is running. Examples: "
             "'where is grafana', "
-            "'find pod nginx', "
-            "'which node is redis on', "
+            "'find the nginx deployment', "
+            "'is there a redis statefulset', "
+            "'which node is prometheus running on', "
             "'show me the grafana service', "
             "'locate ingress Y', "
-            "'is there anything named prometheus'. "
+            "'is there anything named prometheus', "
+            "'find all resources named cdp'. "
             "Also use this when the user asks to list ALL resources with no specific name — "
             "pass name_substring='' to show everything. "
             "Vague intent words like 'all', 'any', 'everything' are automatically treated as "
             "no filter, so the full resource list is returned. "
-            "If a typed search yields no matches, the tool automatically widens to all resource "
-            "types and searches again before falling back to showing everything. "
+            "The tool uses a two-stage fallback: if a typed search yields no matches it "
+            "automatically widens to all resource types and searches again, then falls back "
+            "to showing everything if still nothing is found. "
             "The fallback messages are user-facing — do NOT mention resource_type in your response. "
             "Do NOT use get_pod_status when a specific resource name is mentioned — use this tool. "
+            "Do NOT use get_deployment, get_daemonset, get_statefulset when searching by name — use this tool. "
             "Returns: scope header, resource type, namespace, name, and status/details per row."
         ),
         "parameters":  {
             "name_substring": {
                 "type":        "string",
                 "description": (
-                    "Partial name to search for (e.g., 'grafana', 'nginx', 'redis'). "
+                    "Partial name to search for (e.g., 'grafana', 'nginx', 'redis', 'cdp'). "
                     "Pass an empty string '' to list all resources with no name filter. "
                     "Do NOT pass intent words like 'all', 'any', or 'everything' — "
                     "pass '' instead. These words are stripped automatically but '' is cleaner."
@@ -51,14 +56,23 @@ K8S_TOOL_METADATA: dict = {
                 "type":        "string",
                 "default":     None,
                 "description": (
-                    "Optional resource type to restrict the search. "
-                    "Accepted values: 'pod', 'svc' or 'service', 'ingress', 'pvc'. "
+                    "Optional resource type to restrict the search. Accepted values: "
+                    "'pod', "
+                    "'deployment' or 'deploy', "
+                    "'daemonset' or 'ds', "
+                    "'statefulset' or 'sts', "
+                    "'replicaset' or 'rs', "
+                    "'svc' or 'service', "
+                    "'ingress', "
+                    "'pvc', "
+                    "'configmap' or 'cm', "
+                    "'secret'. "
                     "Omit (None) to search all supported types at once. "
                     "IMPORTANT: only set this if the user explicitly mentioned a resource type "
-                    "(e.g. 'find the grafana pod', 'is there a grafana service'). "
-                    "If the user says 'find grafana', 'is there a resource named grafana', or "
-                    "any phrasing without a specific type, pass None — the tool will search "
-                    "all types automatically. Never infer a type from context."
+                    "(e.g. 'find the grafana deployment', 'is there a grafana service'). "
+                    "If the user says 'find grafana', 'where is grafana', or any phrasing "
+                    "without a specific type, pass None — the tool searches all types automatically. "
+                    "Never infer a type from context."
                 ),
             },
             "namespace":      {
