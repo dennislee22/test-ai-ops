@@ -102,17 +102,9 @@ def _load_initial_k8s() -> None:
 _load_initial_k8s()
 _init_api_clients()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Shared helpers  (refactors #1 #2 #3 #7 #8 #9 #10)
-# ─────────────────────────────────────────────────────────────────────────────
-
-# #9 – single consistent error formatter
 def _api_error(e: ApiException) -> str:
     return f"[K8s API error {e.status}] {e.reason}"
 
-
-# Namespace-scope header — prepended to every tool output so Claude and the
-# user always know exactly what was searched, regardless of what was typed.
 def _ns_header(kind: str, namespace: str, search: str | None = None) -> str:
     """
     Returns a single plain sentence describing the query scope.
@@ -478,11 +470,8 @@ def get_pod_containers_resources(namespace: str = "all", search: str | None = No
     except ApiException as e:
         return _api_error(e)
 
-
-
-# Phases that map to "not running" intent words
 _NOT_RUNNING_PHASES = ("Pending", "Failed", "Unknown")
-# Words Claude might pass meaning "show only non-Running pods"
+
 _NOT_RUNNING_WORDS  = {
     "notrunning", "not_running", "not-running",
     "unhealthy", "failed", "failing",
@@ -2012,7 +2001,6 @@ def find_resource(name_substring: str, resource_type: str = None, namespace: str
         results   = _search(resources)
 
         # ── Fallback stage 1: if a typed search found nothing, try ALL types ──
-        # e.g. Claude passed resource_type="svc" but grafana is a Pod
         if not results and name_substring and resource_type:
             all_resources = _build_resources(None)
             results       = _search(all_resources)
@@ -2059,11 +2047,6 @@ def _cap(items: list, max_n: int = _MAX_DETAIL_ITEMS) -> str:
 
 
 def run_cluster_health(namespace: str = "all") -> str:
-    """
-    Scorecard-style cluster health report. One line per check — only failures
-    get extra detail. Designed to be token-efficient while still giving Claude
-    enough signal to answer 'is my cluster ok?' in one sentence.
-    """
     now_str = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     out     = [f"Cluster Health Report — {now_str}", ""]
 
