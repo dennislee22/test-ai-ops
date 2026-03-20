@@ -1462,30 +1462,57 @@ def get_node_labels(search: str = None) -> str:
     except ApiException as e:
         return _api_error(e)
 
-def get_node_taints(search: str = None) -> str:
+def get_node_taints(search: str = None, tainted_only: bool = False) -> str:
+    """
+    List node taints.
+
+    search       — filters by NODE NAME (partial match), not taint content.
+                   Ignored when Claude passes vague words like 'tainted', 'any', 'all'.
+    tainted_only — when True (or when search implies it), show only nodes that
+                   actually have at least one taint.
+    """
+    _TAINT_INTENT_WORDS = {
+        "tainted", "taint", "any", "all", "which", "show", "list", "every", "what"
+    }
+
+    if search and search.strip().lower() in _TAINT_INTENT_WORDS:
+        tainted_only = True
+        search = None
+
     try:
         nodes = _core.list_node().items
         if not nodes:
             return "No nodes found."
-        table_rows = []
+
+        if search:
+            nodes = [n for n in nodes if search.lower() in n.metadata.name.lower()]
+            if not nodes:
+                nodes = _core.list_node().items
+
+        rows = []
         for node in nodes:
             taints = node.spec.taints or []
-            if not taints:
-                table_rows.append((node.metadata.name, "<none>", "", ""))
+            if tainted_only and not taints:
                 continue
-            for t in taints:
-                row = (node.metadata.name, t.key or "<any>", t.value or "-", t.effect or "")
-                if search and search.lower() not in f"{t.key} {t.value} {t.effect}".lower():
-                    continue
-                table_rows.append(row)
-        if search and not table_rows:
-            for node in nodes:
-                for t in (node.spec.taints or []):
-                    table_rows.append((node.metadata.name, t.key or "<any>", t.value or "-", t.effect or ""))
-        lines = ["| NODE | KEY | VALUE | EFFECT |", "|---|---|---|---|"]
-        for node_name, key, val, effect in table_rows:
+            if not taints:
+                rows.append((node.metadata.name, "<none>", "-", "-"))
+            else:
+                for t in taints:
+                    rows.append((node.metadata.name,
+                                 t.key    or "<any>",
+                                 t.value  or "-",
+                                 t.effect or "-"))
+
+        if not rows:
+            return "No tainted nodes found." if tainted_only else "No nodes found."
+
+        scope = "tainted nodes" if tainted_only else "nodes"
+        lines = [_ns_header(f"Node Taints ({scope})", "all", search),
+                 "| NODE | KEY | VALUE | EFFECT |", "|---|---|---|---|"]
+        for node_name, key, val, effect in rows:
             lines.append(f"| `{node_name}` | {key} | {val} | {effect} |")
         return "\n".join(lines)
+
     except ApiException as e:
         return _api_error(e)
 
@@ -4104,6 +4131,7 @@ def _handle_get(p: dict) -> str:
     except ApiException as e:
         return f"[ERROR] API error getting {p['resource']}: {_safe_reason(e)}"
 
+
 def _handle_describe(p: dict) -> str:
     fns = _get_resource_fns(p["resource"])
     if fns is None:
@@ -4114,40 +4142,39 @@ def _handle_describe(p: dict) -> str:
     except ApiException as e:
         return f"[ERROR] API error describing {p['resource']}/{p['name']}: {e.reason}"
 
-def _handle_logs(p: dict) -> str:
-    pod_ref  = p["resource"]
-    pod_name = pod_ref.split("/", 1)[1] if "/" in pod_ref else pod_ref
-    kw: dict = {"tail_lines": p["tail"]}
-    if p["container"]: kw["container"] = p["container"]
-    try:
-        return _core.read_namespaced_pod_log(pod_name, p["namespace"], **kw) or "(empty log)"
-    except ApiException as e:
-        return f"[ERROR] Cannot get logs for {pod_name} in {p['namespace']}: {e.reason}"
 
 def _handle_top(p: dict) -> str:
     custom = _k8s.CustomObjectsApi()
     try:
-        if p["resource"] in ("node","nodes","no"):
-            resp  = custom.list_cluster_custom_object("metrics.k8s.io","v1beta1","nodes")
-            lines = [f"{'NODE':<40} {'CPU':<12} {'MEMORY'}"]
+        if p["resource"] in ("node", "nodes", "no"):
+            resp  = custom.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
+            lines = [f"{'NODE':<40} {'CPU(cores)':<14} {'MEMORY(bytes)'}"]
             for item in resp.get("items", []):
-                lines.append(f"  {item['metadata']['name']:<40} {item['usage']['cpu']:<12} {item['usage']['memory']}")
+                cpu_raw = item["usage"].get("cpu", "0")
+                cpu_m   = _parse_cpu_to_millicores(cpu_raw)
+                lines.append(
+                    f"  {item['metadata']['name']:<40} {cpu_m}m{'':<{max(0, 13 - len(str(cpu_m)))}} {item['usage']['memory']}"
+                )
             return "\n".join(lines)
         else:
             if p["all_namespaces"]:
-                items = custom.list_cluster_custom_object("metrics.k8s.io","v1beta1","pods").get("items",[])
+                items = custom.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "pods").get("items", [])
             else:
-                items = custom.list_namespaced_custom_object("metrics.k8s.io","v1beta1",p["namespace"],"pods").get("items",[])
-            lines = [f"{'NAMESPACE':<30} {'POD':<50} {'CPU':<12} {'MEMORY'}"]
+                items = custom.list_namespaced_custom_object(
+                    "metrics.k8s.io", "v1beta1", p["namespace"], "pods").get("items", [])
+            lines = [f"{'NAMESPACE':<30} {'POD':<50} {'CPU(cores)':<14} {'MEMORY(bytes)'}"]
             for item in items:
-                meta = item["metadata"]
-                containers = item.get("containers",[])
-                cpu = sum(int(c["usage"]["cpu"].rstrip("n")) for c in containers if c["usage"].get("cpu","").endswith("n"))
-                mem = containers[0]["usage"].get("memory","?") if containers else "?"
-                lines.append(f"  {meta.get('namespace',''):<30} {meta['name']:<50} {cpu}n  {mem}")
+                meta  = item["metadata"]
+                ctrs  = item.get("containers", [])
+                cpu_m = sum(_parse_cpu_to_millicores(c["usage"].get("cpu", "0")) for c in ctrs)
+                mem   = ctrs[0]["usage"].get("memory", "?") if ctrs else "?"
+                lines.append(
+                    f"  {meta.get('namespace', ''):<30} {meta['name']:<50} {cpu_m}m{'':<{max(0, 13 - len(str(cpu_m)))}} {mem}"
+                )
             return "\n".join(lines)
     except ApiException as e:
         return f"[ERROR] Metrics not available: {e.reason}. Is metrics-server installed?"
+
 
 def _handle_rollout(p: dict) -> str:
     subverb = p["args"][1] if len(p["args"]) > 1 else p["subcommand"]
@@ -4167,24 +4194,88 @@ def _handle_rollout(p: dict) -> str:
     except ApiException as e:
         return f"[ERROR] {e.reason}"
 
-def _handle_auth_cani(p: dict) -> str:
-    return "[INFO] auth can-i is not implemented via API mode."
 
 def _handle_api_resources() -> str:
+    lines = ["Available API resources (group/version | kind | namespaced):"]
+    try:
+        core = _k8s.CoreV1Api()
+        for r in core.get_api_resources().resources:
+            if "/" not in r.name:
+                lines.append(f"  v1 | {r.kind} ({r.name}) | {'true' if r.namespaced else 'false'}")
+    except Exception as e:
+        lines.append(f"  [ERROR] Core resources: {e}")
+    try:
+        apiclient = _k8s.ApisApi()
+        for grp in apiclient.get_api_versions().groups:
+            version = grp.preferred_version.group_version
+            try:
+                resources = _k8s.ApiClient().call_api(
+                    f"/apis/{version}", "GET",
+                    response_type="object", _return_http_data_only=True)
+                for r in (resources.get("resources") or []):
+                    if "/" not in r.get("name", ""):
+                        lines.append(
+                            f"  {version} | {r.get('kind', '?')} ({r['name']}) | {r.get('namespaced', '?')}"
+                        )
+            except Exception:
+                pass
+    except Exception as e:
+        lines.append(f"  [ERROR] API groups: {e}")
     try:
         ext  = _k8s.ApiextensionsV1Api()
         crds = ext.list_custom_resource_definition()
-        lines = ["Custom Resource Definitions:"]
-        for crd in crds.items:
-            lines.append(f"  {crd.metadata.name}")
-        return "\n".join(lines)
-    except ApiException as e:
-        return f"[ERROR] {e.reason}"
+        if crds.items:
+            lines.append("\nCustom Resource Definitions:")
+            for crd in crds.items:
+                lines.append(f"  {crd.metadata.name}")
+    except Exception as e:
+        lines.append(f"  [ERROR] CRDs: {e}")
+    return "\n".join(lines)
 
-def _handle_version() -> str:
-    return get_cluster_version()
 
-def _parse_kubectl(command: str) -> dict:
+def kubectl_exec(command: str) -> str:
+    command = command.strip()
+    _log.info(f"[kubectl_exec] {command!r}")
+    if not re.match(r"^kubectl(\s|$)", command):
+        return "[ERROR] Command must start with 'kubectl'."
+    _SHELL_OPS = re.compile(r'(\|\||&&|(?<!<)>(?!>)|\bawk\b|\bgrep\b|\bsed\b|\bcut\b|\bwc\b|2>/dev/null)')
+    if _SHELL_OPS.search(command):
+        return ("[ERROR] Shell operators and pipes are not supported. "
+                "Use a dedicated tool like get_pod_status(), get_events(), etc.")
+    p    = _parse_kubectl(command)
+    verb = p["verb"]
+    if verb in _BLOCKED_VERBS:
+        return f"[ERROR] {_BLOCKED_VERBS[verb]}"
+    if verb in _KUBECTL_WRITE_VERBS and not _ALLOW_WRITES:
+        return (f"[ERROR] Write operation '{verb}' is disabled. "
+                "Set KUBECTL_ALLOW_WRITES=true to enable writes.")
+    if verb == "logs":
+        return "[ERROR] Use get_pod_logs() tool for log retrieval — it supports auto-container selection and fallback."
+    if verb == "version":
+        return get_cluster_version()
+    if verb == "auth":
+        return "[ERROR] kubectl auth can-i is not implemented in API mode."
+    _DISPATCH = {
+        "get":           _handle_get,
+        "describe":      _handle_describe,
+        "top":           _handle_top,
+        "rollout":       _handle_rollout,
+        "api-resources": lambda _: _handle_api_resources(),
+    }
+    try:
+        handler = _DISPATCH.get(verb)
+        if handler:
+            out = handler(p)
+        elif verb in _KUBECTL_READ_VERBS:
+            out = f"[ERROR] kubectl {verb} is not yet implemented in API mode. Use a specific tool instead."
+        else:
+            out = f"[ERROR] Unknown kubectl verb: {verb!r}"
+    except Exception as exc:
+        _log.exception(f"[kubectl_exec] Unexpected error: {exc}")
+        out = f"[ERROR] Unexpected error: {exc}"
+    if len(out) > _KUBECTL_MAX_OUT:
+        out = out[:_KUBECTL_MAX_OUT] + f"\n...[output truncated at {_KUBECTL_MAX_OUT} chars]"
+    return out
     tokens = shlex.split(command.strip())
     if tokens and tokens[0] == "kubectl":
         tokens = tokens[1:]
