@@ -560,22 +560,33 @@ button{cursor:pointer;font-family:inherit}
 /* ── inline Prometheus graph ─────────────────────────────────────── */
 .graph-block{
   margin-top:10px;background:var(--msgBg);border:1px solid var(--border);
-  border-radius:8px;padding:12px 14px 8px;overflow:hidden;
+  border-radius:8px;padding:12px 14px 10px;overflow:hidden;
 }
 .graph-title{
   font-size:10px;font-family:'IBM Plex Mono',monospace;font-weight:700;
   color:var(--accent2);letter-spacing:.06em;text-transform:uppercase;
   margin-bottom:8px;
 }
-.graph-svg-wrap{width:100%;overflow:hidden}
+.graph-body{
+  display:flex;align-items:flex-start;gap:14px;
+}
+.graph-svg-wrap{
+  flex:1;min-width:0;overflow:hidden;
+}
 .graph-legend{
-  display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:8px;
+  flex-shrink:0;width:180px;display:flex;flex-direction:column;
+  gap:5px;padding-top:4px;max-height:180px;overflow-y:auto;
 }
 .graph-legend-item{
-  display:flex;align-items:center;gap:5px;
+  display:flex;align-items:flex-start;gap:6px;
   font-size:10px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);
+  line-height:1.4;
 }
-.graph-legend-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.graph-legend-dot{
+  width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:2px;
+}
+.graph-legend-label{word-break:break-all;flex:1}
+.graph-legend-val{font-weight:700;white-space:nowrap;flex-shrink:0}
 .graph-no-data{font-size:12px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;padding:8px 0}
 
 /* Thinking status */
@@ -742,12 +753,12 @@ button{cursor:pointer;font-family:inherit}
       <div id="ttl" class="shiny">Cloudera ECS AI Ops</div>
       <div id="subtitle">
         <div id="header-ticker-wrap">
-          <span id="header-ticker">This Agentic ECS AI Ops Chatbot is in Tech Preview. Please contact <a href="mailto:dennislee@cloudera.com">dennislee@cloudera.com</a> for feedback and comments.&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;This Agentic ECS AI Ops Chatbot is in Tech Preview. Please contact <a href="mailto:dennislee@cloudera.com">dennislee@cloudera.com</a> for feedback and comments.</span>
+          <span id="header-ticker">This Agentic ECS AI Ops Chatbot is in Tech Preview. Please contact <a href="/cdn-cgi/l/email-protection#89edece7e7e0fae5ececc9eae5e6fcedecfbe8a7eae6e4"><span class="__cf_email__" data-cfemail="4c28292222253f2029290c2f20233928293e2d622f2321">[email&#160;protected]</span></a> for feedback and comments.&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;This Agentic ECS AI Ops Chatbot is in Tech Preview. Please contact <a href="/cdn-cgi/l/email-protection#3155545f5f58425d545471525d5e44555443501f525e5c"><span class="__cf_email__" data-cfemail="0460616a6a6d776861614467686b71606176652a676b69">[email&#160;protected]</span></a> for feedback and comments.</span>
         </div>
       </div>
     </div>
     <div id="hdr-right">
-      <a id="email-link" href="mailto:dennislee@cloudera.com">&#9993; dennislee&#64;cloudera.com</a>
+      <a id="email-link" href="/cdn-cgi/l/email-protection#e286878c8c8b918e8787a2818e8d9786879083cc818d8f">&#9993; dennislee&#64;cloudera.com</a>
       <div id="theme-row">
         <span id="theme-label">THEME</span>
         <button class="tdot active" data-theme="midnight"
@@ -1011,7 +1022,7 @@ NUM_GPU=0</code></pre>
           <li>Restrict the env file: <code>chmod 600 env</code></li>
         </ul>
 
-        <div class="tip">&#9993; Contact <a href="mailto:dennislee@cloudera.com">dennislee@cloudera.com</a> for feedback and questions.</div>
+        <div class="tip">&#9993; Contact <a href="/cdn-cgi/l/email-protection#6a0e0f04040319060f0f2a0906051f0e0f180b44090507"><span class="__cf_email__" data-cfemail="5135343f3f38223d343411323d3e24353423307f323e3c">[email&#160;protected]</span></a> for feedback and questions.</div>
 
       </div><!-- #readme-pane -->
 
@@ -1113,6 +1124,7 @@ NUM_GPU=0</code></pre>
           <button class="stab" data-tab="tab-kb"><span class="stab-icon">&#128196;</span>RAG Documents</button>
           <button class="stab" data-tab="tab-output"><span class="stab-icon">&#127919;</span>Chatbot Settings</button>
           <button class="stab" data-tab="tab-security"><span class="stab-icon">&#128274;</span>Security</button>
+          <button class="stab" data-tab="tab-healthreport"><span class="stab-icon">&#128203;</span>Health Report</button>
         </nav>
 
         <!-- Right content -->
@@ -1271,6 +1283,40 @@ NUM_GPU=0</code></pre>
             </div>
           </div>
 
+          <!-- ── Tab: Health Report ── -->
+          <div class="stab-pane" id="tab-healthreport">
+            <div class="stab-pane-title">&#128203; Comprehensive Health Check Report</div>
+            <p>Generate a full cluster health report covering nodes, workloads, storage, networking, certificates, RBAC, and recent diagnostics. The report is downloaded as a PDF to your browser.</p>
+
+            <div style="margin-top:8px;background:var(--inputBg);border:1px solid var(--border);border-radius:8px;padding:14px 16px;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);line-height:1.8">
+              <div style="color:var(--panelLabel);font-weight:700;margin-bottom:6px;letter-spacing:.04em">REPORT SECTIONS</div>
+              <div>&#9989; Executive Summary &amp; Cluster Overview</div>
+              <div>&#9989; Node Infrastructure &amp; Capacity</div>
+              <div>&#9989; Resource Utilisation &amp; Limits</div>
+              <div>&#9989; Storage Health (PVCs, PVs, Disk Usage)</div>
+              <div>&#9989; Workload Health (Pods, Deployments, StatefulSets)</div>
+              <div>&#9989; Networking &amp; DNS</div>
+              <div>&#9989; Certificates &amp; RBAC</div>
+              <div>&#9989; Recent Diagnostics &amp; Warning Events</div>
+            </div>
+
+            <div id="healthreport-status" style="min-height:20px;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);margin-top:8px"></div>
+
+            <div id="healthreport-progress" style="display:none;margin-top:6px">
+              <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);margin-bottom:6px" id="healthreport-step">Initialising…</div>
+              <div style="background:var(--border);border-radius:4px;height:4px;overflow:hidden">
+                <div id="healthreport-bar" style="height:100%;width:0%;background:var(--accent);border-radius:4px;transition:width .4s ease"></div>
+              </div>
+            </div>
+
+            <div class="modal-btns" style="margin-top:auto">
+              <button class="modal-btn modal-btn-primary" id="healthreport-btn" style="display:flex;align-items:center;gap:8px">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+                Generate &amp; Download PDF Report
+              </button>
+            </div>
+          </div>
+
         </div><!-- .stab-content -->
       </div><!-- #settings-pane -->
 
@@ -1369,7 +1415,7 @@ NUM_GPU=0</code></pre>
 
 </div><!-- #app -->
 
-<script>/* v=20260312 */
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>/* v=20260312 */
 
 (function(){
 'use strict';
@@ -2104,6 +2150,9 @@ async function fetchHealth(retries){
 
 fetchHealth(10);
 
+// ── Auto-detect user timezone from browser ───────────────────────────────
+const USER_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+
 // ═══════════════════════════════════════════════════════════════════════════
 // CHAT
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2289,9 +2338,9 @@ function renderGraphBlock(payload, container) {
     if (t > tMax) tMax = t;
   }));
 
-  // ── SVG geometry ────────────────────────────────────────────────────────
-  const W = 560, H = 160;
-  const ML = 46, MR = 12, MT = 8, MB = 22;
+  // ── SVG geometry — wider to use full left column ─────────────────────────
+  const W = 620, H = 170;
+  const ML = 48, MR = 8, MT = 8, MB = 22;
   const PW = W - ML - MR, PH = H - MT - MB;
 
   const xS = t => ML + ((t - tMin) / (tMax - tMin || 1)) * PW;
@@ -2318,7 +2367,6 @@ function renderGraphBlock(payload, container) {
     if (unit === '%')     return v.toFixed(1) + '%';
     if (unit === 'cores') return v.toFixed(3);
     if (unit === 'm') {
-      // Auto-scale decimals: tiny values need more precision
       if (v === 0)    return '0m';
       if (v < 0.01)   return v.toFixed(4) + 'm';
       if (v < 0.1)    return v.toFixed(3) + 'm';
@@ -2340,7 +2388,7 @@ function renderGraphBlock(payload, container) {
     return v.toFixed(1);
   }
 
-  // ── Truncate long labels: keep start and end, elide middle ───────────────
+  // ── Truncate long labels ──────────────────────────────────────────────────
   function truncLabel(s, max) {
     if (s.length <= max) return s;
     const keep = Math.floor((max - 1) / 2);
@@ -2348,31 +2396,26 @@ function renderGraphBlock(payload, container) {
   }
 
   // ── Build SVG ────────────────────────────────────────────────────────────
-  // Read current CSS variables for theme-awareness
   const cs   = getComputedStyle(document.documentElement);
   const cBg  = cs.getPropertyValue('--msgBg').trim()    || '#070d1a';
   const cBdr = cs.getPropertyValue('--border').trim()   || '#0f1f35';
   const cDim = cs.getPropertyValue('--dimText').trim()  || '#475569';
-  const cTxt = cs.getPropertyValue('--bodyText').trim() || '#cbd5e1';
 
   let paths = '';
   series.forEach((s, i) => {
     if (!s.values.length) return;
     const col = GRAPH_COLORS[i % GRAPH_COLORS.length];
     const pts = s.values.map(([t, v]) => `${xS(t).toFixed(1)},${yS(v).toFixed(1)}`).join(' ');
-    // Area fill
     const first = s.values[0], last = s.values[s.values.length - 1];
     const areaPts = `${xS(first[0]).toFixed(1)},${(MT + PH).toFixed(1)} `
                   + pts
                   + ` ${xS(last[0]).toFixed(1)},${(MT + PH).toFixed(1)}`;
     paths += `<polygon points="${areaPts}" fill="${col}" opacity="0.08"/>`;
     paths += `<polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>`;
-    // Latest value dot
     const lv = s.values[s.values.length - 1];
     paths += `<circle cx="${xS(lv[0]).toFixed(1)}" cy="${yS(lv[1]).toFixed(1)}" r="3" fill="${col}"/>`;
   });
 
-  // Grid lines + y-axis labels
   let grid = '';
   yTicks.forEach(v => {
     const y = yS(v).toFixed(1);
@@ -2381,17 +2424,15 @@ function renderGraphBlock(payload, container) {
           + `font-size="9" font-family="IBM Plex Mono,monospace" fill="${cDim}">${fmt(v)}</text>`;
   });
 
-  // X-axis labels
   let xAxis = '';
   xLabels.forEach(({ x, text }) => {
     xAxis += `<text x="${x.toFixed(1)}" y="${(MT + PH + 14).toFixed(1)}" text-anchor="middle" `
            + `font-size="9" font-family="IBM Plex Mono,monospace" fill="${cDim}">${text}</text>`;
   });
 
-  // Clip path so lines don't overflow
   const svgId = 'g' + Math.random().toString(36).slice(2, 8);
   const svg = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" `
-            + `style="width:100%;height:auto;display:block;max-height:180px">`
+            + `style="width:100%;height:auto;display:block;max-height:190px">`
             + `<defs><clipPath id="${svgId}"><rect x="${ML}" y="${MT}" width="${PW}" height="${PH}"/></clipPath></defs>`
             + grid
             + `<g clip-path="url(#${svgId})">${paths}</g>`
@@ -2400,22 +2441,24 @@ function renderGraphBlock(payload, container) {
             + `<line x1="${ML}" y1="${MT + PH}" x2="${ML + PW}" y2="${MT + PH}" stroke="${cDim}" stroke-width="1"/>`
             + `</svg>`;
 
-  // Legend — capped to same 8 series drawn in chart, labels truncated to fit
+  // ── Legend — vertical list on the right ──────────────────────────────────
   const legend = series.slice(0, 8).map((s, i) => {
     const col      = GRAPH_COLORS[i % GRAPH_COLORS.length];
     const lastVal  = s.values.length ? fmt(s.values[s.values.length - 1][1]) : '—';
-    const shortLbl = truncLabel(s.label, 36);
+    const shortLbl = truncLabel(s.label, 22);
     return `<span class="graph-legend-item" title="${esc(s.label)}">`
          + `<span class="graph-legend-dot" style="background:${col}"></span>`
-         + `<span style="font-family:'IBM Plex Mono',monospace">${esc(shortLbl)}</span>`
-         + ` <span style="color:${col};font-weight:700">${lastVal}</span>`
+         + `<span class="graph-legend-label">${esc(shortLbl)}</span>`
+         + `<span class="graph-legend-val" style="color:${col}">${lastVal}</span>`
          + `</span>`;
   }).join('');
 
   container.innerHTML =
       `<div class="graph-title">${esc(title)}</div>`
+    + `<div class="graph-body">`
     + `<div class="graph-svg-wrap">${svg}</div>`
-    + `<div class="graph-legend">${legend}</div>`;
+    + `<div class="graph-legend">${legend}</div>`
+    + `</div>`;
 }
 
 function appendAi(text, tools, iters, elapsed, statusUpdates, isClarification, skipSynth){
@@ -2553,7 +2596,8 @@ async function sendMessage(override){
         decode_secrets: decodeSecrets, 
         history: [],
         max_new_tokens: parseInt(document.getElementById('chat-max-tokens-slider')?.value||'0'),
-        skip_synthesise: skipSynth
+        skip_synthesise: skipSynth,
+        timezone: USER_TIMEZONE
       }),
     });
 
@@ -2653,8 +2697,132 @@ inpEl.addEventListener('keydown', e=>{
   if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); }
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// METRICS POLLING
+// ── Health Check Report ───────────────────────────────────────────────────
+(function(){
+  const btn      = document.getElementById('healthreport-btn');
+  const statusEl = document.getElementById('healthreport-status');
+  const progress = document.getElementById('healthreport-progress');
+  const stepEl   = document.getElementById('healthreport-step');
+  const barEl    = document.getElementById('healthreport-bar');
+
+  if (!btn) return;
+
+  const STEPS = [
+    [10,  'Checking nodes and control plane…'],
+    [22,  'Analysing resource capacity…'],
+    [36,  'Inspecting storage health…'],
+    [50,  'Scanning workload status…'],
+    [63,  'Checking networking and DNS…'],
+    [76,  'Auditing certificates and RBAC…'],
+    [88,  'Collecting recent diagnostics…'],
+    [95,  'Compiling report…'],
+  ];
+
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    statusEl.style.color = 'var(--accent)';
+    statusEl.textContent = '⏳ Running health checks across the cluster…';
+    progress.style.display = 'block';
+    barEl.style.width = '5%';
+    stepEl.textContent = 'Connecting to cluster…';
+
+    // Animate progress steps while waiting
+    let stepIdx = 0;
+    const stepTimer = setInterval(() => {
+      if (stepIdx < STEPS.length) {
+        const [pct, label] = STEPS[stepIdx++];
+        barEl.style.width = pct + '%';
+        stepEl.textContent = label;
+      }
+    }, 3500);
+
+    try {
+      const res = await fetch('/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          q: 'generate_healthcheck_report',
+          skip_synthesise: true
+        })
+      });
+
+      clearInterval(stepTimer);
+      barEl.style.width = '100%';
+      stepEl.textContent = 'Report complete. Preparing PDF…';
+
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        throw new Error(e.detail || 'HTTP ' + res.status);
+      }
+
+      const data = await res.json();
+      const reportText = data.response || data.answer || '';
+
+      if (!reportText || reportText.startsWith('[ERROR]')) {
+        throw new Error(reportText || 'No report content returned.');
+      }
+
+      // ── Build a styled print-ready HTML page and trigger print-to-PDF ──
+      const now = new Date().toLocaleString();
+      const htmlContent = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"/>
+<title>ECS Cluster Health Report — ${now}</title>
+<style>
+  @page { margin: 18mm 16mm; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 12px; color: #1e293b; line-height: 1.65; }
+  h1 { font-size: 20px; color: #0369a1; border-bottom: 2px solid #0369a1; padding-bottom: 6px; margin-bottom: 4px; }
+  h2 { font-size: 14px; color: #075985; border-bottom: 1px solid #bae6fd; padding-bottom: 3px; margin: 20px 0 8px; page-break-after: avoid; }
+  h3 { font-size: 12px; color: #0c4a6e; margin: 12px 0 4px; }
+  p  { margin: 4px 0 8px; }
+  pre, code { font-family: 'Consolas', 'Courier New', monospace; font-size: 11px; }
+  pre { background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 4px; padding: 8px 10px; overflow-wrap: break-word; white-space: pre-wrap; margin: 6px 0 10px; }
+  code { background: #f0f9ff; border: 1px solid #e0f2fe; border-radius: 3px; padding: 1px 4px; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0 14px; font-size: 11px; page-break-inside: avoid; }
+  th { background: #0369a1; color: #fff; padding: 5px 8px; text-align: left; font-weight: 600; }
+  td { padding: 4px 8px; border: 1px solid #e2e8f0; vertical-align: top; }
+  tr:nth-child(even) td { background: #f0f9ff; }
+  .report-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 20px; }
+  .report-meta { font-size: 10px; color: #64748b; }
+  @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+</style>
+</head><body>
+<div class="report-header">
+  <div>
+    <h1>ECS AI Ops — Cluster Health Report</h1>
+    <div class="report-meta">Generated: ${now} &nbsp;·&nbsp; Timezone: ${USER_TIMEZONE}</div>
+  </div>
+</div>
+${marked.parse(reportText)}
+</body></html>`;
+
+      const printWin = window.open('', '_blank', 'width=900,height=700');
+      if (!printWin) {
+        throw new Error('Pop-up blocked. Please allow pop-ups and try again.');
+      }
+      printWin.document.write(htmlContent);
+      printWin.document.close();
+      printWin.focus();
+      // Slight delay so content renders before print dialog
+      setTimeout(() => {
+        printWin.print();
+        printWin.onafterprint = () => printWin.close();
+      }, 600);
+
+      statusEl.style.color = '#22c55e';
+      statusEl.textContent = '✓ Report ready — use "Save as PDF" in the print dialog.';
+      setTimeout(() => { progress.style.display = 'none'; barEl.style.width = '0%'; }, 2000);
+
+    } catch (err) {
+      clearInterval(stepTimer);
+      progress.style.display = 'none';
+      barEl.style.width = '0%';
+      statusEl.style.color = '#ef4444';
+      statusEl.textContent = '✗ ' + err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
 // ═══════════════════════════════════════════════════════════════════════════
 const sparkPts  = [];
 const SW=264, SH=28;
@@ -2836,14 +3004,4 @@ window.glCopy = function(btn, text) {
   });
 }
 
-// ═════════════════════════════════════════════════════════
-})();
-</script>
-<div id="tooltip-skip-synthesis" class="section-tooltip">
-  <div style="font-weight: 400; margin-bottom: 4px; color: #fff;">Skip Synthesis</div>
-  <div style="font-size: 12px; color: #cbd5e1; line-height: 1.4;">
-    Bypass the AI’s final reasoning step to deliver raw data straight from the cluster tools. This is much faster and avoids the LLM summarizing or omitting details. However, the output may not directly answer the question.
-  </div>
-</div>
-</body>
-</html>
+// ═══════════════════════════�
