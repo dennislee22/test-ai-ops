@@ -462,26 +462,17 @@ def build_agent():
         if tcs: updates.append(f"🔧 {', '.join(tc['name'] for tc in tcs)}")
         return {"messages": [response], "tool_calls_made": state.get("tool_calls_made", []), "iteration": itr, "status_updates": updates}
 
+
     def tool_node(state: AgentState):
-        last = state["messages"][-1]
-        results = []
-        tools_called = list(state.get("tool_calls_made", []))
-        updates = list(state.get("status_updates", []))
-
-        user_q = next(
-            (m.content for m in state["messages"] if isinstance(m, HumanMessage)),
-            ""
-        )
-
-        tcs = getattr(last, "tool_calls", []) or []
-        direct_answer = None
+        last, results, tools_called, updates = state["messages"][-1], [], list(state.get("tool_calls_made", [])), list(state.get("status_updates", []))
+        user_q = next((m.content for m in state["messages"] if isinstance(m, HumanMessage)), "")
+        tcs, direct_answer = getattr(last, "tool_calls", []) or [], None
 
         forced_ns = _extract_namespace(user_q)
         forced_skip = state.get("skip_synthesise", False)
 
         for tc in tcs:
-            name = tc["name"]
-            args = dict(tc.get("args", {}) or {})
+            name, args = tc["name"], dict(tc.get("args", {}) or {})
 
             bad_ns = ["cluster", "across the cluster", "entire cluster", "any", "none"]
             safe_ns = str(args.get("namespace") or "").lower()
@@ -491,68 +482,36 @@ def build_agent():
 
             if "namespace" in args and forced_ns != "all":
                 args["namespace"] = forced_ns
-                config.logger.info(
-                    f"[REQ:{state.get('req_id', '')}] Overriding LLM namespace -> forced to '{forced_ns}'"
-                )
+                config.logger.info(f"[REQ:{state.get('req_id', '')}] Overriding LLM namespace -> forced to '{forced_ns}'")
 
             if name == "get_secret_list":
                 args["decode"] = _decode_secrets_ctx.get()
 
             tools_called.append(name)
 
-            if name == "kubectl_exec" and "command" in args:
-                updates.append(f"$ {args['command']}")
-            else:
-                updates.append(f"⚙️ {name}")
+            updates.append(
+                f"$ {args['command']}"
+                if name == "kubectl_exec" and "command" in args
+                else f"⚙️ {name}"
+            )
 
             out = _call_tool(name, args, all_tools)
-            out_str = str(out)
+            _out_str = str(out)
 
-            _log_ag.info(
-                f"[REQ:{state.get('req_id', '')}] [tool_node] {name} returned {len(out_str)} chars:\n{out_str}"
-            )
+            _log_ag.info(f"[REQ:{state.get('req_id', '')}] [tool_node] {name} returned {len(_out_str)} chars:\n{_out_str}")
 
-            results.append(
-                ToolMessage(
-                    content=out,
-                    tool_call_id=tc["id"],
-                    name=name
-                )
-            )
+            results.append(ToolMessage(content=out, tool_call_id=tc["id"], name=name))
 
             if name == "rag_search" and isinstance(out, str) and out.startswith("KB_EMPTY:"):
                 updates.append("⚠️ Knowledge base is empty")
-                direct_answer = (
-                    "⚠️ " + _MSG_NO_INGEST +
-                    "\n\nUse the ⚙ Settings → RAG Documents panel to upload."
-                )
+                direct_answer = "⚠️ " + _MSG_NO_INGEST + "\n\nUse the ⚙ Settings → RAG Documents panel to upload."
 
             elif forced_skip:
                 pass
 
-            elif len(tcs) == 1 and should_bypass_llm(
-                name, args, out, user_q, req_id=state.get("req_id", "")
-            ):
+            elif len(tcs) == 1 and should_bypass_llm(name, args, out, user_q, req_id=state.get("req_id", "")):
                 updates.append("⚡ Direct output (LLM synthesis skipped)")
                 direct_answer = out
-
-        if forced_skip and direct_answer is None and results:
-            updates.append("⚡ Skip Synthesis toggled: LLM synthesis bypassed")
-
-            config.logger.info(
-                f"[REQ:{state.get('req_id', '')}] [tool_node] Skip Synthesise is ON for query: {user_q!r}. Overriding normal sequence..."
-            )
-
-            parts = []
-            for r in results:
-                content_str = str(r.content).strip()
-
-                if "\n|" in content_str or content_str.startswith("|") or "|---" in content_str:
-                    parts.append(
-                        f"**Raw output from tool `{r.name}`**:\n\n{content_str}"
-                    )
-
-            direct_answer = "\n\n".join(parts)
 
         return {
             "messages": results,
@@ -561,19 +520,152 @@ def build_agent():
             "status_updates": updates,
             "direct_answer": direct_answer,
         }
-    
+
+
+    def llm_node(state: AgentState):
+        itr, msgs, updates = state.get("iteration", 0) + 1, state["messages"], list(state.get("status_updates", []))
+        req_id = state.get("req_id", "")
+
+        if state.get("direct_answer"):
+            return {
+                "messages": [AIMessage(content=state["direct_answer"])],
+                "tool_calls_made": state.get("tool_calls_made", []),
+                "iteration": itr,
+                "status_updates": updates,
+                "direct_answer": None,
+            }
+
+        if state.get("skip_synthesise", False):
+            tool_msgs = [m for m in msgs if isinstance(m, ToolMessage)]
+            if tool_msgs:
+                parts = []
+                for r in tool_msgs:
+                    content_str = str(r.content).strip()
+
+                    if "\n|" in content_str or content_str.startswith("|") or "|---" in content_str or "```" in content_str:
+                        parts.append(f"**Raw output from tool `{r.name}`**:\n\n{content_str}")
+                    else:
+                        parts.append(f"**Raw output from tool `{r.name}`**:\n\n```text\n{content_str}\n```")
+
+                fallback_answer = "\n\n".join(parts)
+                updates.append("⚡ Skip Synthesise toggled: LLM synthesis bypassed")
+
+                config.logger.info(f"[REQ:{req_id}] [llm_node] Skip Synthesise is ON. Bypassing LLM...")
+
+                return {
+                    "messages": [AIMessage(content=fallback_answer)],
+                    "tool_calls_made": state.get("tool_calls_made", []),
+                    "iteration": itr,
+                    "status_updates": updates,
+                    "direct_answer": None,
+                }
+
+        has_tool_results = any(isinstance(m, ToolMessage) for m in msgs)
+        invoke_msgs = _prepare_messages_for_hf(msgs, req_id=req_id)
+        chat_msgs = [{"role": "system", "content": prompt}] + _msgs_to_qwen3(invoke_msgs, True)
+
+        _max_new = max(512, config.MAX_NEW_TOKENS) if has_tool_results else max(1024, config.MAX_NEW_TOKENS // 2)
+
+        if tokenizer is None:
+            format_rules = (
+                "\n\nTo call a tool, you MUST use exactly this JSON format. "
+                "Do not write Python code. Use this syntax:\n"
+                "<tool_call>\n"
+                "{\"name\": \"tool_name\", \"arguments\": {\"arg_name\": \"value\"}}\n"
+                "</tool_call>"
+            )
+
+            tools_json = json.dumps(tool_schemas, indent=2)
+            tool_system = f"{prompt}\n\nAvailable tools:\n{tools_json}{format_rules}"
+            gguf_msgs = [{"role": "system", "content": tool_system}] + chat_msgs[1:]
+
+            resp = model.create_chat_completion(
+                messages=gguf_msgs,
+                max_tokens=_max_new,
+                temperature=0.1,
+                top_p=0.8,
+                top_k=20,
+                repeat_penalty=1.05
+            )
+
+            raw_text = resp["choices"][0]["message"].get("content", "") or ""
+
+        else:
+            import torch
+
+            kw = {"add_generation_prompt": True, "tools": tool_schemas}
+            if _is_qwen3:
+                kw["enable_thinking"] = False
+
+            encoded = tokenizer.apply_chat_template(chat_msgs, tokenize=True, return_tensors="pt", **kw)
+
+            input_ids = (
+                encoded["input_ids"]
+                if hasattr(encoded, "__getitem__") and not hasattr(encoded, "shape")
+                else encoded
+            ).to(model.device)
+
+            with torch.no_grad():
+                output_ids = model.generate(
+                    input_ids,
+                    max_new_tokens=_max_new,
+                    do_sample=True,
+                    temperature=0.1,
+                    top_p=0.8,
+                    top_k=20,
+                    repetition_penalty=1.05,
+                    pad_token_id=tokenizer.eos_token_id
+                )
+
+            raw_text = tokenizer.decode(output_ids[0][input_ids.shape[-1]:], skip_special_tokens=True)
+
+        _log_ag.info(f"[REQ:{req_id}] [llm_node] RAW LLM OUTPUT ({len(raw_text)} chars):\n{raw_text!r}")
+
+        tcs = _parse_tool_calls(raw_text)
+        content = re.sub(r'<tool_call>[\s\S]*?</tool_call>', '', raw_text).strip()
+
+        _ns_prepend = ""
+        for m in invoke_msgs:
+            if isinstance(m, HumanMessage):
+                _m = re.match(r'^§NS_PREFIX§(.*?)§END_NS§\n\n', m.content, re.DOTALL)
+                if _m:
+                    _ns_prepend = _m.group(1).strip() + "\n\n"
+                break
+
+        if _ns_prepend:
+            content = _ns_prepend + content
+
+        response = AIMessage(content=content, tool_calls=tcs)
+
+        if tcs:
+            updates.append(f"🔧 {', '.join(tc['name'] for tc in tcs)}")
+
+        return {
+            "messages": [response],
+            "tool_calls_made": state.get("tool_calls_made", []),
+            "iteration": itr,
+            "status_updates": updates,
+        }
+
+
     def router(state: AgentState) -> Literal["tools", "end"]:
-        if state.get("iteration", 0) >= 6: return "end"
-        tcs = getattr(state["messages"][-1], "tool_calls", None)
-        if not tcs: return "end"
-        already, pending = state.get("tool_calls_made", []), [tc["name"] for tc in tcs]
-        
-        # Check config before terminating for repeated tool calls
-        disable_loop_protection = getattr(config, "DISABLE_LOOP_PROTECTION", False)
-        if not disable_loop_protection and already and all(name in already for name in pending): 
+        if state.get("iteration", 0) >= 6:
             return "end"
-            
+
+        tcs = getattr(state["messages"][-1], "tool_calls", None)
+        if not tcs:
+            return "end"
+
+        already = state.get("tool_calls_made", [])
+        pending = [tc["name"] for tc in tcs]
+
+        disable_loop_protection = getattr(config, "DISABLE_LOOP_PROTECTION", False)
+
+        if not disable_loop_protection and already and all(name in already for name in pending):
+            return "end"
+
         return "tools"
+
 
     g = StateGraph(AgentState)
     g.add_node("llm", llm_node)
