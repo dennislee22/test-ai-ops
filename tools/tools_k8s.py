@@ -2177,6 +2177,9 @@ def find_resource(name_substring: str, resource_type: str = None, namespace: str
         if name_substring and name_substring.strip().lower() in _INTENT_WORDS:
             name_substring = ""
 
+        if namespace and namespace.strip().lower() in ("all", "any", ""):
+            namespace = None
+
         _VALID_TYPES = {
             "pod", "svc", "service", "ingress", "pvc",
             "deployment", "deploy",
