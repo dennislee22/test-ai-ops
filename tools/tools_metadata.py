@@ -269,19 +269,34 @@ K8S_TOOL_METADATA: dict = {
             "Use this for questions like: "
             "'which node is tainted', 'show node taints', 'are any nodes tainted', "
             "'what taints are on the cluster', 'show me the NoSchedule taints', "
-            "'which nodes have gpu taint', 'what toleration do I need for node X'. "
+            "'which nodes have gpu taint', 'list nodes tainted with cde', "
+            "'which nodes have a dedicated taint', 'what toleration do I need for node X'. "
             "Do NOT use for cordon or unschedulable questions — use get_node_info for those. "
-            "Pass tainted_only=True when the user asks which nodes ARE tainted. "
-            "Pass search to filter by NODE NAME (partial match), not taint content. "
-            "IMPORTANT: Do NOT pass intent words like 'tainted', 'any', 'all' as search — "
-            "they are stripped automatically. Use tainted_only=True instead."
+            "PARAMETER ROUTING — choose carefully: "
+            "search = partial NODE NAME filter (e.g. 'ecs-w-01'). "
+            "taint_search = partial TAINT KEY or VALUE filter (e.g. 'cde', 'gpu', 'dedicated'). "
+            "tainted_only = True to show only nodes that have at least one taint. "
+            "When the user asks for nodes tainted WITH a specific word like 'cde' or 'gpu', "
+            "always use taint_search — NOT search."
         ),
         "parameters":  {
-            "search":       {**_P_SEARCH, "description": "Optional node name filter (partial match, e.g., 'ecs-m-01'). Do NOT pass taint-content words or intent words like 'tainted', 'gpu', 'any' — use tainted_only=True for taint presence queries instead."},
+            "search":       {**_P_SEARCH, "description": "Optional NODE NAME filter (partial match, e.g. 'ecs-m-01'). Do NOT use for taint content — use taint_search instead."},
+            "taint_search": {
+                "type":        "string",
+                "default":     None,
+                "description": (
+                    "Optional TAINT KEY or VALUE content filter (partial, case-insensitive). "
+                    "Use when the user asks for nodes tainted WITH a specific key or value: "
+                    "'tainted with cde' → taint_search='cde', "
+                    "'nodes with gpu taint' → taint_search='gpu', "
+                    "'dedicated taint' → taint_search='dedicated'. "
+                    "This filters taint rows, not node names."
+                ),
+            },
             "tainted_only": {
                 "type":        "boolean",
                 "default":     False,
-                "description": "When True, only show nodes that have at least one taint. Set this to True for queries like 'which node is tainted', 'show tainted nodes', 'are any nodes tainted'.",
+                "description": "When True, only show nodes that have at least one taint. Set True for: 'which node is tainted', 'show tainted nodes', 'are any nodes tainted'.",
             },
         },
     },
