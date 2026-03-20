@@ -906,15 +906,15 @@ button{cursor:pointer;font-family:inherit}
      -H 'Content-Type: application/json' \
      -d "{\"kubeconfig\": \"$(cat ~/.kube/config | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')\"}"</code></pre>
 
-        <p>Adjust LLM input/output limits at runtime via &#9881; Settings &rarr; LLM Input/Output, or via API:</p>
+        <p>Adjust LLM input/output limits at runtime via &#9881; Settings &rarr; Chatbot Settings:</p>
         <table>
           <tr><th>Setting</th><th>Controls</th><th>Default</th></tr>
           <tr><td><code>KUBECTL_MAX_CHARS</code></td><td>Characters of cluster data the LLM <strong>reads</strong></td><td>20000</td></tr>
           <tr><td><code>MAX_NEW_TOKENS</code></td><td>Tokens the LLM <strong>writes</strong> (~4 chars/token)</td><td>4096</td></tr>
         </table>
-        <pre><code>curl -s -X POST http://localhost:9000/api/config \
-     -H 'Content-Type: application/json' \
-     -d '{"kubectl_max_chars": 50000, "max_new_tokens": 6144}'</code></pre>
+
+        <h3>Skip Synthesis</h3>
+        <p>The <strong>Skip Synthesis</strong> toggle (visible in the chat input bar) bypasses the LLM's final answer generation and streams the raw tool output directly to the chat. This is useful when the tool output is self-explanatory (e.g. a table or health scorecard) and you want the fastest possible response without waiting for the LLM to rephrase it. Responses with Skip Synthesis on are typically 2–5&times; faster.</p>
 
         <!-- ── Knowledge Base (RAG) ────────────────────────────────────── -->
         <h2>Knowledge Base (RAG)</h2>
@@ -939,7 +939,7 @@ python3 app.py --ingest ./docs --force   # force overwrite all</code></pre>
         <table>
           <tr><th>Hardware</th><th>Model</th><th>Backend</th><th>Response time</th></tr>
           <tr><td><strong>GPU</strong> (recommended)</td><td><a href="https://huggingface.co/Qwen/Qwen3-8B" target="_blank">Qwen3-8B</a></td><td>HuggingFace Transformers (bfloat16)</td><td>10–30 s</td></tr>
-          <tr><td><strong>CPU only</strong></td><td><a href="https://huggingface.co/Qwen/Qwen3-8B-GGUF" target="_blank">Qwen3-8B-GGUF Q4_K_M</a></td><td>llama-cpp-python (quantized)</td><td>Several minutes</td></tr>
+          <tr><td><strong>CPU only</strong></td><td><a href="https://huggingface.co/Qwen/Qwen3-8B-GGUF" target="_blank">Qwen3-8B-GGUF Q4_K_M</a></td><td>llama-cpp-python (quantized)</td><td>Several minutes — <strong>baremetal server only</strong></td></tr>
         </table>
         <p>Set <code>LLM_MODEL</code> in the <code>env</code> file. If the path ends with <code>.gguf</code> the app automatically switches to the GGUF backend — no other config change needed.</p>
         <pre><code># GPU
@@ -967,20 +967,23 @@ NUM_GPU=0</code></pre>
 
         <table>
           <tr><th>Method</th><th>Path</th><th>Description</th></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/info</code></td><td>Model, GPU, cluster status</td></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/pods?ns=X</code></td><td>Pod health summary</td></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/nodes</code></td><td>Node health + GPU info</td></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/events?warn=1</code></td><td>Cluster events</td></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/tools</code></td><td>List all registered tools</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/health</code></td><td>Model, GPU, cluster status</td></tr>
           <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/system</code></td><td>Live CPU / RAM / GPU metrics</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/tools</code></td><td>List all registered tools</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/rag/stats</code></td><td>RAG vector store statistics</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/rag/files</code></td><td>List ingested files</td></tr>
           <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/rag/query</code></td><td>RAG-only query (Knowledge Bot)</td></tr>
-          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/ask</code></td><td>Ask the AI (blocking)</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/config</code></td><td>Read current runtime config</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/prompt</code></td><td>Read current system prompt</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/ask</code></td><td>Ask the AI (blocking JSON response)</td></tr>
           <tr><td><span class="badge badge-post">POST</span></td><td><code>/chat/stream</code></td><td>Ask the AI (SSE streaming)</td></tr>
-          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/tool</code></td><td>Call a tool directly</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/tool</code></td><td>Call a tool directly by name</td></tr>
           <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/kubeconfig</code></td><td>Apply a new kubeconfig</td></tr>
           <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/ingest/upload</code></td><td>Upload docs to LanceDB</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/kb/ask</code></td><td>Knowledge Bot query (blocking)</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/kb/stream</code></td><td>Knowledge Bot query (SSE streaming)</td></tr>
+          <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/config</code></td><td>Update runtime config (max chars, tokens, timeout)</td></tr>
           <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/reload-prompt</code></td><td>Hot-reload system_prompt.txt</td></tr>
-          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/prompt</code></td><td>Read current system prompt</td></tr>
           <tr><td><span class="badge badge-put">PUT</span></td><td><code>/api/prompt</code></td><td>Update system prompt</td></tr>
         </table>
 
@@ -1059,10 +1062,17 @@ NUM_GPU=0</code></pre>
 
         <h3>Pods &amp; Health</h3>
         <span class="gl-tag gl-tag-pod">POD</span><span class="gl-tag gl-tag-cluster">CLUSTER</span>
-        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-pod"></div><div class="gl-ex-body"><span class="gl-ex-text">list all pods</span><button class="gl-copy-btn" onclick="glCopy(this,'list all pods')">copy</button></div></div>
-        <div class="gl-ex-note">Lists all pods across all namespaces with their phase and ready status.</div>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-pod"></div><div class="gl-ex-body"><span class="gl-ex-text">list all pods in cdp namespace</span><button class="gl-copy-btn" onclick="glCopy(this,'list all pods in cdp namespace')">copy</button></div></div>
+        <div class="gl-ex-note">Lists all pods in the cdp namespace with their phase and ready status.</div>
         <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-pod"></div><div class="gl-ex-body"><span class="gl-ex-text">is the vault pod doing ok?</span><button class="gl-copy-btn" onclick="glCopy(this,'is the vault pod doing ok?')">copy</button></div></div>
         <div class="gl-ex-note">Checks pod phase, readiness, and recent restart history for any pod named vault.</div>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-pod"></div><div class="gl-ex-body"><span class="gl-ex-text">show all warning events in cdp namespace</span><button class="gl-copy-btn" onclick="glCopy(this,'show all warning events in cdp namespace')">copy</button></div></div>
+        <div class="gl-ex-note">Fetches Warning-type Kubernetes events scoped to the cdp namespace, sorted by most recent.</div>
+
+        <h3>Finding Resources</h3>
+        <span class="gl-tag gl-tag-cluster">CLUSTER</span>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-cluster"></div><div class="gl-ex-body"><span class="gl-ex-text">list any resource named with vault in its name</span><button class="gl-copy-btn" onclick="glCopy(this,'list any resource named with vault in its name')">copy</button></div></div>
+        <div class="gl-ex-note">Searches across pods, deployments, services, statefulsets, ingresses, PVCs, configmaps, and secrets cluster-wide for anything named vault.</div>
 
         <h3>Namespaces</h3>
         <span class="gl-tag gl-tag-cluster">CLUSTER</span>
@@ -1070,6 +1080,13 @@ NUM_GPU=0</code></pre>
         <div class="gl-ex-note">Counts pods per namespace and ranks them.</div>
         <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-cluster"></div><div class="gl-ex-body"><span class="gl-ex-text">list all namespaces with total pods</span><button class="gl-copy-btn" onclick="glCopy(this,'list all namespaces with total pods')">copy</button></div></div>
         <div class="gl-ex-note">Returns every namespace with its pod count.</div>
+
+        <h3>Nodes &amp; Taints</h3>
+        <span class="gl-tag gl-tag-cluster">CLUSTER</span>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-cluster"></div><div class="gl-ex-body"><span class="gl-ex-text">list nodes tainted with "control"</span><button class="gl-copy-btn" onclick="glCopy(this,'list nodes tainted with &quot;control&quot;')">copy</button></div></div>
+        <div class="gl-ex-note">Filters node taints by key/value containing "control" — useful for finding control-plane dedicated nodes.</div>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-cluster"></div><div class="gl-ex-body"><span class="gl-ex-text">which node has a GPU available and in use?</span><button class="gl-copy-btn" onclick="glCopy(this,'which node has a GPU available and in use?')">copy</button></div></div>
+        <div class="gl-ex-note">Inspects GPU allocatable capacity from the device plugin and shows which pod is currently consuming it.</div>
 
         <h3>Networking &amp; Ingress</h3>
         <span class="gl-tag gl-tag-cluster">CLUSTER</span>
@@ -1082,24 +1099,30 @@ NUM_GPU=0</code></pre>
         <span class="gl-tag gl-tag-storage">STORAGE</span>
         <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-storage"></div><div class="gl-ex-body"><span class="gl-ex-text">what storage type are pods in cdp namespace using?</span><button class="gl-copy-btn" onclick="glCopy(this,'what storage type are pods in cdp namespace using?')">copy</button></div></div>
         <div class="gl-ex-note">Lists PVCs bound to pods in the cdp namespace, including storage class and access mode.</div>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-storage"></div><div class="gl-ex-body"><span class="gl-ex-text">which storage classes are available in the cluster?</span><button class="gl-copy-btn" onclick="glCopy(this,'which storage classes are available in the cluster?')">copy</button></div></div>
+        <div class="gl-ex-note">Lists all StorageClasses with their provisioner and whether they are the default class.</div>
 
         <h3>Secrets &amp; Certificates</h3>
         <span class="gl-tag gl-tag-secret">SECRET</span>
         <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-secret"></div><div class="gl-ex-body"><span class="gl-ex-text">what SSL certificates does the cdp namespace have?</span><button class="gl-copy-btn" onclick="glCopy(this,'what SSL certificates does the cdp namespace have?')">copy</button></div></div>
         <div class="gl-ex-note">Lists TLS/cert secrets in the cdp namespace. Enable <strong>Show Secret Values</strong> in Settings to decode.</div>
-        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-secret"></div><div class="gl-ex-body"><span class="gl-ex-text">show me the cdp-private-installer-db-root-cert certificate in cdp namespace</span><button class="gl-copy-btn" onclick="glCopy(this,'show me the cdp-private-installer-db-root-cert certificate in cdp namespace')">copy</button></div></div>
-        <div class="gl-ex-note">Shows the raw certificate value from the secret. Enable <strong>Show Secret Values</strong> in Settings to see the decoded content.</div>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-secret"></div><div class="gl-ex-body"><span class="gl-ex-text">Decode cdp-private-installer-db-root-cert certificate in cdp ns</span><button class="gl-copy-btn" onclick="glCopy(this,'Decode cdp-private-installer-db-root-cert certificate in cdp ns')">copy</button></div></div>
+        <div class="gl-ex-note">Decodes and shows the full certificate value. Requires <strong>Show Secret Values</strong> to be enabled in Settings → Security.</div>
         <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-secret"></div><div class="gl-ex-body"><span class="gl-ex-text">what is the username and password for the SQL user for db-0 in cmlwb1 namespace?</span><button class="gl-copy-btn" onclick="glCopy(this,'what is the username and password for the SQL user for db-0 in cmlwb1 namespace?')">copy</button></div></div>
         <div class="gl-ex-note">Locates credentials from secrets in cmlwb1. Requires <strong>Show Secret Values</strong> to be enabled.</div>
 
         <h3>Resources &amp; Compute</h3>
         <span class="gl-tag gl-tag-resource">RESOURCE</span>
         <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-cluster"></div><div class="gl-ex-body"><span class="gl-ex-text">list all statefulset in cdp namespace</span><button class="gl-copy-btn" onclick="glCopy(this,'list all statefulset in cdp namespace')">copy</button></div></div>
+        <div class="gl-ex-note">Lists StatefulSets in cdp with desired vs ready replica counts.</div>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-cluster"></div><div class="gl-ex-body"><span class="gl-ex-text">list all replicaset in cdp-keda namespace</span><button class="gl-copy-btn" onclick="glCopy(this,'list all replicaset in cdp-keda namespace')">copy</button></div></div>
+        <div class="gl-ex-note">Lists ReplicaSets in cdp-keda with replica health status.</div>
         <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-resource"></div><div class="gl-ex-body"><span class="gl-ex-text">what's the cpu and ram request for cdp-embedded-db pod in cdp namespace?</span><button class="gl-copy-btn" onclick="glCopy(this,'what\'s the cpu and ram request for cdp-embedded-db pod in cdp namespace?')">copy</button></div></div>
+        <div class="gl-ex-note">Shows CPU and memory requests and limits per container in the pod.</div>
+        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-resource"></div><div class="gl-ex-body"><span class="gl-ex-text">I want to create a pod with 2 vCPU &amp; 8 GB memory, does the cluster have enough available capacity?</span><button class="gl-copy-btn" onclick="glCopy(this,'I want to create a pod with 2 vCPU & 8 GB memory, does the cluster have enough available capacity?')">copy</button></div></div>
+        <div class="gl-ex-note">Checks allocatable CPU and memory per node against what's already requested, then tells you which node(s) can fit the pod.</div>
         <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-resource"></div><div class="gl-ex-body"><span class="gl-ex-text">calculate CPU requests for all pods in longhorn-system namespace</span><button class="gl-copy-btn" onclick="glCopy(this,'calculate CPU requests for all pods in longhorn-system namespace')">copy</button></div></div>
         <div class="gl-ex-note">Aggregates CPU and memory requests/limits for every pod in the namespace in one call.</div>
-        <div class="gl-ex-row"><div class="gl-ex-bar gl-bar-resource"></div><div class="gl-ex-body"><span class="gl-ex-text">which node has a GPU available and in use?</span><button class="gl-copy-btn" onclick="glCopy(this,'which node has a GPU available and in use?')">copy</button></div></div>
-        <div class="gl-ex-note">Inspects node labels and allocatable resources for GPU capacity and current allocation.</div>
 
         <h3>Database</h3>
         <span class="gl-tag gl-tag-db">DATABASE</span>
@@ -1120,9 +1143,9 @@ NUM_GPU=0</code></pre>
 
         <!-- Left vertical nav -->
         <nav class="stab-sidebar">
-          <button class="stab active" data-tab="tab-cluster"><span class="stab-icon">&#128279;</span>Kubeconfig</button>
+          <button class="stab active" data-tab="tab-cluster"><span class="stab-icon"><img src="/static/k8s-logo.svg" width="14" height="14" style="vertical-align:-2px;filter:brightness(0) saturate(100%) invert(60%) sepia(70%) saturate(400%) hue-rotate(170deg)"/></span>Kubeconfig</button>
           <button class="stab" data-tab="tab-kb"><span class="stab-icon">&#128196;</span>RAG Documents</button>
-          <button class="stab" data-tab="tab-output"><span class="stab-icon">&#127919;</span>Chatbot Settings</button>
+          <button class="stab" data-tab="tab-output"><span class="stab-icon"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px"><path d="M18 3a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-4.724l-4.762 2.857a1 1 0 0 1 -1.508 -.743l-.006 -.114v-2h-1a4 4 0 0 1 -3.995 -3.8l-.005 -.2v-8a4 4 0 0 1 4 -4zm-2.8 9.286a1 1 0 0 0 -1.414 .014a2.5 2.5 0 0 1 -3.572 0a1 1 0 0 0 -1.428 1.4a4.5 4.5 0 0 0 6.428 0a1 1 0 0 0 -.014 -1.414m-5.69 -4.286h-.01a1 1 0 1 0 0 2h.01a1 1 0 0 0 0 -2m5 0h-.01a1 1 0 0 0 0 2h.01a1 1 0 0 0 0 -2"></path></svg></span>Chatbot Settings</button>
           <button class="stab" data-tab="tab-security"><span class="stab-icon">&#128274;</span>Security</button>
           <button class="stab" data-tab="tab-healthreport"><span class="stab-icon">&#128203;</span>Health Report</button>
         </nav>
@@ -2057,23 +2080,23 @@ const EXAMPLES = [
   'What can you do?',
   'Is the Vault doing ok?',
   'show the last 10 lines of log for cdp-embedded-db-0',
-  'list all the nodes',
+  'list all pods in cdp namespace',
   'Any pod is currently not Running?',
   'What storage class is Vault using?',
   'How much capacity is available to be requested for each node?',
   'List all storage types (RWO/RWX) used by pods in cdp namespace',
   'Check all namespaces, which pvc is not bound?',
-  'List all nodes that have GPU and its specification',
-  'Where is grafana pod?',
-  'Which node has GPU?',
-  'List any resource with grafana in its name',
+  'List any resource named with vault in its name',
+  'list nodes tainted with "control"',
+  'Which node has a GPU available and in use?',
+  'Which storage classes are available in the cluster?',
+  'List all replicaset in cdp-keda namespace',
   'List all pv that consume more than 80\% of the allocated disk capacity',
   'What\'s the cpu and ram request for cdp-embedded-db pod in cdp namespace?',
-  'I want to create a pod with 800CPU & 12GB memory, does the cluster have enough available capacity? If yes, which node?',
-  'Which pod has used the least CPU in the past 3 days?',
-  'Show the top 3 pods with the highest CPU usage over the 3 hours',
-  'Show the top pod with the highest RAM usage for the past hour',
-  'Decode cdp-private-installer-db-root-cert in cdp ns',
+  'I want to create a pod with 2 vCPU & 8 GB memory, does the cluster have enough available capacity?',
+  'show all warning events in cdp namespace',
+  'Show the top 3 pods with the highest CPU usage over the last hour',
+  'Decode cdp-private-installer-db-root-cert certificate in cdp ns',
 ];
 const exBtns = document.getElementById('ex-btns');
 EXAMPLES.forEach(ex=>{
@@ -2741,7 +2764,7 @@ inpEl.addEventListener('keydown', e=>{
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          q: 'generate_healthcheck_report',
+          q: 'Call generate_healthcheck_report to produce the comprehensive cluster health check report. Do not call run_cluster_health.',
           skip_synthesise: true
         })
       });
@@ -2795,21 +2818,25 @@ inpEl.addEventListener('keydown', e=>{
 ${marked.parse(reportText)}
 </body></html>`;
 
-      const printWin = window.open('', '_blank', 'width=900,height=700');
-      if (!printWin) {
-        throw new Error('Pop-up blocked. Please allow pop-ups and try again.');
+      const printWin = window.open('', '_blank', 'width=960,height=750');
+      if (printWin) {
+        printWin.document.write(htmlContent);
+        printWin.document.close();
+        printWin.focus();
+        setTimeout(() => {
+          printWin.print();
+          printWin.onafterprint = () => printWin.close();
+        }, 600);
+        statusEl.style.color = '#22c55e';
+        statusEl.textContent = '✓ Report opened — use "Save as PDF" in the print dialog, or close to view only.';
+      } else {
+        // Pop-ups blocked — open as data URI in same tab as fallback
+        const blob = new Blob([htmlContent], { type: 'text/html' });
+        const url  = URL.createObjectURL(blob);
+        window.open(url, '_blank');
+        statusEl.style.color = '#22c55e';
+        statusEl.textContent = '✓ Report ready in new tab — use browser Print → Save as PDF.';
       }
-      printWin.document.write(htmlContent);
-      printWin.document.close();
-      printWin.focus();
-      // Slight delay so content renders before print dialog
-      setTimeout(() => {
-        printWin.print();
-        printWin.onafterprint = () => printWin.close();
-      }, 600);
-
-      statusEl.style.color = '#22c55e';
-      statusEl.textContent = '✓ Report ready — use "Save as PDF" in the print dialog.';
       setTimeout(() => { progress.style.display = 'none'; barEl.style.width = '0%'; }, 2000);
 
     } catch (err) {
