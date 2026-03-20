@@ -2102,7 +2102,7 @@ def get_events(namespace: str = "all", search: str | None = None, type: str = "A
                   if namespace == "all"
                   else _core.list_namespaced_event(namespace=namespace, field_selector=fs, limit=500).items)
         if not events:
-            return f"`No events in '{namespace}'.`"
+            return f"`No such events in '{namespace}'.`"
         s = search.lower() if search else None
         matching = [e for e in events
                     if not s or s in (e.message or "").lower()
