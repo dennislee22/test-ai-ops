@@ -476,10 +476,14 @@ def build_agent():
             name, args = tc["name"], dict(tc.get("args", {}) or {})
         for tc in tcs:
             name, args = tc["name"], dict(tc.get("args", {}) or {})
-            
-            # Catch LLM hallucinations before the interceptor runs
+
+            # 1. Catch LLM hallucinations before the interceptor runs
             bad_ns = ["cluster", "across the cluster", "entire cluster", "any", "none"]
-            if args.get("namespace", "").lower() in bad_ns:
+            
+            # Safely handle JSON nulls by converting to string or defaulting to empty
+            safe_ns = str(args.get("namespace") or "").lower()
+            
+            if safe_ns in bad_ns:
                 args["namespace"] = "all"
 
             # Override LLM's namespace choice with our deterministic mapper
