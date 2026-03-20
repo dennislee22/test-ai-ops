@@ -1049,11 +1049,36 @@ async def api_ask(req: AskRequest):
 
 @app.get("/api/healthcheck-report", summary="Run generate_healthcheck_report directly, no LLM involved")
 async def api_healthcheck_report():
-    import asyncio
+    import asyncio, re as _re
     try:
         report = await asyncio.get_event_loop().run_in_executor(
             None, _tk.generate_healthcheck_report)
-        return {"report": report}
+
+        # Strip triple-backtick fences — content inside is already plain text
+        report = _re.sub(r'```[^\n]*\n?', '', report)
+        report = _re.sub(r'\n{3,}', '\n\n', report).strip()
+
+        # Fetch top 10 pods by CPU and memory for the PDF chart
+        top_cpu = top_mem = []
+        try:
+            import kubernetes.client as _k8s_client
+            custom = _k8s_client.CustomObjectsApi()
+            items  = custom.list_cluster_custom_object(
+                "metrics.k8s.io", "v1beta1", "pods").get("items", [])
+            rows = []
+            for item in items:
+                meta  = item["metadata"]
+                ctrs  = item.get("containers", [])
+                cpu_m = sum(_tk._parse_cpu_to_millicores(c["usage"].get("cpu",    "0")) for c in ctrs)
+                mem_m = sum(_tk._parse_mem_to_mib(        c["usage"].get("memory", "0")) for c in ctrs)
+                label = f"{meta.get('namespace','')}/{meta['name']}"
+                rows.append({"label": label, "cpu": cpu_m, "mem": mem_m})
+            top_cpu = sorted(rows, key=lambda x: x["cpu"], reverse=True)[:10]
+            top_mem = sorted(rows, key=lambda x: x["mem"], reverse=True)[:10]
+        except Exception:
+            pass
+
+        return {"report": report, "top_cpu": top_cpu, "top_mem": top_mem}
     except Exception as e:
         return _JSONResponse(status_code=500, content={"error": str(e)})
 
