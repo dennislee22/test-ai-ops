@@ -16,6 +16,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 
 import config.config as config
+import tools.tools_k8s as _tk
 from rag import init_db, get_doc_stats, RAG_TOOLS, rag_retrieve, ingest_directory, ingest_file, ingest_excel
 from rag.retrieve import _MSG_NO_INGEST
 from tools.tools_k8s import reload_kubeconfig, _core as _k8s_core
@@ -28,32 +29,35 @@ if not hasattr(config, "DISABLE_LOOP_PROTECTION"):
 _HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = _HERE / "config" / "settings.json"
 
+_SETTINGS_MAP = {
+    "kubectl_max_chars":       lambda v: setattr(_tk, "_KUBECTL_MAX_OUT", v),
+    "max_new_tokens":          lambda v: setattr(config, "MAX_NEW_TOKENS", v),
+    "llm_timeout":             lambda v: setattr(config, "LLM_TIMEOUT", v),
+    "disable_loop_protection": lambda v: setattr(config, "DISABLE_LOOP_PROTECTION", v),
+    "show_secret_values":      lambda v: setattr(config, "SHOW_SECRET_VALUES", v),
+}
+
 def load_settings():
-    if SETTINGS_FILE.exists():
-        try:
-            import tools.tools_k8s as _tk
-            with open(SETTINGS_FILE, "r") as f:
-                s = json.load(f)
-                if "kubectl_max_chars" in s: _tk._KUBECTL_MAX_OUT = s["kubectl_max_chars"]
-                if "max_new_tokens" in s: config.MAX_NEW_TOKENS = s["max_new_tokens"]
-                if "llm_timeout" in s: config.LLM_TIMEOUT = s["llm_timeout"]
-                if "disable_loop_protection" in s: config.DISABLE_LOOP_PROTECTION = s["disable_loop_protection"]
-                if "show_secret_values" in s: config.SHOW_SECRET_VALUES = s["show_secret_values"]
-        except Exception as e:
-            config.logger.error(f"Failed to load settings.json: {e}")
+    if not SETTINGS_FILE.exists():
+        return
+    try:
+        s = json.loads(SETTINGS_FILE.read_text())
+        for key, apply in _SETTINGS_MAP.items():
+            if key in s:
+                apply(s[key])
+    except Exception as e:
+        config.logger.error(f"Failed to load settings.json: {e}")
 
 def save_settings():
-    import tools.tools_k8s as _tk
     s = {
-        "kubectl_max_chars": _tk._KUBECTL_MAX_OUT,
-        "max_new_tokens": getattr(config, "MAX_NEW_TOKENS", 4096),
-        "llm_timeout": getattr(config, "LLM_TIMEOUT", 300),
+        "kubectl_max_chars":       _tk._KUBECTL_MAX_OUT,
+        "max_new_tokens":          getattr(config, "MAX_NEW_TOKENS", 4096),
+        "llm_timeout":             getattr(config, "LLM_TIMEOUT", 300),
         "disable_loop_protection": getattr(config, "DISABLE_LOOP_PROTECTION", False),
-        "show_secret_values": getattr(config, "SHOW_SECRET_VALUES", False)
+        "show_secret_values":      getattr(config, "SHOW_SECRET_VALUES", False),
     }
     try:
-        with open(SETTINGS_FILE, "w") as f:
-            json.dump(s, f, indent=2)
+        SETTINGS_FILE.write_text(json.dumps(s, indent=2))
     except Exception as e:
         config.logger.error(f"Failed to save settings.json: {e}")
 
@@ -81,6 +85,30 @@ IGNORE_NS = {
     "node", "nodes", "deployment", "deployments", "status", "health", "check", "get",
     "show", "has", "have", "had", "with", "without", "using", "uses", "does", "do"
 }
+
+def _sse(payload: dict) -> str:
+    return f"data: {json.dumps(payload)}\n\n"
+
+_SHEET_KEYWORDS = [
+    (["past learning", "incident"],     "Past Learnings"),
+    (["known issue"],                   "Known Issues"),
+    (["dos and don", "best practice"],  "Dos and Donts"),
+    (["prerequisite"],                  "Prerequisites"),
+]
+
+def _detect_sheet(q: str) -> str | None:
+    ql = q.lower()
+    for keywords, sheet in _SHEET_KEYWORDS:
+        if any(k in ql for k in keywords):
+            return sheet
+    return None
+
+def _ingest_response(results: list) -> dict:
+    return {
+        "results":      results,
+        "total_files":  len(results),
+        "total_chunks": sum(r.get("chunks", 0) for r in results),
+    }
 
 # ── 1. SCHEMAS ───────────────────────────────────────────────────────────────
 
@@ -186,10 +214,8 @@ def _build_llm_gguf():
     except ImportError: raise ImportError("llama-cpp-python is required for GGUF models.")
 
     model_path = config.LLM_MODEL
-    #n_ctx      = int(os.environ.get("GGUF_N_CTX", "8192"))
-    n_ctx      = int(os.environ.get("GGUF_N_CTX", "40960")) #n_ctx_train (40960)
+    n_ctx      = int(os.environ.get("GGUF_N_CTX", "40960"))
     n_threads  = int(os.environ.get("GGUF_N_THREADS", str(os.cpu_count() or 4)))
-    #n_threads  = 4
 
     _log_ag.info(f"[LLM/GGUF] Loading {model_path} | ctx={n_ctx} threads={n_threads}")
     if not os.path.isfile(model_path):
@@ -405,63 +431,6 @@ def build_agent():
                 tcs.append({"id": f"tc_{uuid.uuid4().hex[:8]}", "name": obj["name"], "args": args_parsed, "type": "tool_call"})
             except Exception: pass
         return tcs
-
-    def llm_node(state: AgentState):
-        itr, msgs, updates = state.get("iteration", 0) + 1, state["messages"], list(state.get("status_updates", []))
-        req_id = state.get("req_id", "")
-        if state.get("direct_answer"): 
-            return {"messages": [AIMessage(content=state["direct_answer"])], "tool_calls_made": state.get("tool_calls_made", []), "iteration": itr, "status_updates": updates, "direct_answer": None}
-        
-        has_tool_results = any(isinstance(m, ToolMessage) for m in msgs)
-        invoke_msgs = _prepare_messages_for_hf(msgs, req_id=req_id)
-        chat_msgs = [{"role": "system", "content": prompt}] + _msgs_to_qwen3(invoke_msgs, True)
-        
-        _max_new = max(512, config.MAX_NEW_TOKENS) if has_tool_results else max(1024, config.MAX_NEW_TOKENS // 2)
-
-        if tokenizer is None:
-            format_rules = (
-                "\n\nTo call a tool, you MUST use exactly this JSON format. "
-                "Do not write Python code. Use this syntax:\n"
-                "<tool_call>\n"
-                "{\"name\": \"tool_name\", \"arguments\": {\"arg_name\": \"value\"}}\n"
-                "</tool_call>"
-            )
-            tools_json = json.dumps(tool_schemas, indent=2)
-            tool_system = f"{prompt}\n\nAvailable tools:\n{tools_json}{format_rules}"
-            gguf_msgs = [{"role": "system", "content": tool_system}] + chat_msgs[1:]
-
-            resp = model.create_chat_completion(messages=gguf_msgs, max_tokens=_max_new, temperature=0.1, top_p=0.8, top_k=20, repeat_penalty=1.05)
-            raw_text = resp["choices"][0]["message"].get("content", "") or ""
-        else:
-            import torch
-            kw = {"add_generation_prompt": True, "tools": tool_schemas}
-            if _is_qwen3: kw["enable_thinking"] = False
-            encoded = tokenizer.apply_chat_template(chat_msgs, tokenize=True, return_tensors="pt", **kw)
-            input_ids = (encoded["input_ids"] if hasattr(encoded, "__getitem__") and not hasattr(encoded, "shape") else encoded).to(model.device)
-            with torch.no_grad(): 
-                # CHANGED: set temperature=0.1
-                output_ids = model.generate(input_ids, max_new_tokens=_max_new, do_sample=True, temperature=0.1, top_p=0.8, top_k=20, repetition_penalty=1.05, pad_token_id=tokenizer.eos_token_id)
-            raw_text = tokenizer.decode(output_ids[0][input_ids.shape[-1]:], skip_special_tokens=True)
-
-        _log_ag.info(f"[REQ:{req_id}] [llm_node] RAW LLM OUTPUT ({len(raw_text)} chars):\n{raw_text!r}")
-
-        tcs = _parse_tool_calls(raw_text)
-        content = re.sub(r'<tool_call>[\s\S]*?</tool_call>', '', raw_text).strip()
-        
-        _ns_prepend = ""
-        for m in invoke_msgs:
-            if isinstance(m, HumanMessage):
-                _m = re.match(r'^§NS_PREFIX§(.*?)§END_NS§\n\n', m.content, re.DOTALL)
-                if _m:
-                    _ns_prepend = _m.group(1).strip() + "\n\n"
-                break
-        if _ns_prepend:
-            content = _ns_prepend + content
-
-        response = AIMessage(content=content, tool_calls=tcs)
-        if tcs: updates.append(f"🔧 {', '.join(tc['name'] for tc in tcs)}")
-        return {"messages": [response], "tool_calls_made": state.get("tool_calls_made", []), "iteration": itr, "status_updates": updates}
-
 
     def tool_node(state: AgentState):
         last, results, tools_called, updates = state["messages"][-1], [], list(state.get("tool_calls_made", [])), list(state.get("status_updates", []))
@@ -709,11 +678,6 @@ async def run_agent(user_message: str, skip_synthesise: bool = False) -> dict:
     config.logger.info(f"[REQ:{req_id}] /api/ask  q={user_message[:120]!r}")
     _runnable_agent = get_agent()
     t0 = time.time()
-    
-    if isinstance(_runnable_agent, dict):
-        _runnable_agent = build_agent()
-        global _agent
-        _agent = _runnable_agent
         
     final = await _runnable_agent.ainvoke({"messages": [HumanMessage(content=user_message)], "tool_calls_made": [], "iteration": 0, "status_updates": [f"🤖 Model: {config.LLM_MODEL}"], "req_id": req_id, "skip_synthesise": skip_synthesise})
     elapsed, last = time.time() - t0, final["messages"][-1]
@@ -726,15 +690,9 @@ async def run_agent(user_message: str, skip_synthesise: bool = False) -> dict:
     return {"response": _final_cleaned, "tools_used": final.get("tool_calls_made", []), "iterations": final.get("iteration", 0), "status_updates": updates, "elapsed_seconds": round(elapsed, 1), "clarification_needed": False}
 
 async def run_agent_streaming(user_message: str, history: list = None, max_new_tokens: int = 0, skip_synthesise: bool = False):
-    def _sse(payload: dict) -> str: return f"data: {json.dumps(payload)}\n\n"
     import uuid, asyncio
     req_id, t0 = uuid.uuid4().hex[:8], time.time()
-    
     _runnable_agent = get_agent()
-    if isinstance(_runnable_agent, dict):
-        _runnable_agent = build_agent()
-        global _agent
-        _agent = _runnable_agent
         
     yield _sse({"type": "status", "text": f"🤖 Model: {config.LLM_MODEL}"})
     config.logger.info(f"[REQ:{req_id}] /chat/stream  q={user_message[:120]!r}")
@@ -760,11 +718,6 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
         history_msgs = [HumanMessage(content=t.content) if t.role == "user" else _AIMessage(content=t.content) for t in (history or [])]
         all_messages = history_msgs + [HumanMessage(content=user_message)]
 
-        #async for event in _runnable_agent.astream_events(
-        #    {"messages": all_messages, "tool_calls_made": [], "iteration": 0, "status_updates": [], "req_id": req_id}, 
-        #    version="v2", 
-        #    config={"recursion_limit": 12}
-        #):
         async for event in _runnable_agent.astream_events(
             {"messages": all_messages, "tool_calls_made": [], "iteration": 0, "status_updates": [], "req_id": req_id, "skip_synthesise": skip_synthesise}, 
             version="v2", 
@@ -1022,7 +975,6 @@ async def chat_stream(req: ChatRequest):
         queue, _SENTINEL = asyncio.Queue(), object()
         async def _producer():
             try:
-                #async for chunk in run_agent_streaming(req.message, req.history, req.max_new_tokens): await queue.put(chunk)
                 async for chunk in run_agent_streaming(req.message, req.history, req.max_new_tokens, req.skip_synthesise): await queue.put(chunk)
             finally: await queue.put(_SENTINEL)
         task = asyncio.ensure_future(_producer())
@@ -1035,46 +987,35 @@ async def chat_stream(req: ChatRequest):
         finally: task.cancel()
     return StreamingResponse(_keepalive_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-@app.get("/metrics")
-async def metrics():
+def _collect_metrics() -> dict:
     cpu_per = psutil.cpu_percent(interval=0.2, percpu=True)
     mem     = psutil.virtual_memory()
     freq    = psutil.cpu_freq()
     return {
-        "cpu_total":    round(psutil.cpu_percent(interval=None), 1),
-        "cpu_per_core": [round(p, 1) for p in cpu_per],
-        "cpu_count":    psutil.cpu_count(logical=True),
-        "freq_mhz":     round(freq.current) if freq else 0,
-        "load_avg":     [round(x, 2) for x in psutil.getloadavg()],
-        "mem_total_gb": round(mem.total / 1e9, 1),
-        "mem_used_gb":  round(mem.used  / 1e9, 1),
-        "mem_pct":      mem.percent,
-        "gpus":         _gpu_metrics(),
-        "num_gpu":      config.NUM_GPU,
+        "cpu_total_pct":   round(psutil.cpu_percent(interval=None), 1),
+        "cpu_per_core":    [round(p, 1) for p in cpu_per],
+        "cpu_count":       psutil.cpu_count(logical=True),
+        "freq_mhz":        round(freq.current) if freq else 0,
+        "load_avg":        [round(x, 2) for x in psutil.getloadavg()],
+        "mem_total_gb":    round(mem.total / 1e9, 1),
+        "mem_used_gb":     round(mem.used  / 1e9, 1),
+        "mem_pct":         mem.percent,
+        "gpus":            _gpu_metrics(),
+        "num_gpu":         config.NUM_GPU,
     }
+
+@app.get("/metrics")
+async def metrics():
+    return _collect_metrics()
 
 @app.get("/api/system", summary="Live CPU / RAM / GPU utilisation metrics")
 async def api_system():
-    cpu_per = psutil.cpu_percent(interval=0.2, percpu=True)
-    mem     = psutil.virtual_memory()
-    freq    = psutil.cpu_freq()
-    return {
-        "cpu_total_pct":  round(psutil.cpu_percent(interval=None), 1),
-        "cpu_per_core":   [round(p, 1) for p in cpu_per],
-        "cpu_count":      psutil.cpu_count(logical=True),
-        "freq_mhz":       round(freq.current) if freq else 0,
-        "load_avg_1_5_15": [round(x, 2) for x in psutil.getloadavg()],
-        "ram_total_gb":   round(mem.total / 1e9, 1),
-        "ram_used_gb":    round(mem.used  / 1e9, 1),
-        "ram_pct":        mem.percent,
-        "gpus":           _gpu_metrics(),
-        "num_gpu":        config.NUM_GPU,
-    }
+    return _collect_metrics()
 
 @app.post("/ingest")
 async def ingest_api(req: IngestRequest):
     results = ingest_directory(req.docs_dir, force=req.force)
-    return {"results": results, "total_files": len(results), "total_chunks": sum(r.get("chunks", 0) for r in results)}
+    return _ingest_response(results)
 
 @app.post("/api/ingest/upload")
 async def ingest_upload_real(files: list[UploadFile] = File(...), force: str = FastAPIForm(default="false")):
@@ -1093,7 +1034,7 @@ async def ingest_upload_real(files: list[UploadFile] = File(...), force: str = F
         if suffix in (".xlsx", ".xls"): result = ingest_excel(str(dest), force=do_force)
         else: result = ingest_file(str(dest), force=do_force)
         results.append(result)
-    return {"results": results, "total_files": len(results), "total_chunks": sum(r.get("chunks", 0) for r in results)}
+    return _ingest_response(results)
 
 @app.post("/api/ask")
 async def api_ask(req: AskRequest):
@@ -1158,13 +1099,7 @@ async def api_rag_query(query: str, top_k: int = 50, sheet: Optional[str] = None
 @app.post("/api/kb/ask")
 async def api_kb_ask(req: KbAskRequest):
     if not req.q.strip(): return _JSONResponse(status_code=400, content={"error": "q must not be empty"})
-    top_k, sheet = max(10, min(req.top_k, 500)), req.sheet
-    if not sheet:
-        ql = req.q.lower()
-        if any(k in ql for k in ["past learning", "incident"]): sheet = "Past Learnings"
-        elif any(k in ql for k in ["known issue"]): sheet = "Known Issues"
-        elif any(k in ql for k in ["dos and don", "best practice"]): sheet = "Dos and Donts"
-        elif any(k in ql for k in ["prerequisite"]): sheet = "Prerequisites"
+    top_k, sheet = max(10, min(req.top_k, 500)), req.sheet or _detect_sheet(req.q)
 
     import asyncio
     context = await asyncio.get_event_loop().run_in_executor(None, lambda: rag_retrieve(query=req.q, top_k=top_k, sheet=sheet))
@@ -1180,11 +1115,9 @@ async def api_kb_ask(req: KbAskRequest):
 
 @app.post("/api/kb/stream")
 async def api_kb_stream(req: KbAskRequest):
-    import asyncio as _asyncio, time as _time, re
+    import asyncio as _asyncio, time as _time
     
     async def _generate():
-        def _sse(obj): return f"data: {json.dumps(obj)}\n\n"
-        
         start, q = _time.time(), req.q.strip()
         
         if not q: 
@@ -1206,14 +1139,7 @@ async def api_kb_stream(req: KbAskRequest):
             return
         # --------------------------------------------------------------
 
-        top_k, sheet = max(10, min(req.top_k, 500)), req.sheet
-        
-        if not sheet:
-            ql = q.lower()
-            if any(k in ql for k in ["past learning", "incident"]): sheet = "Past Learnings"
-            elif any(k in ql for k in ["known issue"]): sheet = "Known Issues"
-            elif any(k in ql for k in ["dos and don"]): sheet = "Dos and Donts"
-            elif any(k in ql for k in ["prerequisite"]): sheet = "Prerequisites"
+        top_k, sheet = max(10, min(req.top_k, 500)), req.sheet or _detect_sheet(q)
 
         yield _sse({"type": "question", "text": q})
         yield _sse({"type": "status", "text": f"Searching knowledge base{(' · sheet: ' + sheet) if sheet else ''}…"})
@@ -1261,18 +1187,16 @@ async def api_reload_prompt():
 
 @app.get("/api/config")
 async def api_get_config():
-    import tools.tools_k8s as _tk
     return {
-        "kubectl_max_chars": _tk._KUBECTL_MAX_OUT, 
-        "max_new_tokens": config.MAX_NEW_TOKENS, 
-        "llm_timeout": config.LLM_TIMEOUT,
+        "kubectl_max_chars":       _tk._KUBECTL_MAX_OUT,
+        "max_new_tokens":          config.MAX_NEW_TOKENS,
+        "llm_timeout":             config.LLM_TIMEOUT,
         "disable_loop_protection": getattr(config, "DISABLE_LOOP_PROTECTION", False),
-        "show_secret_values": getattr(config, "SHOW_SECRET_VALUES", False)
+        "show_secret_values":      getattr(config, "SHOW_SECRET_VALUES", False),
     }
 
 @app.post("/api/config")
 async def api_set_config(body: dict):
-    import tools.tools_k8s as _tk
     updated = {}
     if "kubectl_max_chars" in body:
         val = max(1000, min(int(body["kubectl_max_chars"]), 200000))
