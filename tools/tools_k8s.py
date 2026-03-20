@@ -1628,18 +1628,13 @@ def _get_top_pods_prometheus(namespace: str, limit: int, sort_by: str,
         return "No running Prometheus server pod found."
 
     def _exec(cmd, large: bool = False):
-        """
-        Execute cmd inside the Prometheus pod.
-        large=True: writes to a temp file to avoid WebSocket frame truncation.
-        large=False: runs directly (for small outputs like HTTP status codes).
-        """
         try:
             if large:
+                tmp = "/tmp/_prom_query_$$.json"
                 safe_cmd = (
-                    f"_OUT=$(mktemp); "
-                    f"{cmd} > \"$_OUT\"; "
-                    f"cat \"$_OUT\"; "
-                    f"rm -f \"$_OUT\""
+                    f"{cmd} > {tmp}; "
+                    f"cat {tmp}; "
+                    f"rm -f {tmp}"
                 )
             else:
                 safe_cmd = cmd
@@ -1663,10 +1658,13 @@ def _get_top_pods_prometheus(namespace: str, limit: int, sort_by: str,
     start_ts = end_ts - dur_sec
     enc      = urllib.parse.quote(promql, safe="")
     url      = f"{api_base}/query_range?query={enc}&start={start_ts}&end={end_ts}&step=60s"
-    raw      = _exec(f"curl -s --max-time 30 '{url}'", large=True)
+    raw      = _exec(f"curl -s --max-time 60 '{url}'", large=True)
 
     if not raw:
-        return "Prometheus returned an empty response. The query may have timed out or returned no data."
+        raw2 = _exec(f"curl -s --max-time 60 '{url}'")
+        if not raw2:
+            return "Prometheus returned an empty response. The query may have timed out or the container has no /tmp access."
+        raw = raw2
 
     try:
         data = _json.loads(raw)
@@ -3912,11 +3910,11 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h",
     def _exec(cmd, large: bool = False):
         try:
             if large:
+                tmp = "/tmp/_prom_query_$$.json"
                 safe_cmd = (
-                    f"_OUT=$(mktemp); "
-                    f"{cmd} > \"$_OUT\"; "
-                    f"cat \"$_OUT\"; "
-                    f"rm -f \"$_OUT\""
+                    f"{cmd} > {tmp}; "
+                    f"cat {tmp}; "
+                    f"rm -f {tmp}"
                 )
             else:
                 safe_cmd = cmd
@@ -3964,7 +3962,9 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h",
     def _query(pql):
         enc = urllib.parse.quote(pql, safe="")
         url = f"{api_base}/query_range?query={enc}&start={start_ts}&end={end_ts}&step={step}"
-        raw = _exec(f"curl -s --max-time 30 '{url}'", large=True)
+        raw = _exec(f"curl -s --max-time 60 '{url}'", large=True)
+        if not raw or raw.startswith("[exec error"):
+            raw = _exec(f"curl -s --max-time 60 '{url}'")
         if not raw or raw.startswith("[exec error"): return None, raw or "Empty response"
         try:
             return _json.loads(raw), None
