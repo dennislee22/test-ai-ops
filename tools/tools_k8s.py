@@ -1462,6 +1462,266 @@ def get_node_labels(search: str = None) -> str:
     except ApiException as e:
         return _api_error(e)
 
+def _fmt_ts(ts: float, tz_name: str) -> str:
+    """Format a Unix timestamp in the user's timezone."""
+    try:
+        import zoneinfo
+        tz  = zoneinfo.ZoneInfo(tz_name)
+    except Exception:
+        tz  = timezone.utc
+    dt = datetime.datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(tz)
+    return dt.strftime("%H:%M")
+
+
+def get_top_pods(namespace: str = "all", limit: int = 10,
+                 sort_by: str = "cpu", ascending: bool = False,
+                 search: str | None = None, duration: str = "",
+                 user_timezone: str = "UTC") -> str:
+    """
+    Show top (or bottom) pods by CPU or memory.
+
+    When duration is empty: live snapshot from metrics-server.
+    When duration is set (e.g. '1h', '6h'): average usage from Prometheus over that period.
+    """
+    import time as _time
+
+    _LOWEST_WORDS = {"lowest", "least", "bottom", "smallest", "lightest", "minimum", "min", "low"}
+    if sort_by.strip().lower() in _LOWEST_WORDS:
+        sort_by   = "cpu"
+        ascending = True
+
+    sort_key_label = "CPU" if sort_by.lower() in ("cpu", "cpu_m") else "memory"
+    direction      = "lowest" if ascending else "top"
+    scope          = f"namespace `{namespace}`" if namespace != "all" else "all namespaces"
+    filter_note    = f" matching `{search}`" if search else ""
+    tz_label       = user_timezone if user_timezone != "UTC" else "UTC"
+
+    if duration:
+        return _get_top_pods_prometheus(
+            namespace=namespace, limit=limit, sort_by=sort_by,
+            ascending=ascending, search=search, duration=duration,
+            user_timezone=user_timezone)
+
+    custom = _k8s.CustomObjectsApi()
+    try:
+        if namespace == "all":
+            items = custom.list_cluster_custom_object(
+                "metrics.k8s.io", "v1beta1", "pods").get("items", [])
+        else:
+            items = custom.list_namespaced_custom_object(
+                "metrics.k8s.io", "v1beta1", namespace, "pods").get("items", [])
+    except ApiException as e:
+        return f"[ERROR] Metrics not available: {e.reason}. Is metrics-server installed?"
+
+    if not items:
+        return "No pod metrics found. Is metrics-server installed and running?"
+
+    try:
+        import zoneinfo
+        tz      = zoneinfo.ZoneInfo(user_timezone)
+        now_str = datetime.datetime.now(tz).strftime(f"%Y-%m-%d %H:%M {tz_label}")
+    except Exception:
+        now_str = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    rows = []
+    for item in items:
+        meta  = item["metadata"]
+        name  = meta["name"]
+        if search and search.lower() not in name.lower() \
+                  and search.lower() not in meta.get("namespace", "").lower():
+            continue
+        ctrs  = item.get("containers", [])
+        cpu_m = sum(_parse_cpu_to_millicores(c["usage"].get("cpu",    "0")) for c in ctrs)
+        mem_m = sum(_parse_mem_to_mib(        c["usage"].get("memory", "0")) for c in ctrs)
+        rows.append((meta.get("namespace", "-"), name, cpu_m, mem_m))
+
+    if not rows:
+        return (f"No pod metrics found matching `{search}`."
+                if search else "No pod metrics found.")
+
+    sk = 2 if sort_by.lower() in ("cpu", "cpu_m") else 3
+    rows.sort(key=lambda x: x[sk], reverse=not ascending)
+    rows = rows[:max(1, limit)]
+
+    header  = (f"{direction.title()} {len(rows)} pods by {sort_key_label} "
+               f"in {scope}{filter_note} — live snapshot at {now_str}.")
+    col_ns  = max(len("NAMESPACE"), max(len(r[0]) for r in rows))
+    col_pod = max(len("POD"),       max(len(r[1]) for r in rows))
+    hdr_row = f"{'NAMESPACE':<{col_ns}}  {'POD':<{col_pod}}  {'CPU(m)':>9}  {'MEMORY(MiB)':>12}"
+    sep     = "-" * len(hdr_row)
+    lines   = [header, "```", hdr_row, sep]
+    for ns_v, name, cpu_m, mem_mib in rows:
+        lines.append(f"{ns_v:<{col_ns}}  {name:<{col_pod}}  {cpu_m:>8}m  {mem_mib:>10.0f}Mi")
+    lines.append("```")
+    return "\n".join(lines)
+
+
+def _get_top_pods_prometheus(namespace: str, limit: int, sort_by: str,
+                              ascending: bool, search, duration: str,
+                              user_timezone: str) -> str:
+    import time as _time
+    from kubernetes.stream import stream as _k8s_stream
+
+    sort_key_label = "CPU" if sort_by.lower() in ("cpu", "cpu_m") else "memory"
+    direction      = "lowest" if ascending else "top"
+    scope          = f"namespace `{namespace}`" if namespace != "all" else "all namespaces"
+    filter_note    = f" matching `{search}`" if search else ""
+    tz_label       = user_timezone if user_timezone != "UTC" else "UTC"
+
+    dur_map = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    try:
+        dur_sec = int(duration[:-1]) * dur_map.get(duration[-1], 1)
+    except Exception:
+        dur_sec = 3600
+
+    ns_filter = f',namespace="{namespace}"' if namespace not in ("all", "") else ""
+    if sort_key_label == "CPU":
+        promql = (f'avg_over_time(sum by (pod, namespace) (' 
+                  f'rate(container_cpu_usage_seconds_total{{{{container!="",container!="POD"{ns_filter}}}}}[5m]))' 
+                  f'[{duration}:60s]) * 1000')
+    else:
+        promql = (f'avg_over_time(sum by (pod, namespace) (' 
+                  f'container_memory_working_set_bytes{{{{container!="",container!="POD"{ns_filter}}}}})'
+                  f'[{duration}:60s]) / 1048576')
+
+    prom_pod = prom_ns = None
+    prom_container = "prometheus-server"
+    try:
+        for p in _core.list_pod_for_all_namespaces(field_selector="status.phase=Running").items:
+            n = p.metadata.name.lower()
+            if "prometheus-server" in n and "operator" not in n:
+                cnames         = [c.name for c in (p.spec.containers or [])]
+                prom_pod       = p.metadata.name
+                prom_ns        = p.metadata.namespace
+                prom_container = "prometheus-server" if "prometheus-server" in cnames else (cnames[0] if cnames else "prometheus-server")
+                break
+    except Exception as e:
+        return f"Could not find Prometheus: {e}"
+    if not prom_pod:
+        return "No running Prometheus server pod found."
+
+    def _exec(cmd):
+        try:
+            resp = _k8s_stream(
+                _core.connect_get_namespaced_pod_exec,
+                prom_pod, prom_ns,
+                command=["/bin/sh", "-c", cmd],
+                container=prom_container,
+                stderr=False, stdin=False, stdout=True, tty=False, _preload_content=True)
+            if isinstance(resp, bytes): resp = resp.decode("utf-8", errors="replace")
+            return resp.strip() if isinstance(resp, str) else str(resp).strip()
+        except Exception as exc:
+            return f"[exec error: {exc}]"
+
+    base_url = "http://localhost:9090"
+    probe    = _exec(f"curl -s -o /dev/null -w '%{{http_code}}' '{base_url}/prometheus/api/v1/query?query=up'")
+    api_base = f"{base_url}/prometheus/api/v1" if probe.strip() == "200" else f"{base_url}/api/v1"
+
+    end_ts   = int(_time.time())
+    start_ts = end_ts - dur_sec
+    enc      = urllib.parse.quote(promql, safe="")
+    url      = f"{api_base}/query_range?query={enc}&start={start_ts}&end={end_ts}&step=60s"
+    raw      = _exec(f"curl -s --max-time 20 '{url}'")
+
+    try:
+        data = _json.loads(raw)
+    except Exception:
+        return f"Prometheus returned non-JSON: {raw[:300]}"
+
+    if data.get("status") != "success":
+        return f"Prometheus query failed: {data.get('error', data)}"
+
+    results = data.get("data", {}).get("result", [])
+    if not results:
+        return f"No Prometheus data for metric '{sort_key_label}' over the last {duration}."
+
+    def _mean(r):
+        vals = [float(v[1]) for v in r.get("values", []) if v[1] != "NaN"]
+        return sum(vals) / len(vals) if vals else 0.0
+
+    rows = []
+    for r in results:
+        ml    = r.get("metric", {})
+        ns_v  = ml.get("namespace", "-")
+        pod_v = ml.get("pod", ml.get("pod_name", "?"))
+        if search and search.lower() not in pod_v.lower() \
+                  and search.lower() not in ns_v.lower():
+            continue
+        rows.append((ns_v, pod_v, _mean(r)))
+
+    if not rows:
+        return (f"No Prometheus data matching `{search}` over the last {duration}."
+                if search else f"No Prometheus data over the last {duration}.")
+
+    rows.sort(key=lambda x: x[2], reverse=not ascending)
+    rows = rows[:max(1, limit)]
+
+    unit = "m" if sort_key_label == "CPU" else "Mi"
+    try:
+        import zoneinfo
+        tz       = zoneinfo.ZoneInfo(user_timezone)
+        from_str = datetime.datetime.fromtimestamp(start_ts, tz=timezone.utc).astimezone(tz).strftime("%H:%M")
+        to_str   = datetime.datetime.fromtimestamp(end_ts,   tz=timezone.utc).astimezone(tz).strftime(f"%H:%M {tz_label}")
+    except Exception:
+        from_str = datetime.datetime.utcfromtimestamp(start_ts).strftime("%H:%M")
+        to_str   = datetime.datetime.utcfromtimestamp(end_ts).strftime("%H:%M UTC")
+
+    header  = (f"{direction.title()} {len(rows)} pods by avg {sort_key_label} "
+               f"in {scope}{filter_note} — last {duration} ({from_str}–{to_str}).")
+    col_ns  = max(len("NAMESPACE"), max(len(r[0]) for r in rows))
+    col_pod = max(len("POD"),       max(len(r[1]) for r in rows))
+    col_hdr = f"AVG {sort_key_label}({unit})"
+    hdr_row = f"{'NAMESPACE':<{col_ns}}  {'POD':<{col_pod}}  {col_hdr:>14}"
+    sep     = "-" * len(hdr_row)
+    lines   = [header, "```", hdr_row, sep]
+    for ns_v, pod_v, mean_v in rows:
+        lines.append(f"{ns_v:<{col_ns}}  {pod_v:<{col_pod}}  {mean_v:>12.1f}{unit}")
+    lines.append("```")
+    return "\n".join(lines)
+
+
+def get_top_nodes(limit: int = 0, ascending: bool = False,
+                  user_timezone: str = "UTC") -> str:
+    tz_label = user_timezone if user_timezone != "UTC" else "UTC"
+    custom   = _k8s.CustomObjectsApi()
+    try:
+        items = custom.list_cluster_custom_object(
+            "metrics.k8s.io", "v1beta1", "nodes").get("items", [])
+    except ApiException as e:
+        return f"[ERROR] Metrics not available: {e.reason}. Is metrics-server installed?"
+
+    if not items:
+        return "No node metrics found. Is metrics-server installed and running?"
+
+    try:
+        import zoneinfo
+        tz      = zoneinfo.ZoneInfo(user_timezone)
+        now_str = datetime.datetime.now(tz).strftime(f"%Y-%m-%d %H:%M {tz_label}")
+    except Exception:
+        now_str = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    rows = []
+    for item in items:
+        name  = item["metadata"]["name"]
+        cpu_m = _parse_cpu_to_millicores(item["usage"].get("cpu",    "0"))
+        mem_m = _parse_mem_to_mib(        item["usage"].get("memory", "0"))
+        rows.append((name, cpu_m, mem_m))
+
+    rows.sort(key=lambda x: x[1], reverse=not ascending)
+    if limit > 0:
+        rows = rows[:limit]
+
+    direction = "lowest" if ascending else "top"
+    col_node  = max(len("NODE"), max(len(r[0]) for r in rows))
+    hdr_row   = f"{'NODE':<{col_node}}  {'CPU(m)':>9}  {'MEMORY(MiB)':>12}"
+    sep       = "-" * len(hdr_row)
+    title     = f"Node resource usage — {direction} {len(rows)} node(s) by CPU — live at {now_str}."
+    lines     = [title, "```", hdr_row, sep]
+    for name, cpu_m, mem_mib in rows:
+        lines.append(f"{name:<{col_node}}  {cpu_m:>8}m  {mem_mib:>10.0f}Mi")
+    lines.append("```")
+    return "\n".join(lines)
+
 def get_node_taints(search: str = None, tainted_only: bool = False) -> str:
     """
     List node taints.
@@ -3497,28 +3757,48 @@ def get_coredns_health() -> str:
     return "\n".join(lines)
 
 def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h",
-                              step: str = "60s", namespace: str = "") -> str:
+                              step: str = "60s", namespace: str = "",
+                              user_timezone: str = "UTC") -> str:
     import time as _time
     from kubernetes.stream import stream as _k8s_stream
 
     METRIC_MAP = {
-        "cpu":            ("Pod CPU Usage (millicores)", "sum by (pod, namespace) (container_cpu_usage)", "m"),
-        "node_cpu":       ("Pod CPU Usage (millicores)", "sum by (pod, namespace) (container_cpu_usage)", "m"),
-        "pod_cpu":        ("Pod CPU Usage (millicores)", "sum by (pod, namespace) (container_cpu_usage)", "m"),
-        "memory":         ("Pod Memory Usage (MiB)", "sum by (pod, namespace) (container_memory_usage_bytes) / 1048576", "MiB"),
-        "node_memory":    ("Pod Memory Usage (MiB)", "sum by (pod, namespace) (container_memory_usage_bytes) / 1048576", "MiB"),
-        "pod_memory":     ("Pod Memory Usage (MiB)", "sum by (pod, namespace) (container_memory_usage_bytes) / 1048576", "MiB"),
-        "cluster_cpu":    ("Cluster CPU Limits (cores)", "cluster:kube_pod_container_resource_limits_cpu_cores:sum", "cores"),
-        "cluster_memory": ("Cluster Memory Limits (bytes)", "cluster:kube_pod_container_resource_limits_memory_bytes:sum", "bytes"),
+        "cpu":            ("Pod CPU Usage (millicores)",
+                           'sum by (pod, namespace) (rate(container_cpu_usage_seconds_total{container!="",container!="POD"}[5m])) * 1000',
+                           "m"),
+        "node_cpu":       ("Pod CPU Usage (millicores)",
+                           'sum by (pod, namespace) (rate(container_cpu_usage_seconds_total{container!="",container!="POD"}[5m])) * 1000',
+                           "m"),
+        "pod_cpu":        ("Pod CPU Usage (millicores)",
+                           'sum by (pod, namespace) (rate(container_cpu_usage_seconds_total{container!="",container!="POD"}[5m])) * 1000',
+                           "m"),
+        "memory":         ("Pod Memory Usage (MiB)",
+                           'sum by (pod, namespace) (container_memory_working_set_bytes{container!="",container!="POD"}) / 1048576',
+                           "MiB"),
+        "node_memory":    ("Pod Memory Usage (MiB)",
+                           'sum by (pod, namespace) (container_memory_working_set_bytes{container!="",container!="POD"}) / 1048576',
+                           "MiB"),
+        "pod_memory":     ("Pod Memory Usage (MiB)",
+                           'sum by (pod, namespace) (container_memory_working_set_bytes{container!="",container!="POD"}) / 1048576',
+                           "MiB"),
+        "cluster_cpu":    ("Cluster CPU Usage (millicores)",
+                           'sum(rate(container_cpu_usage_seconds_total{container!="",container!="POD"}[5m])) * 1000',
+                           "m"),
+        "cluster_memory": ("Cluster Memory Usage (MiB)",
+                           'sum(container_memory_working_set_bytes{container!="",container!="POD"}) / 1048576',
+                           "MiB"),
         "disk_io":        None, "pvc_io": None, "network_in": None, "network_out": None,
     }
     FALLBACK_PROMQL = {
-        "cpu":        ["sum by (pod, namespace) (kube_metrics_server_pods_cpu)"],
-        "node_cpu":   ["sum by (pod, namespace) (kube_metrics_server_pods_cpu)"],
-        "pod_cpu":    ["sum by (pod, namespace) (kube_metrics_server_pods_cpu)"],
-        "memory":     ["sum by (pod, namespace) (container_memory_usage_bytes) / 1048576"],
-        "node_memory":["sum by (pod, namespace) (container_memory_usage_bytes) / 1048576"],
-        "pod_memory": ["sum by (pod, namespace) (container_memory_usage_bytes) / 1048576"],
+        "cpu":         ['sum by (pod, namespace) (rate(container_cpu_usage_seconds_total{container!="POD"}[5m])) * 1000',
+                        'sum by (pod, namespace) (container_cpu_usage)'],
+        "node_cpu":    ['sum by (pod, namespace) (rate(container_cpu_usage_seconds_total{container!="POD"}[5m])) * 1000',
+                        'sum by (pod, namespace) (container_cpu_usage)'],
+        "pod_cpu":     ['sum by (pod, namespace) (rate(container_cpu_usage_seconds_total{container!="POD"}[5m])) * 1000',
+                        'sum by (pod, namespace) (container_cpu_usage)'],
+        "memory":      ['sum by (pod, namespace) (container_memory_usage_bytes{container!="POD"}) / 1048576'],
+        "node_memory": ['sum by (pod, namespace) (container_memory_usage_bytes{container!="POD"}) / 1048576'],
+        "pod_memory":  ['sum by (pod, namespace) (container_memory_usage_bytes{container!="POD"}) / 1048576'],
     }
 
     key = metric.lower().replace(" ", "_").replace("-", "_")
@@ -3536,13 +3816,10 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h",
         ns_filter = f'namespace="{ns_val}"'
         def _add(m):
             inner = m.group(1).strip()
+            if ns_filter in inner:
+                return '{' + inner + '}'
             return '{' + (inner + ',' if inner else '') + ns_filter + '}'
-        result = re.sub(r'\{([^}]*)\}', _add, pql)
-        if result == pql:
-            result = re.sub(
-                r'(container_cpu_usage|container_memory_usage_bytes|kube_metrics_server_pods_cpu)',
-                r'\1{' + ns_filter + '}', result)
-        return result
+        return re.sub(r'\{([^}]*)\}', _add, pql)
 
     if ns:
         promql = _inject_ns(promql, ns)
@@ -3600,7 +3877,7 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h",
             return (f"Prometheus API not reachable at {base_url}. "
                     f"HTTP probes: /prometheus → {probe}, / → {probe2}. Pod: {prom_pod} in {prom_ns}.")
 
-    label_raw = _exec(f"curl -s --max-time 10 '{api_base}/labels?match[]=container_cpu_usage'")
+    label_raw = _exec(f"curl -s --max-time 10 '{api_base}/labels?match[]=container_cpu_usage_seconds_total'")
     try:
         available_labels = _json.loads(label_raw).get("data", [])
     except Exception:
@@ -3609,9 +3886,11 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h",
 
     if has_node_label and not ns:
         if key in ("cpu", "node_cpu", "pod_cpu"):
-            promql = "sum by (node) (container_cpu_usage)"; title = "Node CPU Usage (millicores)"
+            promql = 'sum by (node) (rate(container_cpu_usage_seconds_total{container!="",container!="POD"}[5m])) * 1000'
+            title  = "Node CPU Usage (millicores)"
         elif key in ("memory", "node_memory", "pod_memory"):
-            promql = "sum by (node) (container_memory_usage_bytes) / 1048576"; title = "Node Memory Usage (MiB)"
+            promql = 'sum by (node) (container_memory_working_set_bytes{container!="",container!="POD"}) / 1048576'
+            title  = "Node Memory Usage (MiB)"
 
     def _query(pql):
         enc = urllib.parse.quote(pql, safe="")
@@ -3692,7 +3971,15 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h",
         node_caveat = (f"\nNote: per-node metrics are unavailable (container_cpu_usage has no 'node' label "
                        f"on this cluster). Showing pod-level data.")
 
-    summary_lines = [f"📊 {title} — last {duration}{cap_note}{node_caveat}"]
+    tz_label = user_timezone if user_timezone not in ("", "UTC") else "UTC"
+    try:
+        import zoneinfo
+        _tz     = zoneinfo.ZoneInfo(user_timezone)
+        _now_str = datetime.datetime.now(_tz).strftime(f"%Y-%m-%d %H:%M {tz_label}")
+    except Exception:
+        _now_str = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    summary_lines = [f"📊 {title} — last {duration} (as of {_now_str}){cap_note}{node_caveat}"]
     summary_lines.extend(
         f"  {s['label']}: {_fmt(s['values'][-1][1], unit)}"
         for s in series_out if s["values"])
@@ -4143,36 +4430,11 @@ def _handle_describe(p: dict) -> str:
 
 
 def _handle_top(p: dict) -> str:
-    custom = _k8s.CustomObjectsApi()
-    try:
-        if p["resource"] in ("node", "nodes", "no"):
-            resp  = custom.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
-            lines = [f"{'NODE':<40} {'CPU(cores)':<14} {'MEMORY(bytes)'}"]
-            for item in resp.get("items", []):
-                cpu_raw = item["usage"].get("cpu", "0")
-                cpu_m   = _parse_cpu_to_millicores(cpu_raw)
-                lines.append(
-                    f"  {item['metadata']['name']:<40} {cpu_m}m{'':<{max(0, 13 - len(str(cpu_m)))}} {item['usage']['memory']}"
-                )
-            return "\n".join(lines)
-        else:
-            if p["all_namespaces"]:
-                items = custom.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "pods").get("items", [])
-            else:
-                items = custom.list_namespaced_custom_object(
-                    "metrics.k8s.io", "v1beta1", p["namespace"], "pods").get("items", [])
-            lines = [f"{'NAMESPACE':<30} {'POD':<50} {'CPU(cores)':<14} {'MEMORY(bytes)'}"]
-            for item in items:
-                meta  = item["metadata"]
-                ctrs  = item.get("containers", [])
-                cpu_m = sum(_parse_cpu_to_millicores(c["usage"].get("cpu", "0")) for c in ctrs)
-                mem   = ctrs[0]["usage"].get("memory", "?") if ctrs else "?"
-                lines.append(
-                    f"  {meta.get('namespace', ''):<30} {meta['name']:<50} {cpu_m}m{'':<{max(0, 13 - len(str(cpu_m)))}} {mem}"
-                )
-            return "\n".join(lines)
-    except ApiException as e:
-        return f"[ERROR] Metrics not available: {e.reason}. Is metrics-server installed?"
+    if p["resource"] in ("node", "nodes", "no"):
+        return get_top_nodes()
+    else:
+        ns = "all" if p["all_namespaces"] else p["namespace"]
+        return get_top_pods(namespace=ns)
 
 
 def _handle_rollout(p: dict) -> str:
