@@ -1575,14 +1575,24 @@ def _get_top_pods_prometheus(namespace: str, limit: int, sort_by: str,
         dur_sec = 3600
 
     ns_filter = f',namespace="{namespace}"' if namespace not in ("all", "") else ""
+    base_filter = f'container!="",container!="POD"{ns_filter}'
+
     if sort_key_label == "CPU":
-        promql = (f'avg_over_time(sum by (pod, namespace) (' 
-                  f'rate(container_cpu_usage_seconds_total{{{{container!="",container!="POD"{ns_filter}}}}}[5m]))' 
-                  f'[{duration}:60s]) * 1000')
+        promql = (
+            'avg_over_time('
+            'sum by (pod, namespace) ('
+            'rate(container_cpu_usage_seconds_total{' + base_filter + '}[5m])'
+            ')[' + duration + ':60s]'
+            ') * 1000'
+        )
     else:
-        promql = (f'avg_over_time(sum by (pod, namespace) (' 
-                  f'container_memory_working_set_bytes{{{{container!="",container!="POD"{ns_filter}}}}})'
-                  f'[{duration}:60s]) / 1048576')
+        promql = (
+            'avg_over_time('
+            'sum by (pod, namespace) ('
+            'container_memory_working_set_bytes{' + base_filter + '}'
+            ')[' + duration + ':60s]'
+            ') / 1048576'
+        )
 
     prom_pod = prom_ns = None
     prom_container = "prometheus-server"
@@ -3979,10 +3989,11 @@ def query_prometheus_metrics(metric: str = "cpu", duration: str = "1h",
     except Exception:
         _now_str = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    summary_lines = [f"📊 {title} — last {duration} (as of {_now_str}){cap_note}{node_caveat}"]
+    summary_lines = [f"📊 {title} — last {duration} (as of {_now_str}){cap_note}{node_caveat}", "```"]
     summary_lines.extend(
         f"  {s['label']}: {_fmt(s['values'][-1][1], unit)}"
         for s in series_out if s["values"])
+    summary_lines.append("```")
 
     graph_payload = _json.dumps(
         {"title": title, "unit": unit, "duration": duration, "series": series_out},
