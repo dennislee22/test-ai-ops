@@ -207,7 +207,14 @@ K8S_TOOL_METADATA: dict = {
             "Check Kubernetes node health, resources, and scheduling status. "
             "Returns a Markdown table with columns: NODE, ROLES, STATUS (including Ready/NotReady and Cordon/SchedulingDisabled), CPU, RAM (Gi), GPU. "
             "Supports filtering for a specific node by partial name match. "
-            "Use for questions like: 'are nodes healthy', 'is ecs-w-01 cordoned', or 'why are pods pending'. "
+            "Use for questions like: "
+            "'are nodes healthy', 'list all nodes', 'node status', "
+            "'is ecs-w-01 cordoned', 'which node is cordoned', 'is any node cordoned', "
+            "'which node is unschedulable', 'is scheduling disabled on any node', "
+            "'can pods be scheduled on this node', 'why are pods pending'. "
+            "IMPORTANT: Always use this tool — NOT get_node_taints — for cordon, "
+            "unschedulable, or SchedulingDisabled questions. "
+            "Cordon sets spec.unschedulable=true and is shown in the STATUS column here. "
             + _VERBATIM
         ),
         "parameters":  {
@@ -258,11 +265,13 @@ K8S_TOOL_METADATA: dict = {
         "description": (
             "List taints on all Kubernetes nodes. "
             "Returns the taint key, value, and effect for each node. "
+            "A taint is a key/value/effect label on a node that repels pods unless they have a matching toleration. "
             "Use this for questions like: "
             "'which node is tainted', 'show node taints', 'are any nodes tainted', "
-            "'what taints are on the cluster', 'which nodes prevent pod scheduling'. "
-            "Pass tainted_only=True when the user asks which nodes ARE tainted — "
-            "this filters out untainted nodes so only nodes with active taints are shown. "
+            "'what taints are on the cluster', 'show me the NoSchedule taints', "
+            "'which nodes have gpu taint', 'what toleration do I need for node X'. "
+            "Do NOT use for cordon or unschedulable questions — use get_node_info for those. "
+            "Pass tainted_only=True when the user asks which nodes ARE tainted. "
             "Pass search to filter by NODE NAME (partial match), not taint content. "
             "IMPORTANT: Do NOT pass intent words like 'tainted', 'any', 'all' as search — "
             "they are stripped automatically. Use tainted_only=True instead."
