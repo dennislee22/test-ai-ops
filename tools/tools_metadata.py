@@ -274,18 +274,39 @@ K8S_TOOL_METADATA: dict = {
     "get_node_taints": {
         "fn":          get_node_taints,
         "description": (
-            "Show all taints for Kubernetes nodes in the cluster. "
-            "Returns key/value/effect strings describing node taints that restrict pod scheduling. "
-            "You can optionally filter taints by a keyword using the `search` parameter. "
-            "Do NOT pass a node_name — this tool only supports search by taint content. "
-            "Use for questions like: "
-            "'which nodes have taints?', "
-            "'show nodes tainted with GPU?', "
-            "'which nodes prevent pods from scheduling?', "
-            "'find nodes with a specific taint keyword like cde'."
+            "List taints on all Kubernetes nodes. "
+            "Returns the taint key, value, and effect for each node. "
+            "Use this for questions like: "
+            "'which node is tainted', "
+            "'show node taints', "
+            "'are any nodes tainted', "
+            "'what taints are on the cluster', "
+            "'which nodes prevent pod scheduling'. "
+            "Pass tainted_only=True when the user asks which nodes ARE tainted — "
+            "this filters out untainted nodes so only nodes with active taints are shown. "
+            "Pass search to filter by NODE NAME (partial match), not taint content. "
+            "IMPORTANT: Do NOT pass intent words like 'tainted', 'any', 'all' as search — "
+            "they are stripped automatically. Use tainted_only=True instead."
         ),
         "parameters":  {
-            "search": {"type": "string", "description": "Optional keyword to filter taints (e.g., 'cde')."},
+            "search": {
+                "type":        "string",
+                "default":     None,
+                "description": (
+                    "Optional node name filter (partial match, e.g., 'ecs-m-01'). "
+                    "Do NOT pass taint-content words or intent words like 'tainted', 'gpu', 'any' — "
+                    "pass tainted_only=True for taint presence queries instead."
+                ),
+            },
+            "tainted_only": {
+                "type":        "boolean",
+                "default":     False,
+                "description": (
+                    "When True, only show nodes that have at least one taint. "
+                    "Set this to True for queries like 'which node is tainted', "
+                    "'show tainted nodes', 'are any nodes tainted'."
+                ),
+            },
         },
     },
 
