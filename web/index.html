@@ -2862,6 +2862,14 @@ inpEl.addEventListener('keydown', e=>{
     barEl.style.width = '5%';
     stepEl.textContent = 'Connecting to cluster…';
 
+    // Open print window immediately — must happen synchronously during user gesture
+    // to avoid browser popup blocker. We fill it with content after the fetch.
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write('<html><body><p style="font-family:sans-serif;color:#64748b;padding:40px">⏳ Generating health report, please wait…</p></body></html>');
+      printWindow.document.close();
+    }
+
     // Animate progress steps while waiting
     let stepIdx = 0;
     const stepTimer = setInterval(() => {
@@ -3054,10 +3062,20 @@ ${marked.parse(reportText)}
 </body></html>`;
 
       const printWindow = window.open('', '_blank');
-      printWindow.document.write(html);
-      printWindow.document.close();
-      printWindow.focus();
-      setTimeout(() => { printWindow.print(); printWindow.close(); }, 250);
+      if (printWindow && !printWindow.closed) {
+        printWindow.document.open();
+        printWindow.document.write(html);
+        printWindow.document.close();
+        printWindow.focus();
+        setTimeout(() => { printWindow.print(); printWindow.close(); }, 250);
+      } else {
+        // printWindow was blocked — fall back to file download
+        const blob = new Blob([html], { type: 'text/html' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href = url; a.download = 'ecs-health-report.html'; a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+      }
 
       statusEl.style.color = '#22c55e';
       statusEl.textContent = '✓ Report successfully compiled and ready.';
@@ -3069,6 +3087,7 @@ ${marked.parse(reportText)}
       barEl.style.width = '0%';
       statusEl.style.color = '#ef4444';
       statusEl.textContent = '✗ ' + err.message;
+      if (printWindow && !printWindow.closed) printWindow.close();
     } finally {
       btn.disabled = false;
     }
