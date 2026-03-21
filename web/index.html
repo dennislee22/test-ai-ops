@@ -3044,17 +3044,16 @@ inpEl.addEventListener('keydown', e=>{
       const timePart = now.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true,timeZoneName:'short'});
       const dateStr  = `${datePart}, ${timePart}`;
 
-      // ── Convert markdown to PDF-safe HTML ───────────────────────────────
-      // marked.parse handles headings/paragraphs fine but produces misaligned
-      // tables in weasyprint. We intercept markdown tables and emit proper <table>.
+      // ── Build PDF HTML ───────────────────────────────────────────────────
 
       const html = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"/>
 <title>ECS AI Ops — Cluster Health Report</title>
 <style>
+  @font-face { font-family: 'Noto Emoji'; src: local('Noto Color Emoji'), local('Apple Color Emoji'), local('Segoe UI Emoji'); }
   @media print { @page { size: A4; margin: 12mm 10mm; } body { padding: 0; } }
   * { box-sizing: border-box; }
-  body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 10px; color: #1e293b; margin: 0; padding: 10px; line-height: 1.6; background:#fff; }
+  body { font-family: 'Segoe UI', Arial, 'Noto Color Emoji', 'Apple Color Emoji', 'Segoe UI Emoji', sans-serif; font-size: 10px; color: #1e293b; margin: 0; padding: 10px; line-height: 1.6; background:#fff; }
   h1 { font-size: 16px; margin: 0 0 3px; color: #0369a1; border-bottom: 2px solid #0369a1; padding-bottom: 4px; }
   h2 { font-size: 11px; color: #fff; background: #0369a1 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; padding: 4px 8px; margin: 14px 0 6px; page-break-after: avoid; border-radius: 3px; }
   h3 { font-size: 10px; color: #0c4a6e; margin: 8px 0 3px; font-weight: 700; border-bottom: 1px solid #e2e8f0; padding-bottom: 2px; page-break-after: avoid; }
@@ -3070,13 +3069,21 @@ inpEl.addEventListener('keydown', e=>{
   code { background:#f1f5f9; border:1px solid #e2e8f0; border-radius:2px; padding:1px 3px; font-family:'Consolas','Courier New',monospace; font-size:9px; }
   table { border-collapse:collapse; width:100%; margin:4px 0 10px; font-size:9px; page-break-inside:avoid; }
   th { background:#0369a1 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; color:#fff; padding:4px 6px; text-align:left; font-weight:600; white-space:nowrap; }
-  td { padding:3px 6px; border-bottom:1px solid #e2e8f0; vertical-align:top; word-break:break-word; }
+  td { padding:3px 6px; border-bottom:1px solid #e2e8f0; vertical-align:middle; word-break:break-word; }
   tr:nth-child(even) td { background:#f8fafc !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   .meta { font-size:9px; color:#64748b; margin-bottom:10px; }
   .sep  { color:#0369a1; font-weight:700; padding:0 4px; }
   .chart-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:10px; }
   .chart-section { page-break-inside:avoid; }
   .end-of-report { text-align:center; color:#64748b; font-size:10px; border-top:1px solid #e2e8f0; border-bottom:1px solid #e2e8f0; padding:6px 0; margin:16px 0; }
+  .pv-hdr { margin:8px 0 0; padding:5px 8px; font-size:9.5px; font-weight:700; border-radius:3px 3px 0 0; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .pv-hdr-warn { background:#fef3c7; color:#92400e; border:1px solid #fcd34d; border-bottom:none; }
+  .pv-hdr-ok   { background:#dcfce7; color:#14532d; border:1px solid #86efac; border-bottom:none; }
+  .pv-table { border:1px solid #e2e8f0; border-radius:0 0 3px 3px; margin-bottom:10px; }
+  .pv-table table { margin:0; border:none; }
+  .pv-table th { background:#334155 !important; }
+  .pv-table td { border-bottom:1px solid #e2e8f0; }
+  .flag-cell { text-align:center; width:28px; font-size:15px; padding:4px 2px; }
   @media print { body { -webkit-print-color-adjust:exact; print-color-adjust:exact; } h2,h3 { page-break-after:avoid; } table { page-break-inside:avoid; } }
 </style>
 </head><body>
