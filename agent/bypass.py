@@ -9,15 +9,13 @@ NEVER_BYPASS = {
 }
 
 BYPASSABLE_TOOLS = {
-    "run_cluster_health",
     "get_node_info",
-    "get_node_taints",
     "get_namespace_status",
     "get_namespace_resource_summary",
     "get_persistent_volumes",
     "get_pv_usage",
     "get_cluster_role_bindings",
-    "get_serviceaccounts",
+    "get_service_accounts",
     "get_pod_status",
     "get_pvc_status",
     "get_service",
@@ -32,15 +30,10 @@ BYPASSABLE_TOOLS = {
     "describe_sc",
     "get_events",
     "query_prometheus_metrics",
-    "get_top_pods",
-    "get_top_nodes",
 }
 
 # Note: They must ALSO be listed in BYPASSABLE_TOOLS above.
 UNCONDITIONAL_BYPASS = {
-    "run_cluster_health",
-    "get_node_info",
-    "get_node_taints",
     "get_pod_logs",
     "describe_pod",
     "describe_pvc",
@@ -48,8 +41,6 @@ UNCONDITIONAL_BYPASS = {
     "describe_sc",
     "get_events",
     "query_prometheus_metrics",
-    "get_top_pods",
-    "get_top_nodes",
 }
 
 LIST_INTENTS = (
@@ -61,6 +52,14 @@ LIST_INTENTS = (
 
 ALWAYS_SYNTHESISE = (
     r"\bwhy\b", r"\bhow\b", r"\bwhen\b", r"\bwhere\b", r"\bwho\b",
+    r"\bok\b", r"\bokay\b",
+    r"\bissue\b", r"\bproblem\b", r"\berror\b", r"\bwarning\b",
+    r"\bfail", r"\bbroken\b", r"\bdown\b", r"\bcrash",
+    r"\bcondition\b", r"\bpending\b", r"\bcrashloop\b", 
+    r"\bnot running\b", r"\bnot ready\b",
+    r"\btell me\b", r"\bexplain\b", r"\bdescribe\b", r"\bsummar",
+    r"\bmost\b", r"\bleast\b", r"\bcompare\b", r"\brank\b",
+    r"\bhow many\b", r"\bcount\b", r"\btop\b",
 )
 
 def should_bypass_llm(tool_name: str, args: dict,
