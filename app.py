@@ -1081,41 +1081,50 @@ async def api_healthcheck_report():
         return _JSONResponse(status_code=500, content={"error": str(e)})
 
 
-@app.post("/api/reports/save", summary="Save compiled report to /report/ folder — PDF if weasyprint available, else HTML")
+@app.post("/api/reports/save", summary="Save cluster health report as PDF via ReportLab (server-side, no WeasyPrint)")
 async def api_reports_save(request: Request):
-    import uuid, time as _time, asyncio
+    """
+    Generates a PDF health report directly from live k8s data using ReportLab.
+
+    The POST body is still accepted for backward compatibility but is no longer
+    required — the PDF is built server-side so emoji and the PV-usage table
+    always render correctly regardless of frontend HTML.
+
+    Body (optional JSON):
+        { "html": "<ignored>" }   ← kept for API compatibility; not used for PDF
+
+    Returns:
+        { "filename": "ecs-health-report-YYYYMMDD-HHMMSS.pdf",
+          "size_kb": N,
+          "format": "pdf" }
+    """
+    import uuid, time as _time, asyncio, sys
     req_id = uuid.uuid4().hex[:8]
     try:
-        body = await request.json()
-        html = body.get("html", "")
-        if not html:
-            return _JSONResponse(status_code=400, content={"error": "html field required"})
         _REPORT_DIR.mkdir(parents=True, exist_ok=True)
-        ts = _time.strftime("%Y%m%d-%H%M%S")
-
-        # Try weasyprint PDF first
-        try:
-            import weasyprint as _wp
-            filename = f"ecs-health-report-{ts}.pdf"
-            filepath = _REPORT_DIR / filename
-            def _write_pdf():
-                _wp.HTML(string=html).write_pdf(str(filepath))
-            await asyncio.get_event_loop().run_in_executor(None, _write_pdf)
-            size_kb  = filepath.stat().st_size // 1024
-            config.logger.info(f"[REQ:{req_id}] /api/reports/save  saved PDF {filename} ({size_kb} KB)")
-            return {"filename": filename, "size_kb": size_kb, "format": "pdf"}
-        except ImportError:
-            pass
-        except Exception as pdf_err:
-            config.logger.warning(f"[REQ:{req_id}] /api/reports/save  weasyprint failed ({pdf_err}), falling back to HTML")
-
-        # Fallback: save as HTML
-        filename = f"ecs-health-report-{ts}.html"
+        ts       = _time.strftime("%Y%m%d-%H%M%S")
+        filename = f"ecs-health-report-{ts}.pdf"
         filepath = _REPORT_DIR / filename
-        filepath.write_text(html, encoding="utf-8")
-        size_kb  = filepath.stat().st_size // 1024
-        config.logger.info(f"[REQ:{req_id}] /api/reports/save  saved HTML {filename} ({size_kb} KB)")
-        return {"filename": filename, "size_kb": size_kb, "format": "html"}
+
+        # Add the agent/ directory to sys.path so pdf_report.py is importable
+        _agent_dir_str = str(_HERE / "agent")
+        if _agent_dir_str not in sys.path:
+            sys.path.insert(0, _agent_dir_str)
+
+        from pdf_report import build_pdf  # local ReportLab module
+
+        config.logger.info(f"[REQ:{req_id}] /api/reports/save  generating PDF via ReportLab …")
+
+        def _write_pdf():
+            build_pdf(filepath)
+
+        await asyncio.get_event_loop().run_in_executor(None, _write_pdf)
+
+        size_kb = filepath.stat().st_size // 1024
+        config.logger.info(
+            f"[REQ:{req_id}] /api/reports/save  saved PDF {filename} ({size_kb} KB)"
+        )
+        return {"filename": filename, "size_kb": size_kb, "format": "pdf"}
 
     except Exception as e:
         config.logger.error(f"[REQ:{req_id}] /api/reports/save  error: {e}")
