@@ -1324,7 +1324,7 @@ print('Saved to health-report.html')
           <!-- ── Tab: Health Report ── -->
           <div class="stab-pane" id="tab-healthreport">
             <div class="stab-pane-title">&#128203; Comprehensive Health Check Report</div>
-            <p>Generate a full cluster health report. Reports are saved to the <code>/report/</code> folder on the server and listed below for download.</p>
+            <p>Generate a full cluster health report. Reports are saved as <strong>.html files</strong> to the <code>/report/</code> folder. Open the downloaded file in your browser and use <strong>Print → Save as PDF</strong> to export as PDF.</p>
 
             <div style="background:var(--inputBg);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);line-height:1.8">
               <div style="color:var(--panelLabel);font-weight:700;margin-bottom:5px;letter-spacing:.04em">COVERS</div>
@@ -1340,7 +1340,10 @@ print('Saved to health-report.html')
             <div id="healthreport-status" style="min-height:18px;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);margin-top:8px"></div>
 
             <div id="healthreport-progress" style="display:none;margin-top:4px">
-              <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);margin-bottom:5px" id="healthreport-step">Initialising…</div>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+                <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--dimText)" id="healthreport-step">Initialising…</div>
+                <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--accent)" id="healthreport-elapsed">0s</div>
+              </div>
               <div style="background:var(--border);border-radius:4px;height:4px;overflow:hidden">
                 <div id="healthreport-bar" style="height:100%;width:0%;background:var(--accent);border-radius:4px;transition:width .4s ease"></div>
               </div>
@@ -2852,6 +2855,8 @@ inpEl.addEventListener('keydown', e=>{
   const barEl    = document.getElementById('healthreport-bar');
   const listEl   = document.getElementById('healthreport-list');
 
+  const elapsedEl = document.getElementById('healthreport-elapsed');
+
   if (!btn) return;
 
   const STEPS = [
@@ -2926,6 +2931,13 @@ inpEl.addEventListener('keydown', e=>{
         stepEl.textContent = label;
       }
     }, 3500);
+
+    let elapsedSec = 0;
+    if (elapsedEl) elapsedEl.textContent = '0s';
+    const elapsedTimer = setInterval(() => {
+      elapsedSec++;
+      if (elapsedEl) elapsedEl.textContent = `${elapsedSec}s`;
+    }, 1000);
 
     try {
       // 1. Fetch report data
@@ -3088,11 +3100,13 @@ ${marked.parse(reportText)}
 
     } catch (err) {
       clearInterval(stepTimer);
+      clearInterval(elapsedTimer);
       progress.style.display = 'none';
       barEl.style.width = '0%';
       statusEl.style.color = '#ef4444';
       statusEl.textContent = '✗ ' + err.message;
     } finally {
+      clearInterval(elapsedTimer);
       btn.disabled = false;
     }
   });
