@@ -2740,7 +2740,7 @@ def generate_healthcheck_report() -> str:
             report.append("No nodes found.")
         else:
             report.append(f"**Nodes ({len(nodes)} total)**")
-            hdr = ["| NAME | ROLES | STATUS | CPU | MEMORY | GPU |", "|---|---|---|---|---|---|"]
+            hdr = ["| NAME | ROLES | STATUS | CPU | MEMORY (GiB) | GPU |", "|---|---|---|---|---|---|"]
             rows = []
             for node in sorted(nodes, key=lambda n: n.metadata.name):
                 roles = (",".join(k.split("/")[-1] for k in (node.metadata.labels or {})
@@ -2749,14 +2749,19 @@ def generate_healthcheck_report() -> str:
                 status = "✅ Ready" if conds.get("Ready") == "True" else "🔴 NotReady"
                 alloc  = node.status.allocatable or {}
                 cpu    = alloc.get("cpu", "?")
-                mem    = alloc.get("memory", "?")
+                mem_ki = alloc.get("memory", "0Ki")
+                try:
+                    mem_gib = round(int(mem_ki.rstrip("Ki")) / (1024 * 1024), 1)
+                    mem_str = f"{mem_gib} GiB"
+                except Exception:
+                    mem_str = mem_ki
                 gpu    = next((alloc[k] for k in alloc
                                if "nvidia.com/gpu" in k or "amd.com/gpu" in k), "-")
                 flags = []
                 if conds.get("MemoryPressure") == "True": flags.append("MemPressure")
                 if conds.get("DiskPressure")   == "True": flags.append("DiskPressure")
                 status_str = status + (f" ⚠️ {','.join(flags)}" if flags else "")
-                rows.append(f"| `{node.metadata.name}` | {roles} | {status_str} | {cpu} | {mem} | {gpu} |")
+                rows.append(f"| `{node.metadata.name}` | {roles} | {status_str} | {cpu} | {mem_str} | {gpu} |")
             report.extend(_table_cap(rows, hdr))
 
             report.append("")
@@ -2950,7 +2955,7 @@ def generate_healthcheck_report() -> str:
         unbound = [p for p in pvcs if p.status.phase != "Bound"]
         report.append("")
         if unbound:
-            report.append(f"**PersistentVolumeClaims — 🔴 {len(unbound)} not Bound**")
+            report.append(f"**PersistentVolumeClaims — 🔴 {len(unbound)} not Bound / {len(bound)} Bound / {len(pvcs)} total**")
             hdr = ["| NAMESPACE | PVC | PHASE | CLASS | CAPACITY |",
                    "|---|---|---|---|---|"]
             rows = [
@@ -2961,9 +2966,9 @@ def generate_healthcheck_report() -> str:
                 for p in unbound
             ]
             report.extend(_table_cap(rows, hdr))
-            report.append(f"✅ {len(bound)} PVCs Bound.")
+            report.append(f"✅ {len(bound)} PVCs Bound, 0 not Bound.")
         else:
-            report.append(f"✅ All {len(bound)} PVCs Bound.")
+            report.append(f"✅ All {len(pvcs)} PVCs Bound — 0 not Bound.")
     except Exception as e:
         report.append(f"⚠️  Could not gather PVC data: {e}")
 
@@ -3042,8 +3047,19 @@ def generate_healthcheck_report() -> str:
 
         pv_rows.sort(key=lambda x: x[0], reverse=True)
         if pv_rows:
+            red_rows   = [r for r in pv_rows if r[0] >= 90]
+            warn_rows  = [r for r in pv_rows if 80 <= r[0] < 90]
+            green_rows = [r for r in pv_rows if r[0] < 80]
             hdr = ["| | NAMESPACE / PVC | USAGE | USED | TOTAL |", "|---|---|---|---|---|"]
-            report.extend(_table_cap([r[1] for r in pv_rows], hdr))
+            display_rows = (
+                [r[1] for r in red_rows] +
+                [r[1] for r in warn_rows] +
+                [r[1] for r in green_rows[:5]]
+            )
+            report.extend([hdr[0], hdr[1]] + display_rows)
+            hidden_green = len(green_rows) - 5
+            if hidden_green > 0:
+                report.append(f"_… and {hidden_green} more healthy volume(s) not shown._")
         else:
             report.append("✅ No volume usage data available (no mounted running pods found).")
         if pv_skip:
@@ -3218,29 +3234,34 @@ def generate_healthcheck_report() -> str:
                                f"{_cap([p.metadata.name for p in not_ready_dns])}")
             else:
                 report.append(f"✅ CoreDNS: {len(dns_pods)}/{len(dns_pods)} pods ready")
+
+            # DNS resolution test — try 2 cluster service names
+            from kubernetes.stream import stream as _k8s_stream
+            dns_test_pod = next((p for p in dns_pods if p.status.phase == "Running"), None)
+            if dns_test_pod:
+                test_targets = ["kubernetes.default.svc.cluster.local", "kube-dns.kube-system.svc.cluster.local"]
+                report.append("**CoreDNS Resolution Tests:**")
+                for target in test_targets:
+                    try:
+                        resp = _k8s_stream(
+                            _core.connect_get_namespaced_pod_exec,
+                            dns_test_pod.metadata.name, DNS_NS,
+                            command=["/bin/sh", "-c", f"nslookup {target} 2>&1 | head -5"],
+                            stderr=False, stdin=False, stdout=True, tty=False, _preload_content=True)
+                        out = (resp.strip() if isinstance(resp, str) else "")
+                        resolved = "Address" in out or "answer" in out.lower()
+                        flag = "✅" if resolved else "❌"
+                        report.append(f"{flag} `nslookup {target}` → {'resolved' if resolved else 'FAILED'}")
+                        if not resolved:
+                            report.append(f"  ```\n  {out[:200]}\n  ```")
+                    except Exception as ex:
+                        report.append(f"⚠️  `nslookup {target}` — could not exec: {ex}")
         else:
             report.append("⚠️  CoreDNS: no DNS pods found in kube-system")
     except Exception as e:
         report.append(f"⚠️  CoreDNS check failed: {e}")
 
-    try:
-        ings = _net.list_ingress_for_all_namespaces().items
-        no_lb = [i for i in ings
-                 if not (i.status.load_balancer and i.status.load_balancer.ingress)]
-        if no_lb:
-            report.append(f"⚠️  {len(no_lb)}/{len(ings)} Ingresses missing LB IP:")
-            hdr = ["| NAMESPACE | NAME | HOSTS |", "|---|---|---|"]
-            rows = []
-            for i in no_lb:
-                hosts = ", ".join(r.host or "*" for r in (i.spec.rules or []))
-                rows.append(f"| `{i.metadata.namespace}` | `{i.metadata.name}` | {hosts or '-'} |")
-            report.extend(_table_cap(rows, hdr))
-        elif ings:
-            report.append(f"✅ {len(ings)} Ingresses — all have LB IP")
-        else:
-            report.append("✅ No Ingresses defined")
-    except Exception as e:
-        report.append(f"⚠️  Ingresses: {e}")
+    # Ingress list removed (point 6)
 
     try:
         nps      = _net.list_network_policy_for_all_namespaces().items
@@ -3319,25 +3340,14 @@ def generate_healthcheck_report() -> str:
     except Exception as e:
         report.append(f"⚠️  Webhooks: {e}")
 
-    report.append(_section("8. Recent Diagnostics"))
+    report.append(_section("8. Control Plane & Recent Diagnostics"))
 
+    # Full control plane status using get_control_plane_status
     try:
-        pods = _core.list_namespaced_pod(namespace="kube-system").items
-        core_components = ["kube-apiserver", "etcd", "kube-controller-manager", "kube-scheduler"]
-        cp_pods = [p for p in pods if any(comp in p.metadata.name for comp in core_components)]
-        if cp_pods:
-            cp_bad = [p for p in cp_pods
-                      if sum(1 for cs in (p.status.container_statuses or []) if cs.ready)
-                      < len(p.spec.containers or [])]
-            if cp_bad:
-                report.append(f"🔴 Control plane: {len(cp_bad)} pod(s) not ready — "
-                               f"{_cap([p.metadata.name for p in cp_bad])}")
-            else:
-                report.append(f"✅ Control plane: {len(cp_pods)} pod(s) ready")
-        else:
-            report.append("✅ Control plane pods not visible (managed cluster)")
+        cp_report = get_control_plane_status()
+        report.append(cp_report)
     except Exception as e:
-        report.append(f"⚠️  Control plane: {e}")
+        report.append(f"⚠️  Control plane status: {e}")
 
     try:
         events = _core.list_event_for_all_namespaces(
@@ -3369,6 +3379,10 @@ def generate_healthcheck_report() -> str:
     report.append(f"\n{_DIV}")
     report.append("💬 This is your complete health check report.")
     report.append("📋 Ask the chatbot to drill into any flagged area for deeper diagnostics.")
+    report.append("")
+    report.append(f"{'─' * 60}")
+    report.append("**— End of Report —**")
+    report.append(f"{'─' * 60}")
 
     return "\n".join(report)
 
