@@ -1324,7 +1324,7 @@ print('Saved to health-report.html')
           <!-- ── Tab: Health Report ── -->
           <div class="stab-pane" id="tab-healthreport">
             <div class="stab-pane-title">&#128203; Comprehensive Health Check Report</div>
-            <p>Generate a full cluster health report. Reports are saved as <strong>.html files</strong> to the <code>/report/</code> folder. Open the downloaded file in your browser and use <strong>Print → Save as PDF</strong> to export as PDF.</p>
+            <p>Generate a full cluster health report based on the following metrics, gathered from the connected live cluster.</p>
 
             <div style="background:var(--inputBg);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);line-height:1.8">
               <div style="color:var(--panelLabel);font-weight:700;margin-bottom:5px;letter-spacing:.04em">COVERS</div>
@@ -3045,6 +3045,75 @@ inpEl.addEventListener('keydown', e=>{
       const timePart = now.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true,timeZoneName:'short'});
       const dateStr  = `${datePart}, ${timePart}`;
 
+      // ── Convert markdown to PDF-safe HTML ───────────────────────────────
+      // marked.parse handles headings/paragraphs fine but produces misaligned
+      // tables in weasyprint. We intercept markdown tables and emit proper <table>.
+      function mdToHtml(md) {
+        const lines  = md.split('\n');
+        const out    = [];
+        let inTable  = false;
+        let tableHtml = '';
+
+        const flushTable = () => {
+          if (tableHtml) { out.push(tableHtml + '</tbody></table>'); tableHtml = ''; }
+          inTable = false;
+        };
+
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          const isTableRow = /^\s*\|/.test(line);
+          const isSepRow   = /^\s*\|[\s|:-]+\|\s*$/.test(line);
+
+          if (isTableRow && isSepRow) {
+            // Separator row — skip, already handled
+            continue;
+          }
+
+          if (isTableRow) {
+            const cells = line.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|');
+            // Check if next line is separator (means this is a header row)
+            const nextLine = lines[i + 1] || '';
+            const isHeader = /^\s*\|[\s|:-]+\|\s*$/.test(nextLine);
+
+            if (isHeader && !inTable) {
+              flushTable();
+              inTable = true;
+              const ths = cells.map(c => `<th>${c.trim()}</th>`).join('');
+              tableHtml = `<table><thead><tr>${ths}</tr></thead><tbody>`;
+              i++; // skip separator
+              continue;
+            }
+            if (!inTable) {
+              // data row with no header — start table
+              inTable = true;
+              tableHtml = `<table><thead></thead><tbody>`;
+            }
+            const tds = cells.map(c => {
+              let v = c.trim();
+              // backtick code
+              v = v.replace(/`([^`]+)`/g, '<code>$1</code>');
+              // bold
+              v = v.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+              return `<td>${v}</td>`;
+            }).join('');
+            tableHtml += `<tr>${tds}</tr>`;
+            continue;
+          }
+
+          // Non-table line
+          if (inTable) flushTable();
+
+          // Pass through to marked for everything else (headings, lists, bold, hr)
+          out.push(line);
+        }
+        if (inTable) flushTable();
+
+        // Join and let marked handle non-table markdown
+        return marked.parse(out.join('\n'));
+      }
+
+      const reportHtml = mdToHtml(reportText);
+
       const html = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"/>
 <title>ECS AI Ops — Cluster Health Report</title>
@@ -3061,29 +3130,32 @@ inpEl.addEventListener('keydown', e=>{
         white-space:pre-wrap; overflow-wrap:break-word; font-family:'Consolas','Courier New',monospace; font-size:9.5px; margin:3px 0 7px; }
   code { background:#f1f5f9; border:1px solid #e2e8f0; border-radius:2px; padding:1px 3px;
          font-family:'Consolas','Courier New',monospace; font-size:9.5px; }
-  table { border-collapse:collapse; width:100%; margin:4px 0 10px; font-size:9.5px; page-break-inside:avoid; }
+  table { border-collapse:collapse; width:100%; margin:4px 0 10px; font-size:9.5px; page-break-inside:avoid; table-layout:auto; }
   th { background:#0369a1 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact;
-       color:#fff; padding:4px 6px; text-align:left; font-weight:600; font-size:9px; }
+       color:#fff; padding:4px 6px; text-align:left; font-weight:600; font-size:9px; white-space:nowrap; }
   td { padding:3px 6px; border-bottom:1px solid #e2e8f0; vertical-align:top; word-break:break-word; }
   tr:nth-child(even) td { background:#f8fafc !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   .meta { font-size:9px; color:#64748b; margin-bottom:10px; }
   .sep  { color:#0369a1; font-weight:700; padding:0 4px; }
   .chart-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:10px; }
   .chart-section { page-break-inside:avoid; }
+  .end-of-report { text-align:center; color:#64748b; font-size:10px; border-top:1px solid #e2e8f0;
+                   border-bottom:1px solid #e2e8f0; padding:6px 0; margin:16px 0; }
   @media print { body { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
     h2,h3 { page-break-after:avoid; } table { page-break-inside:avoid; } }
 </style>
 </head><body>
-<h1>&#128203; ECS AI Ops — Cluster Health Report</h1>
+<h1>&#128203; ECS AI Ops &mdash; Cluster Health Report</h1>
 <div class="meta">Generated: ${dateStr} <span class="sep">|</span> Timezone: ${USER_TIMEZONE}</div>
-${marked.parse(reportText)}
+${reportHtml}
 <hr/>
-<h2>&#128200; Pod Resource Usage — Last 24 Hours</h2>
+<h2>&#128200; Pod Resource Usage &mdash; Last 24 Hours</h2>
 <div class="chart-grid chart-section">${chartsCpu1d}${chartsMem1d}</div>
-<h2>&#128200; Pod Resource Usage — Last 7 Days</h2>
+<h2>&#128200; Pod Resource Usage &mdash; Last 7 Days</h2>
 <div class="chart-grid chart-section">${chartsCpu1w}${chartsMem1w}</div>
-<h2>&#128200; Pod Resource Usage — Last 30 Days</h2>
+<h2>&#128200; Pod Resource Usage &mdash; Last 30 Days</h2>
 <div class="chart-grid chart-section">${chartsCpu1m}${chartsMem1m}</div>
+<div class="end-of-report">&mdash; End of Report &mdash;</div>
 </body></html>`;
 
       // 3. Save to server
