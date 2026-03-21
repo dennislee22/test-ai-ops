@@ -1081,13 +1081,13 @@ async def api_healthcheck_report():
         return _JSONResponse(status_code=500, content={"error": str(e)})
 
 
-@app.post("/api/reports/save", summary="Save compiled report to /report/ folder as PDF via pdfkit/wkhtmltopdf")
+@app.post("/api/reports/save", summary="Save compiled report to /report/ folder as PDF via Playwright/Chromium")
 async def api_reports_save(request: Request):
     """
     Receives the fully-assembled HTML document from the frontend and converts
-    it to PDF using pdfkit (wkhtmltopdf).  wkhtmltopdf uses the WebKit engine
-    so emoji (NotoColorEmoji), -webkit-print-color-adjust, and all table
-    styles render correctly — including the PV usage table.
+    it to PDF using Playwright (headless Chromium).  Chromium renders emoji
+    (NotoColorEmoji), print-color-adjust, per-section th colours, and SVG
+    charts correctly — identical to what the browser displays.
 
     Body JSON:
         { "html": "<complete <!DOCTYPE html> document>" }
@@ -1110,67 +1110,32 @@ async def api_reports_save(request: Request):
         filename = f"ecs-health-report-{ts}.pdf"
         filepath = _REPORT_DIR / filename
 
-        try:
-            import pdfkit as _pdfkit
-            import shutil
-
-            # Locate wkhtmltopdf — check common install paths explicitly so the
-            # binary is found even when the server's PATH differs from the shell.
-            _WK_CANDIDATES = [
-                "/usr/bin/wkhtmltopdf",
-                "/usr/local/bin/wkhtmltopdf",
-                "/opt/bin/wkhtmltopdf",
-            ]
-            _wk_bin = shutil.which("wkhtmltopdf")
-            if not _wk_bin:
-                _wk_bin = next((p for p in _WK_CANDIDATES if __import__("os").path.isfile(p)), None)
-            if not _wk_bin:
-                raise FileNotFoundError(
-                    "wkhtmltopdf binary not found in PATH or common locations. "
-                    "Install it with: apt-get install wkhtmltopdf"
+        def _write_pdf():
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch()
+                page    = browser.new_page()
+                page.set_content(html, wait_until="networkidle")
+                page.pdf(
+                    path=str(filepath),
+                    format="A4",
+                    margin={"top": "15mm", "bottom": "15mm",
+                            "left": "14mm", "right": "14mm"},
+                    print_background=True,   # honours print-color-adjust / background colours
                 )
+                browser.close()
 
-            _pdf_cfg = _pdfkit.configuration(wkhtmltopdf=_wk_bin)
-            _PDF_OPTS = {
-                "quiet":                    "",
-                "encoding":                 "UTF-8",
-                "page-size":                "A4",
-                "margin-top":               "15mm",
-                "margin-bottom":            "15mm",
-                "margin-left":              "14mm",
-                "margin-right":             "14mm",
-                "enable-local-file-access": "",   # allows local SVG/font refs
-                "print-media-type":         "",   # honour @media print rules
-                "no-outline":               "",   # suppress bookmark tree noise
-                "disable-smart-shrinking":  "",   # prevent layout rescaling
-            }
+        config.logger.info(f"[REQ:{req_id}] /api/reports/save  generating PDF via Playwright …")
+        await asyncio.get_event_loop().run_in_executor(None, _write_pdf)
+        size_kb = filepath.stat().st_size // 1024
+        config.logger.info(
+            f"[REQ:{req_id}] /api/reports/save  saved PDF {filename} ({size_kb} KB)"
+        )
+        return {"filename": filename, "size_kb": size_kb, "format": "pdf"}
 
-            def _write_pdf():
-                _pdfkit.from_string(html, str(filepath),
-                                    options=_PDF_OPTS, configuration=_pdf_cfg)
-
-            config.logger.info(
-                f"[REQ:{req_id}] /api/reports/save  generating PDF via pdfkit ({_wk_bin}) …"
-            )
-            await asyncio.get_event_loop().run_in_executor(None, _write_pdf)
-            size_kb = filepath.stat().st_size // 1024
-            config.logger.info(
-                f"[REQ:{req_id}] /api/reports/save  saved PDF {filename} ({size_kb} KB)"
-            )
-            return {"filename": filename, "size_kb": size_kb, "format": "pdf"}
-
-        except ImportError:
-            pdf_err_msg = "pdfkit is not installed (pip install pdfkit)"
-            config.logger.error(f"[REQ:{req_id}] /api/reports/save  {pdf_err_msg}")
-            return _JSONResponse(status_code=500, content={"error": pdf_err_msg})
-        except FileNotFoundError as e:
-            pdf_err_msg = str(e)
-            config.logger.error(f"[REQ:{req_id}] /api/reports/save  {pdf_err_msg}")
-            return _JSONResponse(status_code=500, content={"error": pdf_err_msg})
-        except Exception as pdf_err:
-            pdf_err_msg = f"pdfkit failed: {pdf_err}"
-            config.logger.error(f"[REQ:{req_id}] /api/reports/save  {pdf_err_msg}")
-            return _JSONResponse(status_code=500, content={"error": pdf_err_msg})
+    except Exception as e:
+        config.logger.error(f"[REQ:{req_id}] /api/reports/save  error: {e}")
+        return _JSONResponse(status_code=500, content={"error": str(e)})
 
     except Exception as e:
         config.logger.error(f"[REQ:{req_id}] /api/reports/save  error: {e}")
