@@ -2825,6 +2825,31 @@ async function sendMessage(override){
         }
       }
     }
+
+    // Flush any remaining buffered data after stream closes.
+    // The result JSON can be large and may arrive split across the final two TCP
+    // chunks — the last chunk carries only the closing \n\n, so the data sits in
+    // the tail buffer and is never processed by the loop above.
+    if (!resultReceived && buffer.trim()) {
+      const line = buffer.trim();
+      if (line.startsWith('data:')) {
+        try {
+          const payload = JSON.parse(line.slice(5).trim());
+          if (payload.type === 'result') {
+            resultReceived = true;
+            _stopElapsedCounter();
+            removeThinking();
+            appendAi(payload.response, payload.tools_used, payload.iterations,
+                     payload.elapsed_seconds, payload.status_updates,
+                     payload.clarification_needed, skipSynth);
+          } else if (payload.type === 'error') {
+            _stopElapsedCounter();
+            removeThinking();
+            appendAi('⚠ Agent error: '+payload.text, [], 0, null, [], false, skipSynth);
+          }
+        } catch(e) {}
+      }
+    }
   } catch(err){
     _stopElapsedCounter();
     if(resultReceived) return;
