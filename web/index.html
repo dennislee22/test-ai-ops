@@ -3048,81 +3048,6 @@ inpEl.addEventListener('keydown', e=>{
       // ── Convert markdown to PDF-safe HTML ───────────────────────────────
       // marked.parse handles headings/paragraphs fine but produces misaligned
       // tables in weasyprint. We intercept markdown tables and emit proper <table>.
-      function mdToHtml(md) {
-        const lines = md.split('\n');
-        const out   = [];
-        let inTable  = false, tableHtml = '';
-        let inHtml   = false, htmlBuf   = [];
-        let mdBuf    = [];
-
-        const flushTable = () => {
-          if (tableHtml) { out.push(tableHtml + '</tbody></table>'); tableHtml = ''; }
-          inTable = false;
-        };
-        const flushMd = () => {
-          if (mdBuf.length) { out.push(marked.parse(mdBuf.join('\n'))); mdBuf = []; }
-        };
-        const flushHtml = () => {
-          if (htmlBuf.length) { out.push(htmlBuf.join('\n')); htmlBuf = []; }
-          inHtml = false;
-        };
-
-        for (let i = 0; i < lines.length; i++) {
-          const line    = lines[i];
-          const trimmed = line.trim();
-
-          // Raw HTML block: line starts with < tag (not closing or comment)
-          if (!inTable && !inHtml &&
-              trimmed.startsWith('<') && !trimmed.startsWith('</') && !trimmed.startsWith('<!--')) {
-            flushMd();
-            inHtml = true;
-          }
-          if (inHtml) {
-            htmlBuf.push(line);
-            // Close when we hit an empty line after block content, or a clear non-HTML line
-            const next = (lines[i + 1] || '').trim();
-            if (!next && htmlBuf.length) { flushHtml(); }
-            continue;
-          }
-
-          // Markdown pipe table
-          const isTableRow = /^\s*\|/.test(line);
-          const isSepRow   = /^\s*\|[\s|:-]+\|\s*$/.test(line);
-          if (isTableRow && isSepRow) continue;
-          if (isTableRow) {
-            flushMd();
-            const cells    = line.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|');
-            const nextLine = lines[i + 1] || '';
-            const isHeader = /^\s*\|[\s|:-]+\|\s*$/.test(nextLine);
-            if (isHeader && !inTable) {
-              flushTable();
-              inTable   = true;
-              const ths = cells.map(c => '<th>' + c.trim() + '</th>').join('');
-              tableHtml = '<table><thead><tr>' + ths + '</tr></thead><tbody>';
-              i++;
-              continue;
-            }
-            if (!inTable) { inTable = true; tableHtml = '<table><tbody>'; }
-            const tds = cells.map(c => {
-              let v = c.trim()
-                .replace(/`([^`]+)`/g, '<code>$1</code>')
-                .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-              return '<td>' + v + '</td>';
-            }).join('');
-            tableHtml += '<tr>' + tds + '</tr>';
-            continue;
-          }
-
-          if (inTable) flushTable();
-          mdBuf.push(line);
-        }
-        if (inTable)       flushTable();
-        if (inHtml)        flushHtml();
-        if (mdBuf.length)  flushMd();
-        return out.join('\n');
-      }
-
-      const reportHtml = mdToHtml(reportText);
 
       const html = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"/>
@@ -3130,38 +3055,35 @@ inpEl.addEventListener('keydown', e=>{
 <style>
   @media print { @page { size: A4; margin: 12mm 10mm; } body { padding: 0; } }
   * { box-sizing: border-box; }
-  body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 10px; color: #1e293b; margin: 0; padding: 10px; line-height: 1.5; background:#fff; }
-  h1 { font-size: 16px; margin: 0 0 3px; color: #0369a1; }
-  h2 { font-size: 11.5px; color: #075985; border-bottom: 1px solid #bae6fd; padding-bottom: 2px; margin: 16px 0 6px; page-break-after: avoid; }
-  h3 { font-size: 10.5px; color: #0c4a6e; margin: 10px 0 3px; page-break-after: avoid; }
-  p  { margin: 2px 0 6px; }
-  hr { border: none; border-top: 1px solid #e2e8f0; margin: 8px 0; }
-  pre { background:#f8fafc; border:1px solid #e2e8f0; border-radius:3px; padding:5px 7px;
-        white-space:pre-wrap; overflow-wrap:break-word; font-family:'Consolas','Courier New',monospace; font-size:9.5px; margin:3px 0 7px; }
-  code { background:#f1f5f9; border:1px solid #e2e8f0; border-radius:2px; padding:1px 3px;
-         font-family:'Consolas','Courier New',monospace; font-size:9.5px; }
-  table { border-collapse:collapse; width:100%; margin:4px 0 10px; font-size:9.5px; page-break-inside:avoid; table-layout:auto; }
-  th { background:#0369a1 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact;
-       color:#fff; padding:4px 6px; text-align:left; font-weight:600; font-size:9px; white-space:nowrap; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 10px; color: #1e293b; margin: 0; padding: 10px; line-height: 1.6; background:#fff; }
+  h1 { font-size: 16px; margin: 0 0 3px; color: #0369a1; border-bottom: 2px solid #0369a1; padding-bottom: 4px; }
+  h2 { font-size: 11px; color: #fff; background: #0369a1 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; padding: 4px 8px; margin: 14px 0 6px; page-break-after: avoid; border-radius: 3px; }
+  h3 { font-size: 10px; color: #0c4a6e; margin: 8px 0 3px; font-weight: 700; border-bottom: 1px solid #e2e8f0; padding-bottom: 2px; page-break-after: avoid; }
+  p  { margin: 2px 0 4px; }
+  p.ok   { color: #16a34a; }
+  p.warn { color: #d97706; }
+  p.err  { color: #dc2626; }
+  p.note { color: #64748b; font-style: italic; font-size: 9px; }
+  p.indent { margin-left: 12px; }
+  div.scorecard { background: #f8fafc; border-left: 3px solid #0369a1; padding: 6px 10px; margin: 4px 0 10px; }
+  div.scorecard p { margin: 1px 0; font-size: 9.5px; }
+  hr { border: none; border-top: 1px solid #e2e8f0; margin: 10px 0; }
+  code { background:#f1f5f9; border:1px solid #e2e8f0; border-radius:2px; padding:1px 3px; font-family:'Consolas','Courier New',monospace; font-size:9px; }
+  table { border-collapse:collapse; width:100%; margin:4px 0 10px; font-size:9px; page-break-inside:avoid; }
+  th { background:#0369a1 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; color:#fff; padding:4px 6px; text-align:left; font-weight:600; white-space:nowrap; }
   td { padding:3px 6px; border-bottom:1px solid #e2e8f0; vertical-align:top; word-break:break-word; }
   tr:nth-child(even) td { background:#f8fafc !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   .meta { font-size:9px; color:#64748b; margin-bottom:10px; }
   .sep  { color:#0369a1; font-weight:700; padding:0 4px; }
   .chart-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:10px; }
   .chart-section { page-break-inside:avoid; }
-  .rpt-section { font-size:11px; color:#0369a1; border-bottom:2px solid #0369a1; padding-bottom:2px; margin:14px 0 6px; page-break-after:avoid; }
-  .rpt-sub { font-size:10px; color:#475569; font-style:italic; margin:8px 0 4px; }
-  .end-of-report { text-align:center; color:#64748b; font-size:10px; border-top:1px solid #e2e8f0;
-                   border-bottom:1px solid #e2e8f0; padding:6px 0; margin:16px 0; }
-  .pv-table table { margin:4px 0 6px; }
-  .pv-table td:first-child { font-size:13px; }
-  @media print { body { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-    h2,h3 { page-break-after:avoid; } table { page-break-inside:avoid; } }
+  .end-of-report { text-align:center; color:#64748b; font-size:10px; border-top:1px solid #e2e8f0; border-bottom:1px solid #e2e8f0; padding:6px 0; margin:16px 0; }
+  @media print { body { -webkit-print-color-adjust:exact; print-color-adjust:exact; } h2,h3 { page-break-after:avoid; } table { page-break-inside:avoid; } }
 </style>
 </head><body>
 <h1>&#128203; ECS AI Ops &mdash; Cluster Health Report</h1>
 <div class="meta">Generated: ${dateStr} <span class="sep">|</span> Timezone: ${USER_TIMEZONE}</div>
-${reportHtml}
+${reportText}
 <hr/>
 <h2>&#128200; Pod Resource Usage &mdash; Last 24 Hours</h2>
 <div class="chart-grid chart-section">${chartsCpu1d}${chartsMem1d}</div>
