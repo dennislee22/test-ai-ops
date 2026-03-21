@@ -1047,16 +1047,19 @@ async def api_ask(req: AskRequest):
         return {"question": req.q, "answer": result["response"], "tools_used": result["tools_used"], "iterations": result["iterations"], "elapsed_seconds": result["elapsed_seconds"]}
     except Exception as e: return _JSONResponse(status_code=500, content={"error": str(e)})
 
-@app.get("/api/healthcheck-report", summary="Run generate_healthcheck_report directly, no LLM involved")
+_REPORT_DIR = _HERE / "report"
+
+@app.get("/api/healthcheck-report", summary="Generate health report, save to /report/, return filename")
 async def api_healthcheck_report():
     import asyncio, re as _re, uuid, time as _time
     req_id  = uuid.uuid4().hex[:8]
     t_start = _time.monotonic()
     config.logger.info(f"[REQ:{req_id}] /api/healthcheck-report  generating full cluster health report")
     try:
+        _REPORT_DIR.mkdir(parents=True, exist_ok=True)
+
         report = await asyncio.get_event_loop().run_in_executor(
             None, _tk.generate_healthcheck_report)
-
         report = _re.sub(r'```[^\n]*\n?', '', report)
         report = _re.sub(r'\n{3,}', '\n\n', report).strip()
 
@@ -1071,10 +1074,66 @@ async def api_healthcheck_report():
         config.logger.info(
             f"[REQ:{req_id}] /api/healthcheck-report  done elapsed={elapsed:.1f}s "
             f"report={len(report)}chars charts={list(charts.keys())}")
+
         return {"report": report, "charts": charts}
     except Exception as e:
         config.logger.error(f"[REQ:{req_id}] /api/healthcheck-report  error: {e}")
         return _JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/api/reports/save", summary="Save compiled HTML report to /report/ folder")
+async def api_reports_save(request: Request):
+    import uuid, time as _time
+    req_id = uuid.uuid4().hex[:8]
+    try:
+        body     = await request.json()
+        html     = body.get("html", "")
+        if not html:
+            return _JSONResponse(status_code=400, content={"error": "html field required"})
+        _REPORT_DIR.mkdir(parents=True, exist_ok=True)
+        ts       = _time.strftime("%Y%m%d-%H%M%S")
+        filename = f"ecs-health-report-{ts}.html"
+        filepath = _REPORT_DIR / filename
+        filepath.write_text(html, encoding="utf-8")
+        size_kb  = filepath.stat().st_size // 1024
+        config.logger.info(f"[REQ:{req_id}] /api/reports/save  saved {filename} ({size_kb} KB)")
+        return {"filename": filename, "size_kb": size_kb}
+    except Exception as e:
+        config.logger.error(f"[REQ:{req_id}] /api/reports/save  error: {e}")
+        return _JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/api/reports", summary="List report files present in /report/ folder")
+async def api_reports_list():
+    try:
+        if not _REPORT_DIR.exists():
+            return {"reports": []}
+        files = []
+        for f in sorted(_REPORT_DIR.glob("*.html"), reverse=True):
+            stat = f.stat()
+            files.append({
+                "filename": f.name,
+                "size_kb":  stat.st_size // 1024,
+                "created":  stat.st_mtime,
+            })
+        return {"reports": files}
+    except Exception as e:
+        return _JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/api/reports/{filename}", summary="Download a report file from /report/ folder")
+async def api_reports_download(filename: str):
+    import re
+    if not re.match(r'^[\w\-\.]+\.html$', filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    filepath = _REPORT_DIR / filename
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail=f"{filename} not found")
+    return FileResponse(
+        path=str(filepath),
+        media_type="text/html",
+        filename=filename,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 def _fetch_report_charts() -> dict:
