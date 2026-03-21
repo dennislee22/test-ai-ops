@@ -981,6 +981,7 @@ NUM_GPU=0</code></pre>
           <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/rag/stats</code></td><td>LanceDB document and Excel row statistics</td></tr>
           <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/rag/files</code></td><td>List all previously ingested filenames</td></tr>
           <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/rag/query</code></td><td>RAG-only query for Knowledge Bot (no LLM, no truncation)</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/healthcheck-report</code></td><td>Generate full cluster health report with Prometheus charts (no LLM) — use with <code>curl | python3</code> to save as HTML</td></tr>
         </table>
 
         <h3>Examples</h3>
@@ -992,7 +993,16 @@ curl -s -X POST http://localhost:9000/api/ask \
 # Call a specific K8s tool directly
 curl -s -X POST http://localhost:9000/api/tool \
      -H "Content-Type: application/json" \
-     -d '{"name":"get_pod_status","args":{"namespace":"all","show_all":true}}'</code></pre>
+     -d '{"name":"get_pod_status","args":{"namespace":"all","show_all":true}}'
+
+# Generate a full cluster health report and save as HTML
+curl -s http://localhost:9000/api/healthcheck-report \
+  | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+open('health-report.html','w').write(d.get('report','No report returned'))
+print('Saved to health-report.html')
+"</code></pre>
 
         <!-- ── Configuration ──────────────────────────────────────────── -->
         <h2>Environment Variables</h2>
@@ -2878,88 +2888,164 @@ inpEl.addEventListener('keydown', e=>{
       }
 
       const data = await res.json();
-      const reportText = data.report || '';
-      const topCpu     = data.top_cpu || [];
-      const topMem     = data.top_mem || [];
+      const reportText = data.report  || '';
+      const charts     = data.charts  || {};
 
       if (!reportText || reportText.startsWith('[ERROR]')) {
         throw new Error(reportText || 'No report content returned.');
       }
 
-      // ── Build SVG horizontal bar chart ────────────────────────────────────
-      function buildBarChart(rows, valueKey, unit, title, color) {
-        if (!rows.length) return `<p style="color:#64748b;font-size:11px">No metrics-server data available.</p>`;
-        const maxVal = Math.max(...rows.map(r => r[valueKey]), 1);
-        const BAR_W  = 340, ROW_H = 22, LABEL_W = 260, PAD = 8;
-        const H      = rows.length * ROW_H + PAD * 2;
-        const W      = LABEL_W + BAR_W + 80;
-        let bars = '';
-        rows.forEach((r, i) => {
-          const y    = PAD + i * ROW_H;
-          const bw   = Math.max(2, (r[valueKey] / maxVal) * BAR_W);
-          const lbl  = r.label.length > 42 ? r.label.slice(0, 40) + '…' : r.label;
-          const val  = unit === 'm' ? `${r[valueKey]}m` : `${Math.round(r[valueKey])}Mi`;
-          bars += `<text x="${LABEL_W - 6}" y="${y + 14}" text-anchor="end" font-size="9" font-family="Consolas,monospace" fill="#334155">${lbl}</text>`;
-          bars += `<rect x="${LABEL_W}" y="${y + 4}" width="${bw}" height="${ROW_H - 8}" rx="2" fill="${color}" opacity="0.85"/>`;
-          bars += `<text x="${LABEL_W + bw + 5}" y="${y + 14}" font-size="9" font-family="Consolas,monospace" fill="#0369a1" font-weight="600">${val}</text>`;
+      // ── SVG line chart builder (time-series) ─────────────────────────────
+      const CHART_COLORS = [
+        '#0369a1','#0891b2','#059669','#d97706','#7c3aed',
+        '#db2777','#ea580c','#65a30d','#0e7490','#9333ea',
+      ];
+
+      function buildLineChart(series, unit, title) {
+        if (!series || !series.length) {
+          return `<div style="font-size:10px;color:#94a3b8;padding:8px 0">No Prometheus data for this period.</div>`;
+        }
+        const W = 480, H = 160, ML = 44, MR = 6, MT = 8, MB = 22;
+        const PW = W - ML - MR, PH = H - MT - MB;
+
+        let tMin = Infinity, tMax = -Infinity, vMin = Infinity, vMax = -Infinity;
+        series.forEach(s => s.values.forEach(([t, v]) => {
+          if (t < tMin) tMin = t; if (t > tMax) tMax = t;
+          if (v < vMin) vMin = v; if (v > vMax) vMax = v;
+        }));
+        if (vMin === vMax) { vMin = 0; vMax = Math.max(vMax * 1.2, 1); }
+        const yLo = Math.max(0, vMin - (vMax - vMin) * 0.08);
+        const yHi = vMax + (vMax - vMin) * 0.08;
+
+        const xS = t => ML + ((t - tMin) / (tMax - tMin || 1)) * PW;
+        const yS = v => MT + PH - ((v - yLo) / (yHi - yLo || 1)) * PH;
+
+        const fmt = v => unit === 'm'   ? (v >= 1000 ? `${(v/1000).toFixed(1)}C` : `${Math.round(v)}m`)
+                       : unit === 'MiB' ? (v >= 1024 ? `${(v/1024).toFixed(1)}Gi` : `${Math.round(v)}Mi`)
+                       : v.toFixed(1);
+
+        const TICKS = 4;
+        let grid = '', xAxis = '';
+        for (let i = 0; i <= TICKS; i++) {
+          const v = yLo + (yHi - yLo) * (i / TICKS);
+          const y = yS(v).toFixed(1);
+          grid   += `<line x1="${ML}" y1="${y}" x2="${ML+PW}" y2="${y}" stroke="#e2e8f0" stroke-width="1"/>`;
+          grid   += `<text x="${ML-3}" y="${y}" text-anchor="end" dominant-baseline="middle" font-size="8" font-family="Consolas,monospace" fill="#64748b">${fmt(v)}</text>`;
+        }
+        [0, 0.5, 1].forEach(f => {
+          const ts = tMin + (tMax - tMin) * f;
+          const d  = new Date(ts * 1000);
+          const lbl = d.toLocaleDateString('en-GB', { day:'2-digit', month:'short' })
+                    + ' ' + d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', hour12:false });
+          xAxis += `<text x="${(ML + f * PW).toFixed(1)}" y="${(MT+PH+14).toFixed(1)}" text-anchor="middle" font-size="7.5" font-family="Consolas,monospace" fill="#64748b">${lbl}</text>`;
         });
-        return `<div style="margin:8px 0 16px">
-          <div style="font-size:11px;font-weight:700;color:#075985;margin-bottom:4px">${title}</div>
-          <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:700px;height:auto;display:block">
-            ${bars}
-          </svg></div>`;
+
+        const svgId = 'c' + Math.random().toString(36).slice(2, 8);
+        let paths = '';
+        series.forEach((s, i) => {
+          if (!s.values.length) return;
+          const col = CHART_COLORS[i % CHART_COLORS.length];
+          const pts = s.values.map(([t, v]) => `${xS(t).toFixed(1)},${yS(v).toFixed(1)}`).join(' ');
+          const first = s.values[0], last = s.values[s.values.length - 1];
+          const area  = `${xS(first[0]).toFixed(1)},${(MT+PH).toFixed(1)} ${pts} ${xS(last[0]).toFixed(1)},${(MT+PH).toFixed(1)}`;
+          paths += `<polygon points="${area}" fill="${col}" opacity="0.07"/>`;
+          paths += `<polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+          const lv = s.values[s.values.length - 1];
+          paths += `<circle cx="${xS(lv[0]).toFixed(1)}" cy="${yS(lv[1]).toFixed(1)}" r="2.5" fill="${col}"/>`;
+        });
+
+        const legend = series.map((s, i) => {
+          const col    = CHART_COLORS[i % CHART_COLORS.length];
+          const lastV  = s.values.length ? fmt(s.values[s.values.length-1][1]) : '—';
+          const lbl    = s.label.length > 30 ? s.label.slice(0,28)+'…' : s.label;
+          return `<div style="display:flex;align-items:center;gap:4px;font-size:8.5px;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">` +
+                 `<span style="width:8px;height:8px;border-radius:50%;background:${col};flex-shrink:0"></span>` +
+                 `<span style="flex:1;overflow:hidden;text-overflow:ellipsis">${lbl}</span>` +
+                 `<span style="font-weight:700;color:${col};flex-shrink:0">${lastV}</span></div>`;
+        }).join('');
+
+        return `<div style="margin-bottom:6px">
+          <div style="font-size:10px;font-weight:700;color:#075985;margin-bottom:3px">${title}</div>
+          <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block">
+            <defs><clipPath id="${svgId}"><rect x="${ML}" y="${MT}" width="${PW}" height="${PH}"/></clipPath></defs>
+            ${grid}
+            <g clip-path="url(#${svgId})">${paths}</g>
+            ${xAxis}
+            <line x1="${ML}" y1="${MT}" x2="${ML}" y2="${MT+PH}" stroke="#94a3b8" stroke-width="1"/>
+            <line x1="${ML}" y1="${MT+PH}" x2="${ML+PW}" y2="${MT+PH}" stroke="#94a3b8" stroke-width="1"/>
+          </svg>
+          <div style="display:flex;flex-direction:column;gap:2px;margin-top:4px">${legend}</div>
+        </div>`;
       }
 
-      const chartsCpu = buildBarChart(topCpu, 'cpu', 'm',   'Top 10 Pods — CPU Usage (millicores, live)', '#0369a1');
-      const chartsMem = buildBarChart(topMem, 'mem', 'MiB', 'Top 10 Pods — Memory Usage (MiB, live)',    '#0891b2');
+      // Build all 6 charts (CPU + MEM × 3 windows)
+      const chartsCpu1d = buildLineChart(charts.cpu_1d, 'm',   'CPU Usage — Last 24 Hours (top 10 pods)');
+      const chartsMem1d = buildLineChart(charts.mem_1d, 'MiB', 'Memory Usage — Last 24 Hours (top 10 pods)');
+      const chartsCpu1w = buildLineChart(charts.cpu_1w, 'm',   'CPU Usage — Last 7 Days (top 10 pods)');
+      const chartsMem1w = buildLineChart(charts.mem_1w, 'MiB', 'Memory Usage — Last 7 Days (top 10 pods)');
+      const chartsCpu1m = buildLineChart(charts.cpu_1m, 'm',   'CPU Usage — Last 30 Days (top 10 pods)');
+      const chartsMem1m = buildLineChart(charts.mem_1m, 'MiB', 'Memory Usage — Last 30 Days (top 10 pods)');
 
-      // ── Build a styled print-ready HTML page and trigger print-to-PDF ──
-      const now = new Date().toLocaleString();
-      const htmlContent = `<!DOCTYPE html>
-<html><head><meta charset="UTF-8"/>
-<title>ECS Cluster Health Report — ${now}</title>
+      // ── Date/time formatted like the sample ──────────────────────────────
+      const now      = new Date();
+      const datePart = now.toLocaleDateString('en-GB', { day:'numeric', month:'long', year:'numeric' });
+      const timePart = now.toLocaleTimeString('en-US', {
+        hour:'numeric', minute:'2-digit', second:'2-digit',
+        hour12:true, timeZoneName:'short'
+      });
+      const dateStr  = `${datePart}, ${timePart}`;
+
+      const html = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/>
+<title>ECS AI Ops — Cluster Health Report</title>
 <style>
-  @page { margin: 15mm 14mm; size: A4; }
+  @media print { @page { size: A4; margin: 12mm 10mm; } body { padding: 0; } }
   * { box-sizing: border-box; }
-  body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 11.5px; color: #1e293b; line-height: 1.6; }
-  h1 { font-size: 19px; color: #0369a1; border-bottom: 2px solid #0369a1; padding-bottom: 5px; margin: 0 0 3px; }
-  h2 { font-size: 13px; color: #075985; border-bottom: 1px solid #bae6fd; padding-bottom: 3px; margin: 18px 0 7px; page-break-after: avoid; }
-  h3 { font-size: 12px; color: #0c4a6e; margin: 10px 0 4px; page-break-after: avoid; }
-  p  { margin: 3px 0 7px; }
-  hr { border: none; border-top: 1px solid #e2e8f0; margin: 10px 0; }
-  pre { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 3px; padding: 6px 8px;
-        overflow-wrap: break-word; white-space: pre-wrap; margin: 4px 0 8px;
-        font-family: 'Consolas','Courier New',monospace; font-size: 10.5px; }
-  code { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 2px;
-         padding: 1px 4px; font-family: 'Consolas','Courier New',monospace; font-size: 10.5px; }
-  table { border-collapse: collapse; width: 100%; margin: 6px 0 12px; font-size: 10.5px; page-break-inside: avoid; }
-  th { background: #0369a1; color: #fff; padding: 5px 7px; text-align: left; font-weight: 600; font-size: 10px; }
-  td { padding: 4px 7px; border-bottom: 1px solid #e2e8f0; border-right: 1px solid #f1f5f9; vertical-align: top; word-break: break-word; }
-  tr:nth-child(even) td { background: #f8fafc; }
-  tr:last-child td { border-bottom: 1px solid #e2e8f0; }
-  .report-header { margin-bottom: 18px; }
-  .report-meta { font-size: 10px; color: #64748b; margin-top: 2px; }
-  .charts-section { page-break-before: avoid; margin: 14px 0; }
-  .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 10px; color: #1e293b; margin: 0; padding: 10px; line-height: 1.5; background:#fff; }
+  h1 { font-size: 16px; margin: 0 0 3px; color: #0369a1; display:flex; align-items:center; gap:6px; }
+  h2 { font-size: 11.5px; color: #075985; border-bottom: 1px solid #bae6fd; padding-bottom: 2px; margin: 16px 0 6px; page-break-after: avoid; }
+  h3 { font-size: 10.5px; color: #0c4a6e; margin: 10px 0 3px; page-break-after: avoid; }
+  p  { margin: 2px 0 6px; }
+  hr { border: none; border-top: 1px solid #e2e8f0; margin: 8px 0; }
+  pre { background:#f8fafc; border:1px solid #e2e8f0; border-radius:3px; padding:5px 7px;
+        white-space:pre-wrap; overflow-wrap:break-word; font-family:'Consolas','Courier New',monospace; font-size:9.5px; margin:3px 0 7px; }
+  code { background:#f1f5f9; border:1px solid #e2e8f0; border-radius:2px; padding:1px 3px;
+         font-family:'Consolas','Courier New',monospace; font-size:9.5px; }
+  table { border-collapse:collapse; width:100%; margin:4px 0 10px; font-size:9.5px; page-break-inside:avoid; }
+  th { background:#0369a1 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact;
+       color:#fff; padding:4px 6px; text-align:left; font-weight:600; font-size:9px; }
+  td { padding:3px 6px; border-bottom:1px solid #e2e8f0; vertical-align:top; word-break:break-word; }
+  tr:nth-child(even) td { background:#f8fafc !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .meta { font-size:9px; color:#64748b; margin-bottom:10px; }
+  .sep  { color:#0369a1; font-weight:700; padding:0 4px; }
+  .chart-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:10px; }
+  .chart-section { page-break-inside:avoid; }
   @media print {
-    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    h2, h3 { page-break-after: avoid; }
-    table { page-break-inside: avoid; }
-    .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    body { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    h2,h3 { page-break-after:avoid; }
+    table { page-break-inside:avoid; }
   }
 </style>
 </head><body>
-<div class="report-header">
-  <h1>&#128203; ECS AI Ops — Cluster Health Report</h1>
-  <div class="report-meta">Generated: ${now} &nbsp;·&nbsp; Timezone: ${USER_TIMEZONE}</div>
+<h1>&#128203; ECS AI Ops &mdash; Cluster Health Report</h1>
+<div class="meta">Generated: ${dateStr} <span class="sep">|</span> Timezone: ${USER_TIMEZONE}</div>
+
+<h2>&#128200; Pod Resource Usage &mdash; Last 24 Hours</h2>
+<div class="chart-grid chart-section">
+  ${chartsCpu1d}
+  ${chartsMem1d}
 </div>
 
-<div class="charts-section">
-  <h2>&#128200; Live Resource Usage (Top 10 Pods)</h2>
-  <div class="charts-grid">
-    ${chartsCpu}
-    ${chartsMem}
-  </div>
+<h2>&#128200; Pod Resource Usage &mdash; Last 7 Days</h2>
+<div class="chart-grid chart-section">
+  ${chartsCpu1w}
+  ${chartsMem1w}
+</div>
+
+<h2>&#128200; Pod Resource Usage &mdash; Last 30 Days</h2>
+<div class="chart-grid chart-section">
+  ${chartsCpu1m}
+  ${chartsMem1m}
 </div>
 
 <hr/>
@@ -2967,24 +3053,14 @@ inpEl.addEventListener('keydown', e=>{
 ${marked.parse(reportText)}
 </body></html>`;
 
-      const printWindow = window.open('', '_blank', 'width=1000,height=800');
-      if (printWindow) {
-        printWindow.document.write(htmlContent);
-        printWindow.document.close();
-        printWindow.focus();
-        setTimeout(() => { printWindow.print(); printWindow.close(); }, 500);
-      } else {
-        const blob = new Blob([htmlContent], { type: 'text/html' });
-        const url  = URL.createObjectURL(blob);
-        const a    = document.createElement('a');
-        a.href     = url;
-        a.download = 'ecs-health-report.html';
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 2000);
-      }
+      const printWindow = window.open('', '_blank');
+      printWindow.document.write(html);
+      printWindow.document.close();
+      printWindow.focus();
+      setTimeout(() => { printWindow.print(); printWindow.close(); }, 250);
 
       statusEl.style.color = '#22c55e';
-      statusEl.textContent = '✓ Print dialog opened — choose "Save as PDF" to download.';
+      statusEl.textContent = '✓ Report successfully compiled and ready.';
       setTimeout(() => { progress.style.display = 'none'; barEl.style.width = '0%'; }, 2000);
 
     } catch (err) {
