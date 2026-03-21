@@ -1112,7 +1112,25 @@ async def api_reports_save(request: Request):
 
         try:
             import pdfkit as _pdfkit
+            import shutil
 
+            # Locate wkhtmltopdf — check common install paths explicitly so the
+            # binary is found even when the server's PATH differs from the shell.
+            _WK_CANDIDATES = [
+                "/usr/bin/wkhtmltopdf",
+                "/usr/local/bin/wkhtmltopdf",
+                "/opt/bin/wkhtmltopdf",
+            ]
+            _wk_bin = shutil.which("wkhtmltopdf")
+            if not _wk_bin:
+                _wk_bin = next((p for p in _WK_CANDIDATES if __import__("os").path.isfile(p)), None)
+            if not _wk_bin:
+                raise FileNotFoundError(
+                    "wkhtmltopdf binary not found in PATH or common locations. "
+                    "Install it with: apt-get install wkhtmltopdf"
+                )
+
+            _pdf_cfg = _pdfkit.configuration(wkhtmltopdf=_wk_bin)
             _PDF_OPTS = {
                 "quiet":                    "",
                 "encoding":                 "UTF-8",
@@ -1128,9 +1146,12 @@ async def api_reports_save(request: Request):
             }
 
             def _write_pdf():
-                _pdfkit.from_string(html, str(filepath), options=_PDF_OPTS)
+                _pdfkit.from_string(html, str(filepath),
+                                    options=_PDF_OPTS, configuration=_pdf_cfg)
 
-            config.logger.info(f"[REQ:{req_id}] /api/reports/save  generating PDF via pdfkit …")
+            config.logger.info(
+                f"[REQ:{req_id}] /api/reports/save  generating PDF via pdfkit ({_wk_bin}) …"
+            )
             await asyncio.get_event_loop().run_in_executor(None, _write_pdf)
             size_kb = filepath.stat().st_size // 1024
             config.logger.info(
@@ -1139,23 +1160,17 @@ async def api_reports_save(request: Request):
             return {"filename": filename, "size_kb": size_kb, "format": "pdf"}
 
         except ImportError:
-            config.logger.warning(
-                f"[REQ:{req_id}] /api/reports/save  pdfkit not installed, falling back to HTML"
-            )
+            pdf_err_msg = "pdfkit is not installed (pip install pdfkit)"
+            config.logger.error(f"[REQ:{req_id}] /api/reports/save  {pdf_err_msg}")
+            return _JSONResponse(status_code=500, content={"error": pdf_err_msg})
+        except FileNotFoundError as e:
+            pdf_err_msg = str(e)
+            config.logger.error(f"[REQ:{req_id}] /api/reports/save  {pdf_err_msg}")
+            return _JSONResponse(status_code=500, content={"error": pdf_err_msg})
         except Exception as pdf_err:
-            config.logger.warning(
-                f"[REQ:{req_id}] /api/reports/save  pdfkit failed ({pdf_err}), falling back to HTML"
-            )
-
-        # Fallback: save as HTML (user can Print → Save as PDF in browser)
-        filename = f"ecs-health-report-{ts}.html"
-        filepath = _REPORT_DIR / filename
-        filepath.write_text(html, encoding="utf-8")
-        size_kb  = filepath.stat().st_size // 1024
-        config.logger.info(
-            f"[REQ:{req_id}] /api/reports/save  saved HTML {filename} ({size_kb} KB)"
-        )
-        return {"filename": filename, "size_kb": size_kb, "format": "html"}
+            pdf_err_msg = f"pdfkit failed: {pdf_err}"
+            config.logger.error(f"[REQ:{req_id}] /api/reports/save  {pdf_err_msg}")
+            return _JSONResponse(status_code=500, content={"error": pdf_err_msg})
 
     except Exception as e:
         config.logger.error(f"[REQ:{req_id}] /api/reports/save  error: {e}")
