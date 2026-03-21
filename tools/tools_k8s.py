@@ -114,6 +114,36 @@ def _list_pods(namespace: str = "all") -> list:
             if namespace == "all"
             else _core.list_namespaced_pod(namespace=namespace).items)
 
+def _list_pods_by_node(node_name: str) -> list:
+    """Return pods on a specific node. RKE2 raises a WebSocket error on
+    field_selector=spec.nodeName — fall back to full list + Python filter."""
+    try:
+        return _core.list_pod_for_all_namespaces(
+            field_selector=f"spec.nodeName={node_name}").items
+    except Exception:
+        return [p for p in _core.list_pod_for_all_namespaces().items
+                if (p.spec.node_name or "") == node_name]
+
+def _find_prometheus_pod() -> tuple[str | None, str | None, str]:
+    """Locate the Prometheus server pod across all namespaces.
+    Returns (pod_name, namespace, container_name) or (None, None, 'prometheus-server').
+    Avoids field_selector which triggers WebSocket errors on RKE2.
+    """
+    try:
+        pods = _core.list_pod_for_all_namespaces().items
+    except Exception:
+        return None, None, "prometheus-server"
+    for p in pods:
+        if p.status.phase != "Running":
+            continue
+        n = p.metadata.name.lower()
+        if "prometheus-server" in n and "operator" not in n:
+            cnames    = [c.name for c in (p.spec.containers or [])]
+            container = ("prometheus-server" if "prometheus-server" in cnames
+                         else (cnames[0] if cnames else "prometheus-server"))
+            return p.metadata.name, p.metadata.namespace, container
+    return None, None, "prometheus-server"
+
 def _filter_pods(pods: list, search: str | None) -> list:
     if not search:
         return pods
@@ -1421,11 +1451,11 @@ def get_node_capacity() -> str:
             mem_alloc = _parse_mem_gib(alloc.get("memory", "0Ki"))
             gpu       = sum(int(alloc[k]) for k in alloc
                             if ("nvidia.com/gpu" in k or "amd.com/gpu" in k) and str(alloc[k]).isdigit())
-            pods_on_node = _core.list_pod_for_all_namespaces(field_selector=f"spec.nodeName={node.metadata.name}")
+            pods_on_node = _list_pods_by_node(node.metadata.name)
             cpu_req  = sum(_parse_cpu_cores((c.resources.requests or {}).get("cpu", 0))
-                           for pod in pods_on_node.items for c in (pod.spec.containers or []) if c.resources)
+                           for pod in pods_on_node for c in (pod.spec.containers or []) if c.resources)
             mem_req  = sum(_parse_mem_gib((c.resources.requests or {}).get("memory", "0"))
-                           for pod in pods_on_node.items for c in (pod.spec.containers or []) if c.resources)
+                           for pod in pods_on_node for c in (pod.spec.containers or []) if c.resources)
             cpu_avail = round(cpu_alloc - cpu_req, 2)
             mem_avail = round(mem_alloc - mem_req, 2)
             pct = lambda a, b: f"({round((a/b)*100,1)}%)" if b > 0 else "(0%)"
@@ -2358,8 +2388,7 @@ def run_cluster_health() -> str:
             status = "✅ Ready" if ready else "🔴 NotReady"
 
             cpu_alloc     = _parse_cpu_cores(alloc.get("cpu", 0))
-            pods_on_node  = _core.list_pod_for_all_namespaces(
-                field_selector=f"spec.nodeName={node.metadata.name}").items
+            pods_on_node  = _list_pods_by_node(node.metadata.name)
             cpu_req       = sum(
                 _parse_cpu_cores((c.resources.requests or {}).get("cpu", 0))
                 for p in pods_on_node
@@ -2688,10 +2717,20 @@ def run_cluster_health() -> str:
 
     return "\n".join(out)
 
+def _report_err(e) -> str:
+    """Concise, single-line error string safe to embed in HTML report.
+    Strips the verbose HTTP headers/body that kubernetes-client WebSocket
+    errors include in str(e) (e.g. 'Handshake status 200 OK -+-+- {...}').
+    """
+    s = str(e)
+    if 'Handshake status' in s or '-+-+-' in s or len(s) > 160:
+        first = s.split('\n')[0].split('-+-+')[0].strip().rstrip('-').strip()
+        return first[:120] or 'Kubernetes API error (connection issue)'
+    return s[:160]
+
+
 def generate_healthcheck_report() -> str:
-    """
-    Full, multi-section cluster health report — emits pure HTML for weasyprint.
-    """
+    """Full, multi-section cluster health report — emits pure HTML for weasyprint."""
     import html as _html
 
     now_str  = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -2794,13 +2833,19 @@ def generate_healthcheck_report() -> str:
             R.append(table(["NAME","ROLES","STATUS","CPU","MEMORY","GPU"], rows))
 
             R.append(subsection("Node Capacity (Allocatable vs Requested)"))
+            # Pre-fetch all pods once — avoids per-node field_selector calls that
+            # trigger WebSocket errors on RKE2 clusters.
+            try:
+                _all_pods_for_capacity = _core.list_pod_for_all_namespaces().items
+            except Exception:
+                _all_pods_for_capacity = []
             rows2 = []
             for node in sorted(nodes, key=lambda n: n.metadata.name):
                 alloc     = node.status.allocatable or {}
                 cpu_alloc = _parse_cpu_cores(alloc.get("cpu", 0))
                 mem_alloc = _parse_mem_gib(alloc.get("memory", "0Ki"))
-                pods_on   = _core.list_pod_for_all_namespaces(
-                    field_selector=f"spec.nodeName={node.metadata.name}").items
+                pods_on   = [p for p in _all_pods_for_capacity
+                             if (p.spec.node_name or "") == node.metadata.name]
                 cpu_req   = sum(_parse_cpu_cores((c.resources.requests or {}).get("cpu", 0))
                                 for p in pods_on for c in (p.spec.containers or []) if c.resources)
                 mem_req   = sum(_parse_mem_gib((c.resources.requests or {}).get("memory", "0"))
@@ -2846,7 +2891,7 @@ def generate_healthcheck_report() -> str:
             else:
                 R.append(ok("No GPU nodes detected."))
     except Exception as e:
-        R.append(warn(f"Could not gather node data: {e}"))
+        R.append(warn(f"Could not gather node data: {_report_err(e)}"))
 
     # ── 3. Resource Capacity ──────────────────────────────────────────────
     R.append(section("2. Resource Capacity"))
@@ -2879,7 +2924,7 @@ def generate_healthcheck_report() -> str:
                          f"{mem_lim:.0f}Mi"])
         R.append(table(["NAMESPACE","PODS","CPU REQ","MEM REQ","CPU LIM","MEM LIM"], rows))
     except Exception as e:
-        R.append(warn(f"Could not gather resource data: {e}"))
+        R.append(warn(f"Could not gather resource data: {_report_err(e)}"))
 
     try:
         q_items = _core.list_resource_quota_for_all_namespaces().items
@@ -2914,7 +2959,7 @@ def generate_healthcheck_report() -> str:
         else:
             R.append(ok("No ResourceQuotas defined."))
     except Exception as e:
-        R.append(warn(f"Could not gather quota data: {e}"))
+        R.append(warn(f"Could not gather quota data: {_report_err(e)}"))
 
     try:
         lr_items = _core.list_limit_range_for_all_namespaces().items
@@ -2933,7 +2978,7 @@ def generate_healthcheck_report() -> str:
         else:
             R.append(ok("No LimitRanges defined."))
     except Exception as e:
-        R.append(warn(f"Could not gather LimitRange data: {e}"))
+        R.append(warn(f"Could not gather LimitRange data: {_report_err(e)}"))
 
     # ── 4. Storage Health ─────────────────────────────────────────────────
     R.append(section("3. Storage Health"))
@@ -2953,7 +2998,7 @@ def generate_healthcheck_report() -> str:
         else:
             R.append(ok("No StorageClasses defined."))
     except Exception as e:
-        R.append(warn(f"Could not gather StorageClass data: {e}"))
+        R.append(warn(f"Could not gather StorageClass data: {_report_err(e)}"))
 
     try:
         pvcs    = _core.list_persistent_volume_claim_for_all_namespaces().items
@@ -2971,7 +3016,7 @@ def generate_healthcheck_report() -> str:
         else:
             R.append(ok(f"All {len(pvcs)} PVCs Bound — 0 not Bound."))
     except Exception as e:
-        R.append(warn(f"Could not gather PVC data: {e}"))
+        R.append(warn(f"Could not gather PVC data: {_report_err(e)}"))
 
     try:
         R.append(subsection("PV Disk Usage (requires running pod with mounted volume)"))
@@ -3100,7 +3145,7 @@ def generate_healthcheck_report() -> str:
         if pv_skip:
             R.append(f'<p class="note"><em>({pv_skip} PVC(s) skipped — no running pod with mount found.)</em></p>')
     except Exception as e:
-        R.append(warn(f"Could not gather PV usage data: {e}"))
+        R.append(warn(f"Could not gather PV usage data: {_report_err(e)}"))
 
     # ── 5. Workload Health ────────────────────────────────────────────────
     R.append(section("4. Workload Health"))
@@ -3126,7 +3171,7 @@ def generate_healthcheck_report() -> str:
                           lambda d: d.status.ready_replicas or 0,
                           lambda d: d.status.available_replicas or 0)
     except Exception as e:
-        R.append(warn(f"Deployments: {e}"))
+        R.append(warn(f"Deployments: {_report_err(e)}"))
 
     try:
         _workload_section("DaemonSet", _apps.list_daemon_set_for_all_namespaces().items,
@@ -3134,7 +3179,7 @@ def generate_healthcheck_report() -> str:
                           lambda d: d.status.number_ready or 0,
                           lambda d: d.status.number_available or 0)
     except Exception as e:
-        R.append(warn(f"DaemonSets: {e}"))
+        R.append(warn(f"DaemonSets: {_report_err(e)}"))
 
     try:
         _workload_section("StatefulSet", _apps.list_stateful_set_for_all_namespaces().items,
@@ -3142,7 +3187,7 @@ def generate_healthcheck_report() -> str:
                           lambda s: s.status.ready_replicas or 0,
                           lambda s: getattr(s.status,"available_replicas",None) or 0)
     except Exception as e:
-        R.append(warn(f"StatefulSets: {e}"))
+        R.append(warn(f"StatefulSets: {_report_err(e)}"))
 
     try:
         rss = _apps.list_replica_set_for_all_namespaces().items
@@ -3159,7 +3204,7 @@ def generate_healthcheck_report() -> str:
         else:
             R.append(ok("No orphaned/degraded ReplicaSets."))
     except Exception as e:
-        R.append(warn(f"ReplicaSets: {e}"))
+        R.append(warn(f"ReplicaSets: {_report_err(e)}"))
 
     try:
         jobs = _batch.list_job_for_all_namespaces().items
@@ -3175,7 +3220,7 @@ def generate_healthcheck_report() -> str:
         else:
             R.append(ok("No failed Jobs."))
     except Exception as e:
-        R.append(warn(f"Jobs: {e}"))
+        R.append(warn(f"Jobs: {_report_err(e)}"))
 
     try:
         cronjobs = _batch.list_cron_job_for_all_namespaces().items
@@ -3195,7 +3240,7 @@ def generate_healthcheck_report() -> str:
                               esc(cj.spec.schedule), suspended, last_str])
             R.append(table(["NAMESPACE","NAME","SCHEDULE","SUSPENDED","LAST RUN"], rows))
     except Exception as e:
-        R.append(warn(f"CronJobs: {e}"))
+        R.append(warn(f"CronJobs: {_report_err(e)}"))
 
     try:
         all_pods = _core.list_pod_for_all_namespaces().items
@@ -3225,7 +3270,7 @@ def generate_healthcheck_report() -> str:
         else:
             R.append(ok("All pods running."))
     except Exception as e:
-        R.append(warn(f"Pod status: {e}"))
+        R.append(warn(f"Pod status: {_report_err(e)}"))
 
     # ── 6. Networking & DNS ───────────────────────────────────────────────
     R.append(section("5. Networking & DNS"))
@@ -3274,7 +3319,7 @@ def generate_healthcheck_report() -> str:
         else:
             R.append(warn("CoreDNS: no DNS pods found in kube-system"))
     except Exception as e:
-        R.append(warn(f"CoreDNS check failed: {e}"))
+        R.append(warn(f"CoreDNS check failed: {_report_err(e)}"))
 
     # NetworkPolicy check removed — too noisy for report
 
@@ -3319,7 +3364,7 @@ def generate_healthcheck_report() -> str:
         if "404" in str(e):
             R.append(ok("cert-manager not installed — skipping certificate check"))
         else:
-            R.append(warn(f"Certificates: {e}"))
+            R.append(warn(f"Certificates: {_report_err(e)}"))
 
     # Webhook FailurePolicy check removed — too noisy for report
 
@@ -3367,7 +3412,7 @@ def generate_healthcheck_report() -> str:
         else:
             R.append(ok("No control plane pods visible (managed cluster)"))
     except Exception as e:
-        R.append(warn(f"Control plane pods: {e}"))
+        R.append(warn(f"Control plane pods: {_report_err(e)}"))
 
     try:
         events = _core.list_event_for_all_namespaces(
@@ -3393,7 +3438,7 @@ def generate_healthcheck_report() -> str:
         else:
             R.append(ok("No recent warning events"))
     except Exception as e:
-        R.append(warn(f"Warning events: {e}"))
+        R.append(warn(f"Warning events: {_report_err(e)}"))
 
     R.append('<hr/>')
     R.append('<p>This is your complete health check report. '
