@@ -522,9 +522,9 @@ button{cursor:pointer;font-family:inherit}
   margin: 10px 0 18px; width: 100%;
 }
 .ai-bubble th {
-  background: var(--inputBg); color: var(--panelLabel);
+  background: #8345e6; color: #fff;
   font-weight: 700; padding: 7px 12px;
-  border: 1px solid var(--border); text-align: left;
+  border: 1px solid #5b21b6; text-align: left;
   letter-spacing: .04em;
 }
 .ai-bubble td {
@@ -2346,6 +2346,7 @@ function formatResponse(raw){
              .replace(/<\|[^|]*\|>/g, '');
   text = text.split('\n')
     .filter(line => {
+      if (line.trim().startsWith('|')) return true;  // never strip table rows — they may contain words like "system", "user", "model"
       const stripped = line.trim().replace(/[.?!,;:\u00f3]/g, '');
       return !ROLE_RE.test(stripped) || stripped.length > 20;
     })
