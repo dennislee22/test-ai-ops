@@ -2704,13 +2704,13 @@ def generate_healthcheck_report() -> str:
         return f'<h2>{esc(title)}</h2>'
 
     def ok(msg):
-        return f'<p class="ok">&#9989; {esc(msg)}</p>'
+        return f'<p class="ok">✅ {esc(msg)}</p>'
 
     def warn(msg):
-        return f'<p class="warn">&#9888;&#65039; {esc(msg)}</p>'
+        return f'<p class="warn">⚠️ {esc(msg)}</p>'
 
     def err(msg):
-        return f'<p class="err">&#128308; {esc(msg)}</p>'
+        return f'<p class="err">🔴 {esc(msg)}</p>'
 
     def info(msg):
         return f'<p>{esc(msg)}</p>'
@@ -2736,48 +2736,21 @@ def generate_healthcheck_report() -> str:
     # ── Header ────────────────────────────────────────────────────────────
     R.append(f'<p class="note">Generated: {esc(now_str)}</p>')
 
-    # ── 1. Executive Summary ──────────────────────────────────────────────
-    R.append(section("1. Executive Summary"))
+    # Get k8s version for use in node section
+    k8s_version = "unknown"
     try:
-        v = _version_api.get_code()
-        R.append(info(f"Kubernetes: {v.git_version}"))
+        k8s_version = _version_api.get_code().git_version
     except Exception:
-        R.append(warn("Kubernetes version: unavailable"))
+        pass
 
-    try:
-        scorecard = run_cluster_health()
-        # Convert scorecard text to clean HTML — strip box-drawing chars, preserve structure
-        sc_lines = scorecard.splitlines()
-        R.append('<div class="scorecard">')
-        for line in sc_lines:
-            stripped = line.strip()
-            if not stripped or all(c in "─━│╔╗╚╝╠╣╦╩╬═" for c in stripped):
-                continue
-            # Detect table rows
-            if stripped.startswith("|") and "|" in stripped[1:]:
-                continue  # skip markdown table rows — scorecard has its own format
-            if stripped.startswith("🔴") or stripped.startswith("🟠"):
-                R.append(f'<p class="err">{esc(stripped)}</p>')
-            elif stripped.startswith("✅"):
-                R.append(f'<p class="ok">{esc(stripped)}</p>')
-            elif stripped.startswith("⚠") or stripped.startswith("⚠️"):
-                R.append(f'<p class="warn">{esc(stripped)}</p>')
-            elif stripped.startswith("🖥") or stripped.startswith("•"):
-                R.append(f'<p class="indent">{esc(stripped)}</p>')
-            else:
-                R.append(f'<p>{esc(stripped)}</p>')
-        R.append('</div>')
-    except Exception as e:
-        R.append(warn(f"Could not generate scorecard: {e}"))
-
-    # ── 2. Node Infrastructure ────────────────────────────────────────────
-    R.append(section("2. Node Infrastructure"))
+    # ── 1. Node Infrastructure ────────────────────────────────────────────
+    R.append(section("1. Node Infrastructure"))
     try:
         nodes = _core.list_node().items
         if not nodes:
             R.append(warn("No nodes found."))
         else:
-            R.append(subsection(f"Nodes ({len(nodes)} total)"))
+            R.append(subsection(f"Nodes ({len(nodes)} total) — Kubernetes {esc(k8s_version)}"))
             rows = []
             for node in sorted(nodes, key=lambda n: n.metadata.name):
                 roles  = (",".join(k.split("/")[-1] for k in (node.metadata.labels or {})
@@ -2857,7 +2830,7 @@ def generate_healthcheck_report() -> str:
         R.append(warn(f"Could not gather node data: {e}"))
 
     # ── 3. Resource Capacity ──────────────────────────────────────────────
-    R.append(section("3. Resource Capacity"))
+    R.append(section("2. Resource Capacity"))
     try:
         all_ns = [ns.metadata.name for ns in _core.list_namespace().items]
         ns_data = []
@@ -2942,7 +2915,7 @@ def generate_healthcheck_report() -> str:
         R.append(warn(f"Could not gather LimitRange data: {e}"))
 
     # ── 4. Storage Health ─────────────────────────────────────────────────
-    R.append(section("4. Storage Health"))
+    R.append(section("3. Storage Health"))
     try:
         scs = _storage.list_storage_class().items
         if scs:
@@ -3054,28 +3027,38 @@ def generate_healthcheck_report() -> str:
 
         pv_rows.sort(key=lambda x: x[0], reverse=True)
         if pv_rows:
-            def _pv_table(rows, heading, cls):
-                color_map = {"err":"#dc2626","warn":"#d97706","ok":"#16a34a"}
+            def _pv_table(rows, heading, hdr_bg, hdr_color):
                 trs = ""
                 for r in rows:
                     flag,ns,pvc_name,pct,used,total,avail,fpct = r[1],r[2],r[3],r[4],r[5],r[6],r[7],r[8]
-                    color = "#dc2626" if pct >= 90 else ("#d97706" if pct >= 80 else "#16a34a")
-                    trs += (f'<tr><td style="text-align:center;font-size:12px">{flag}</td>'
+                    usage_color = "#dc2626" if pct >= 90 else ("#d97706" if pct >= 80 else "#0369a1")
+                    trs += (f'<tr>'
+                            f'<td style="text-align:center;font-size:13px;width:24px">{flag}</td>'
                             f'<td><code>{esc(ns)}/{esc(pvc_name)}</code></td>'
-                            f'<td style="color:{color};font-weight:700">{pct}%</td>'
-                            f'<td>{used}Gi&nbsp;({pct}%)</td>'
-                            f'<td>{total}Gi</td>'
-                            f'<td>{avail}Gi&nbsp;({fpct}%)</td></tr>')
-                hdr = "<tr><th>Flag</th><th>Namespace / PVC</th><th>Usage</th><th>Used (GiB)</th><th>Total (GiB)</th><th>Free (GiB)</th></tr>"
-                return (f'<p class="{cls}"><strong>{esc(heading)} ({len(rows)} PVCs)</strong></p>'
-                        f'<table><thead>{hdr}</thead><tbody>{trs}</tbody></table>')
+                            f'<td style="color:{usage_color};font-weight:700;white-space:nowrap">{pct}%</td>'
+                            f'<td style="white-space:nowrap">{used}Gi ({pct}%)</td>'
+                            f'<td style="white-space:nowrap">{total}Gi</td>'
+                            f'<td style="white-space:nowrap">{avail}Gi ({fpct}%)</td>'
+                            f'</tr>')
+                section_hdr = (f'<p style="margin:8px 0 2px;padding:4px 8px;'
+                               f'background:{hdr_bg};color:{hdr_color};font-weight:700;'
+                               f'font-size:9.5px;border-radius:3px;'
+                               f'-webkit-print-color-adjust:exact;print-color-adjust:exact">'
+                               f'{esc(heading)} ({len(rows)} PVC{"s" if len(rows)!=1 else ""})</p>')
+                col_hdr = ("<tr><th style='width:24px'>Flag</th>"
+                           "<th>Namespace / PVC</th><th>Usage</th>"
+                           "<th>Used (GiB)</th><th>Total (GiB)</th><th>Free (GiB)</th></tr>")
+                return (section_hdr +
+                        f'<table><thead>{col_hdr}</thead><tbody>{trs}</tbody></table>')
 
             critical = [r for r in pv_rows if r[0] >= 80]
             healthy  = [r for r in pv_rows if r[0] < 80]
             if critical:
-                R.append(_pv_table(critical, "⚠️ Nearing or exceeding 80% capacity", "warn"))
+                R.append(_pv_table(critical,
+                    "⚠️  Nearing or exceeding 80% capacity", "#fef3c7", "#92400e"))
             if healthy:
-                R.append(_pv_table(healthy[:5], "✅ Within capacity", "ok"))
+                R.append(_pv_table(healthy[:5],
+                    "✅  Within capacity", "#dcfce7", "#14532d"))
                 if len(healthy) > 5:
                     R.append(f'<p class="note"><em>({len(healthy)-5} more healthy volumes not shown)</em></p>')
         else:
@@ -3086,7 +3069,7 @@ def generate_healthcheck_report() -> str:
         R.append(warn(f"Could not gather PV usage data: {e}"))
 
     # ── 5. Workload Health ────────────────────────────────────────────────
-    R.append(section("5. Workload Health"))
+    R.append(section("4. Workload Health"))
 
     def _workload_section(kind, items, desired_fn, ready_fn, avail_fn):
         if not items:
@@ -3211,7 +3194,7 @@ def generate_healthcheck_report() -> str:
         R.append(warn(f"Pod status: {e}"))
 
     # ── 6. Networking & DNS ───────────────────────────────────────────────
-    R.append(section("6. Networking & DNS"))
+    R.append(section("5. Networking & DNS"))
     try:
         DNS_NS       = "kube-system"
         DNS_PATTERNS = ["coredns","core-dns","kube-dns"]
@@ -3259,21 +3242,10 @@ def generate_healthcheck_report() -> str:
     except Exception as e:
         R.append(warn(f"CoreDNS check failed: {e}"))
 
-    try:
-        nps       = _net.list_network_policy_for_all_namespaces().items
-        covered   = {np.metadata.namespace for np in nps}
-        all_ns_names = {n.metadata.name for n in _core.list_namespace().items}
-        uncovered = sorted(all_ns_names - covered)
-        if uncovered:
-            R.append(warn(f"{len(uncovered)} namespace(s) have no NetworkPolicy: "
-                          f"{_cap(uncovered)}"))
-        else:
-            R.append(ok(f"All namespaces have NetworkPolicies ({len(nps)} total)"))
-    except Exception as e:
-        R.append(warn(f"NetworkPolicies: {e}"))
+    # NetworkPolicy check removed — too noisy for report
 
     # ── 7. Certificates & RBAC ────────────────────────────────────────────
-    R.append(section("7. Certificates & RBAC"))
+    R.append(section("6. Certificates & RBAC"))
     try:
         custom = _k8s.CustomObjectsApi()
         certs  = custom.list_cluster_custom_object(
@@ -3315,60 +3287,53 @@ def generate_healthcheck_report() -> str:
         else:
             R.append(warn(f"Certificates: {e}"))
 
-    try:
-        adm_api    = _k8s.AdmissionregistrationV1Api()
-        mutating   = adm_api.list_mutating_webhook_configuration().items
-        validating = adm_api.list_validating_webhook_configuration().items
-        fail_webhooks = []
-        for config in mutating + validating:
-            for wh in (config.webhooks or []):
-                if wh.failure_policy == "Fail":
-                    fail_webhooks.append(f"{config.metadata.name}/{wh.name}")
-        if fail_webhooks:
-            R.append(warn(f"{len(fail_webhooks)} webhook(s) with FailurePolicy=Fail "
-                          f"(may block deployments): {_cap(fail_webhooks)}"))
-        else:
-            R.append(ok("No Fail-policy admission webhooks"))
-    except Exception as e:
-        R.append(warn(f"Webhooks: {e}"))
+    # Webhook FailurePolicy check removed — too noisy for report
 
-    # ── 8. Control Plane & Recent Diagnostics ────────────────────────────
-    R.append(section("8. Control Plane & Recent Diagnostics"))
+    # ── 8. Kubernetes Control Plane & Recent Diagnostics ──────────────────
+    R.append(section("7. Kubernetes Control Plane & Recent Diagnostics"))
+
+    # Component statuses
     try:
-        cp_report = get_control_plane_status()
-        # Convert markdown output of get_control_plane_status to HTML
-        for line in cp_report.splitlines():
-            s = line.strip()
-            if not s or s.startswith("###"):
-                if s.startswith("###"):
-                    R.append(subsection(s.lstrip("#").strip()))
-            elif s.startswith("|") and "|" in s[1:]:
-                pass  # handled as block below
-            elif s.startswith("🟢") or s.startswith("✅"):
-                R.append(ok(s))
-            elif s.startswith("🔴"):
-                R.append(err(s))
-            elif s.startswith("⚠"):
-                R.append(warn(s))
-            elif s.startswith("**"):
-                R.append(subsection(s.strip("*")))
-            else:
-                if s:
-                    R.append(info(s))
-        # Also render the markdown tables from get_control_plane_status
-        import re as _re
-        table_blocks = _re.findall(
-            r'(\|[^\n]+\|\n\|[-| :]+\|\n(?:\|[^\n]+\|\n?)*)', cp_report)
-        for block in table_blocks:
-            rows_raw = [l.strip() for l in block.strip().splitlines()]
-            header = [c.strip() for c in rows_raw[0].strip("|").split("|")]
-            data   = []
-            for row_line in rows_raw[2:]:
-                cells = [c.strip() for c in row_line.strip("|").split("|")]
-                data.append([esc(c) for c in cells])
-            R.append(table(header, data))
+        cs_items = _core.list_component_status().items
+        if cs_items:
+            R.append(subsection("Component Statuses"))
+            rows = []
+            for c in cs_items:
+                cond   = c.conditions[0] if c.conditions else None
+                status = cond.status if cond else "Unknown"
+                flag   = "🟢" if status == "True" else "🔴"
+                rows.append([f"{flag} {esc(c.metadata.name)}",
+                              esc(cond.message if cond else "-"),
+                              esc(cond.error if cond else "-")])
+            R.append(table(["COMPONENT", "MESSAGE", "ERROR"], rows))
+        else:
+            R.append(ok("Component statuses not available (normal on managed clusters)"))
+    except Exception:
+        R.append(ok("Component statuses not available (normal on managed clusters)"))
+
+    # Control plane pods
+    try:
+        pods = _core.list_namespaced_pod(namespace="kube-system").items
+        core_components = ["kube-apiserver", "etcd", "kube-controller-manager", "kube-scheduler"]
+        cp_pods = [p for p in pods if any(comp in p.metadata.name for comp in core_components)]
+        R.append(subsection("Control Plane Pods (kube-system)"))
+        if cp_pods:
+            rows = []
+            for pod in cp_pods:
+                phase    = pod.status.phase or "Unknown"
+                ready    = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
+                total    = len(pod.spec.containers)
+                restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
+                flag     = "🟢" if phase == "Running" and ready == total else "🔴"
+                comp     = next((c for c in core_components if c in pod.metadata.name),
+                                pod.metadata.name.split("-")[0])
+                rows.append([esc(comp), esc(pod.metadata.name),
+                              f"{flag} {esc(phase)}", f"{ready}/{total}", str(restarts)])
+            R.append(table(["COMPONENT", "POD NAME", "STATUS", "READY", "RESTARTS"], rows))
+        else:
+            R.append(ok("No control plane pods visible (managed cluster)"))
     except Exception as e:
-        R.append(warn(f"Control plane status: {e}"))
+        R.append(warn(f"Control plane pods: {e}"))
 
     try:
         events = _core.list_event_for_all_namespaces(
