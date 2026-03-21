@@ -1049,38 +1049,138 @@ async def api_ask(req: AskRequest):
 
 @app.get("/api/healthcheck-report", summary="Run generate_healthcheck_report directly, no LLM involved")
 async def api_healthcheck_report():
-    import asyncio, re as _re
+    import asyncio, re as _re, uuid, time as _time
+    req_id  = uuid.uuid4().hex[:8]
+    t_start = _time.monotonic()
+    config.logger.info(f"[REQ:{req_id}] /api/healthcheck-report  generating full cluster health report")
     try:
         report = await asyncio.get_event_loop().run_in_executor(
             None, _tk.generate_healthcheck_report)
 
-        # Strip triple-backtick fences — content inside is already plain text
         report = _re.sub(r'```[^\n]*\n?', '', report)
         report = _re.sub(r'\n{3,}', '\n\n', report).strip()
 
-        # Fetch top 10 pods by CPU and memory for the PDF chart
-        top_cpu = top_mem = []
+        charts = {}
         try:
-            import kubernetes.client as _k8s_client
-            custom = _k8s_client.CustomObjectsApi()
-            items  = custom.list_cluster_custom_object(
-                "metrics.k8s.io", "v1beta1", "pods").get("items", [])
-            rows = []
-            for item in items:
-                meta  = item["metadata"]
-                ctrs  = item.get("containers", [])
-                cpu_m = sum(_tk._parse_cpu_to_millicores(c["usage"].get("cpu",    "0")) for c in ctrs)
-                mem_m = sum(_tk._parse_mem_to_mib(        c["usage"].get("memory", "0")) for c in ctrs)
-                label = f"{meta.get('namespace','')}/{meta['name']}"
-                rows.append({"label": label, "cpu": cpu_m, "mem": mem_m})
-            top_cpu = sorted(rows, key=lambda x: x["cpu"], reverse=True)[:10]
-            top_mem = sorted(rows, key=lambda x: x["mem"], reverse=True)[:10]
-        except Exception:
-            pass
+            charts = await asyncio.get_event_loop().run_in_executor(
+                None, _fetch_report_charts)
+        except Exception as e:
+            config.logger.warning(f"[REQ:{req_id}] /api/healthcheck-report  charts failed: {e}")
 
-        return {"report": report, "top_cpu": top_cpu, "top_mem": top_mem}
+        elapsed = _time.monotonic() - t_start
+        config.logger.info(
+            f"[REQ:{req_id}] /api/healthcheck-report  done elapsed={elapsed:.1f}s "
+            f"report={len(report)}chars charts={list(charts.keys())}")
+        return {"report": report, "charts": charts}
     except Exception as e:
+        config.logger.error(f"[REQ:{req_id}] /api/healthcheck-report  error: {e}")
         return _JSONResponse(status_code=500, content={"error": str(e)})
+
+
+def _fetch_report_charts() -> dict:
+    """
+    Query Prometheus for top-10 pod CPU and memory over 1d, 1w, 1m.
+    Returns a dict: { "cpu_1d": [...series...], "mem_1d": [...], ... }
+    Each series: { "label": "ns/pod", "values": [[ts, val], ...] }
+    """
+    import time as _time
+    from kubernetes.stream import stream as _k8s_stream
+
+    prom_pod = prom_ns = prom_container = None
+    try:
+        for p in _tk._core.list_pod_for_all_namespaces(
+                field_selector="status.phase=Running").items:
+            n = p.metadata.name.lower()
+            if "prometheus-server" in n and "operator" not in n:
+                cnames         = [c.name for c in (p.spec.containers or [])]
+                prom_pod       = p.metadata.name
+                prom_ns        = p.metadata.namespace
+                prom_container = ("prometheus-server" if "prometheus-server" in cnames
+                                  else (cnames[0] if cnames else "prometheus-server"))
+                break
+    except Exception:
+        pass
+    if not prom_pod:
+        return {}
+
+    def _exec(cmd):
+        try:
+            ws = _k8s_stream(
+                _tk._core.connect_get_namespaced_pod_exec,
+                prom_pod, prom_ns,
+                command=["/bin/sh", "-c", cmd],
+                container=prom_container,
+                stderr=False, stdin=False, stdout=True, tty=False,
+                _preload_content=False)
+            chunks = []
+            while ws.is_open():
+                ws.update(timeout=120)
+                if ws.peek_stdout():
+                    chunks.append(ws.read_stdout())
+            ws.close()
+            return "".join(chunks).strip()
+        except Exception as exc:
+            return f"[exec error: {exc}]"
+
+    base_url = "http://localhost:9090"
+    probe    = _exec(f"curl -s -o /dev/null -w '%{{http_code}}' '{base_url}/prometheus/api/v1/query?query=up'")
+    api_base = (f"{base_url}/prometheus/api/v1" if probe.strip() == "200"
+                else f"{base_url}/api/v1")
+
+    now_ts = int(_time.time())
+    windows = {
+        "1d": (now_ts - 86400,      now_ts, "5m"),
+        "1w": (now_ts - 86400 * 7,  now_ts, "30m"),
+        "1m": (now_ts - 86400 * 30, now_ts, "2h"),
+    }
+
+    cpu_pql = ('sum by (pod, namespace) '
+               '(rate(container_cpu_usage_seconds_total'
+               '{container!="",container!="POD"}[5m])) * 1000')
+    mem_pql = ('sum by (pod, namespace) '
+               '(container_memory_working_set_bytes'
+               '{container!="",container!="POD"}) / 1048576')
+
+    import json as _json, urllib.parse
+
+    def _query_range(pql, start, end, step):
+        enc = urllib.parse.quote(pql, safe="")
+        url = f"{api_base}/query_range?query={enc}&start={start}&end={end}&step={step}"
+        raw = _exec(f"curl -s --max-time 120 '{url}'")
+        if not raw or raw.startswith("[exec error"):
+            return []
+        try:
+            data = _json.loads(raw)
+        except Exception:
+            return []
+        if data.get("status") != "success":
+            return []
+        results = data.get("data", {}).get("result", [])
+
+        def _mean(r):
+            vals = [float(v[1]) for v in r.get("values", []) if v[1] != "NaN"]
+            return sum(vals) / len(vals) if vals else 0.0
+
+        results.sort(key=_mean, reverse=True)
+        series = []
+        for r in results[:10]:
+            ml    = r.get("metric", {})
+            ns_v  = ml.get("namespace", "")
+            pod_v = ml.get("pod", ml.get("pod_name", "?"))
+            label = f"{ns_v}/{pod_v}" if ns_v else pod_v
+            series.append({
+                "label":  label,
+                "values": [[float(ts), float(v)]
+                           for ts, v in r.get("values", [])
+                           if v != "NaN"],
+            })
+        return series
+
+    result = {}
+    for win, (start, end, step) in windows.items():
+        result[f"cpu_{win}"] = _query_range(cpu_pql, start, end, step)
+        result[f"mem_{win}"] = _query_range(mem_pql, start, end, step)
+    return result
 
 @app.post("/api/tool")
 async def api_tool(req: ToolCallRequest):
