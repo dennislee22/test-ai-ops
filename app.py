@@ -1172,8 +1172,15 @@ def _fetch_report_charts() -> dict:
 
     prom_pod = prom_ns = prom_container = None
     try:
-        for p in _tk._core.list_pod_for_all_namespaces(
-                field_selector="status.phase=Running").items:
+        try:
+            all_pods = _tk._core.list_pod_for_all_namespaces(
+                    field_selector="status.phase=Running").items
+        except Exception:
+            # Some clusters (e.g. RKE2) raise WebSocket errors on field_selector
+            all_pods = _tk._core.list_pod_for_all_namespaces().items
+        for p in all_pods:
+            if p.status.phase != "Running":
+                continue
             n = p.metadata.name.lower()
             if "prometheus-server" in n and "operator" not in n:
                 cnames         = [c.name for c in (p.spec.containers or [])]
