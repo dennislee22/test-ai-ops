@@ -3118,7 +3118,7 @@ ${reportText}
 
       barEl.style.width = '100%';
       statusEl.style.color = '#22c55e';
-      statusEl.textContent = `✓ Report saved: ${saveData.filename} (${saveData.size_kb} KB)${saveData.format === 'pdf' ? ' — PDF ready' : ' — HTML: open in browser and Print → Save as PDF'}`;
+      statusEl.textContent = `✓ Report saved: ${saveData.filename} (${saveData.size_kb} KB) — PDF ready`;
       setTimeout(() => { progress.style.display = 'none'; barEl.style.width = '0%'; }, 1500);
 
       // 4. Refresh file list
