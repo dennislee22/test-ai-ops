@@ -2890,7 +2890,12 @@ inpEl.addEventListener('keydown', e=>{
                   background:var(--inputBg);border:1px solid var(--border);border-radius:6px;
                   padding:7px 10px;gap:10px">
           <div>
-            <div style="color:var(--textMain);font-weight:600;font-size:11px">${r.filename}</div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;
+                background:${r.format==='pdf'?'#dc2626':'#0369a1'};color:#fff;flex-shrink:0">
+                ${(r.format||'html').toUpperCase()}</span>
+              <div style="color:var(--textMain);font-weight:600;font-size:11px">${r.filename}</div>
+            </div>
             <div style="color:var(--dimText);font-size:10px;margin-top:2px">${ts} &nbsp;·&nbsp; ${r.size_kb} KB</div>
           </div>
           <a href="/api/reports/${encodeURIComponent(r.filename)}" download="${r.filename}"
@@ -3092,7 +3097,7 @@ ${marked.parse(reportText)}
 
       barEl.style.width = '100%';
       statusEl.style.color = '#22c55e';
-      statusEl.textContent = `✓ Report saved: ${saveData.filename} (${saveData.size_kb} KB)`;
+      statusEl.textContent = `✓ Report saved: ${saveData.filename} (${saveData.size_kb} KB)${saveData.format === 'pdf' ? ' — PDF ready' : ' — HTML: open in browser and Print → Save as PDF'}`;
       setTimeout(() => { progress.style.display = 'none'; barEl.style.width = '0%'; }, 1500);
 
       // 4. Refresh file list
