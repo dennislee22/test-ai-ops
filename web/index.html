@@ -1324,33 +1324,43 @@ print('Saved to health-report.html')
           <!-- ── Tab: Health Report ── -->
           <div class="stab-pane" id="tab-healthreport">
             <div class="stab-pane-title">&#128203; Comprehensive Health Check Report</div>
-            <p>Generate a full cluster health report covering nodes, workloads, storage, networking, certificates, RBAC, and recent diagnostics. The report is downloaded as a PDF to your browser.</p>
+            <p>Generate a full cluster health report. Reports are saved to the <code>/report/</code> folder on the server and listed below for download.</p>
 
-            <div style="margin-top:8px;background:var(--inputBg);border:1px solid var(--border);border-radius:8px;padding:14px 16px;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);line-height:1.8">
-              <div style="color:var(--panelLabel);font-weight:700;margin-bottom:6px;letter-spacing:.04em">REPORT SECTIONS</div>
-              <div>&#9989; Executive Summary &amp; Cluster Overview</div>
-              <div>&#9989; Node Infrastructure &amp; Capacity</div>
-              <div>&#9989; Resource Utilisation &amp; Limits</div>
-              <div>&#9989; Storage Health (PVCs, PVs, Disk Usage)</div>
-              <div>&#9989; Workload Health (Pods, Deployments, StatefulSets)</div>
-              <div>&#9989; Networking &amp; DNS</div>
-              <div>&#9989; Certificates &amp; RBAC</div>
-              <div>&#9989; Recent Diagnostics &amp; Warning Events</div>
+            <div style="background:var(--inputBg);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);line-height:1.8">
+              <div style="color:var(--panelLabel);font-weight:700;margin-bottom:5px;letter-spacing:.04em">COVERS</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px">
+                <div>&#9989; Executive Summary</div><div>&#9989; Node Infrastructure</div>
+                <div>&#9989; Resource Utilisation</div><div>&#9989; Storage Health</div>
+                <div>&#9989; Workload Health</div><div>&#9989; Networking &amp; DNS</div>
+                <div>&#9989; Certificates &amp; RBAC</div><div>&#9989; Diagnostics &amp; Events</div>
+                <div style="grid-column:1/-1">&#9989; Pod CPU &amp; Memory charts (24h / 7d / 30d)</div>
+              </div>
             </div>
 
-            <div id="healthreport-status" style="min-height:20px;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);margin-top:8px"></div>
+            <div id="healthreport-status" style="min-height:18px;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);margin-top:8px"></div>
 
-            <div id="healthreport-progress" style="display:none;margin-top:6px">
-              <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);margin-bottom:6px" id="healthreport-step">Initialising…</div>
+            <div id="healthreport-progress" style="display:none;margin-top:4px">
+              <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);margin-bottom:5px" id="healthreport-step">Initialising…</div>
               <div style="background:var(--border);border-radius:4px;height:4px;overflow:hidden">
                 <div id="healthreport-bar" style="height:100%;width:0%;background:var(--accent);border-radius:4px;transition:width .4s ease"></div>
               </div>
             </div>
 
-            <div class="modal-btns" style="margin-top:auto">
+            <!-- ── Saved reports list ── -->
+            <div style="margin-top:14px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--dimText);text-transform:uppercase;letter-spacing:.06em">Saved Reports</span>
+                <button onclick="loadReportsList()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--dimText);font-size:10px;font-family:'IBM Plex Mono',monospace;padding:2px 8px;cursor:pointer">↺ Refresh</button>
+              </div>
+              <div id="healthreport-list" style="font-size:11px;font-family:'IBM Plex Mono',monospace;max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:5px">
+                <span style="color:var(--dimText)">Loading…</span>
+              </div>
+            </div>
+
+            <div class="modal-btns" style="margin-top:auto;padding-top:10px">
               <button class="modal-btn modal-btn-primary" id="healthreport-btn" style="display:flex;align-items:center;gap:8px">
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-                Generate &amp; Download PDF Report
+                Generate Report
               </button>
             </div>
           </div>
@@ -1470,7 +1480,7 @@ document.querySelectorAll('.mtab').forEach(btn => {
     document.getElementById('readme-pane').style.display       = (target === 'readme-pane')     ? 'block' : 'none';
     document.getElementById('settings-pane').classList.toggle('active', target === 'settings-pane');
     document.getElementById('guidelines-pane').style.display   = (target === 'guidelines-pane') ? 'block' : 'none';
-    if(target === 'settings-pane') { loadRagStats(); loadIngestedFiles(); loadOutputConfig(); }
+    if(target === 'settings-pane') { loadRagStats(); loadIngestedFiles(); loadOutputConfig(); if(window.loadReportsList) loadReportsList(); }
   });
 });
 
@@ -2833,13 +2843,14 @@ inpEl.addEventListener('keydown', e=>{
   if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); }
 });
 
-// ── Health Check Report ───────────────────────────────────────────────────
+// ── Health Check Report ─────────────────────────────────────────────────────
 (function(){
   const btn      = document.getElementById('healthreport-btn');
   const statusEl = document.getElementById('healthreport-status');
   const progress = document.getElementById('healthreport-progress');
   const stepEl   = document.getElementById('healthreport-step');
   const barEl    = document.getElementById('healthreport-bar');
+  const listEl   = document.getElementById('healthreport-list');
 
   if (!btn) return;
 
@@ -2850,10 +2861,55 @@ inpEl.addEventListener('keydown', e=>{
     [50,  'Scanning workload status…'],
     [63,  'Checking networking and DNS…'],
     [76,  'Auditing certificates and RBAC…'],
-    [88,  'Collecting recent diagnostics…'],
-    [95,  'Compiling report…'],
+    [88,  'Querying Prometheus charts (1d/7d/30d)…'],
+    [95,  'Compiling and saving report…'],
   ];
 
+  // ── Load reports list from server ──────────────────────────────────────────
+  window.loadReportsList = async function() {
+    if (!listEl) return;
+    listEl.innerHTML = '<span style="color:var(--dimText)">Loading…</span>';
+    try {
+      const res  = await fetch('/api/reports');
+      const data = await res.json();
+      const reports = data.reports || [];
+      if (!reports.length) {
+        listEl.innerHTML = '<span style="color:var(--dimText)">No reports yet. Click Generate Report to create one.</span>';
+        return;
+      }
+      listEl.innerHTML = reports.map(r => {
+        const d   = new Date(r.created * 1000);
+        const ts  = d.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' })
+                  + ' ' + d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', hour12:false });
+        return `<div style="display:flex;align-items:center;justify-content:space-between;
+                  background:var(--inputBg);border:1px solid var(--border);border-radius:6px;
+                  padding:7px 10px;gap:10px">
+          <div>
+            <div style="color:var(--textMain);font-weight:600;font-size:11px">${r.filename}</div>
+            <div style="color:var(--dimText);font-size:10px;margin-top:2px">${ts} &nbsp;·&nbsp; ${r.size_kb} KB</div>
+          </div>
+          <a href="/api/reports/${encodeURIComponent(r.filename)}" download="${r.filename}"
+             style="flex-shrink:0;background:var(--accent);color:#000;font-weight:700;font-size:11px;
+                    font-family:'IBM Plex Mono',monospace;padding:5px 12px;border-radius:6px;
+                    text-decoration:none;display:flex;align-items:center;gap:5px">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
+                 fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Download
+          </a>
+        </div>`;
+      }).join('');
+    } catch(e) {
+      listEl.innerHTML = '<span style="color:#ef4444">Failed to load reports.</span>';
+    }
+  };
+
+  // Load on tab activate
+  loadReportsList();
+
+  // ── Generate button ─────────────────────────────────────────────────────────
   btn.addEventListener('click', async () => {
     btn.disabled = true;
     statusEl.style.color = 'var(--accent)';
@@ -2862,15 +2918,6 @@ inpEl.addEventListener('keydown', e=>{
     barEl.style.width = '5%';
     stepEl.textContent = 'Connecting to cluster…';
 
-    // Open print window immediately — must happen synchronously during user gesture
-    // to avoid browser popup blocker. We fill it with content after the fetch.
-    const printWindow = window.open('', '_blank');
-    if (printWindow) {
-      printWindow.document.write('<html><body><p style="font-family:sans-serif;color:#64748b;padding:40px">⏳ Generating health report, please wait…</p></body></html>');
-      printWindow.document.close();
-    }
-
-    // Animate progress steps while waiting
     let stepIdx = 0;
     const stepTimer = setInterval(() => {
       if (stepIdx < STEPS.length) {
@@ -2881,21 +2928,22 @@ inpEl.addEventListener('keydown', e=>{
     }, 3500);
 
     try {
+      // 1. Fetch report data
       const res = await fetch('/api/healthcheck-report', {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
       });
 
       clearInterval(stepTimer);
-      barEl.style.width = '100%';
-      stepEl.textContent = 'Report complete. Preparing PDF…';
+      barEl.style.width = '98%';
+      stepEl.textContent = 'Saving report to server…';
 
       if (!res.ok) {
         const e = await res.json().catch(() => ({}));
         throw new Error(e.error || 'HTTP ' + res.status);
       }
 
-      const data = await res.json();
+      const data       = await res.json();
       const reportText = data.report  || '';
       const charts     = data.charts  || {};
 
@@ -2903,104 +2951,81 @@ inpEl.addEventListener('keydown', e=>{
         throw new Error(reportText || 'No report content returned.');
       }
 
-      // ── SVG line chart builder (time-series) ─────────────────────────────
+      // 2. Build HTML (same chart logic as before, reuse CHART_COLORS + buildLineChart)
       const CHART_COLORS = [
         '#0369a1','#0891b2','#059669','#d97706','#7c3aed',
         '#db2777','#ea580c','#65a30d','#0e7490','#9333ea',
       ];
 
       function buildLineChart(series, unit, title) {
-        if (!series || !series.length) {
-          return `<div style="font-size:10px;color:#94a3b8;padding:8px 0">No Prometheus data for this period.</div>`;
-        }
-        const W = 480, H = 160, ML = 44, MR = 6, MT = 8, MB = 22;
-        const PW = W - ML - MR, PH = H - MT - MB;
-
-        let tMin = Infinity, tMax = -Infinity, vMin = Infinity, vMax = -Infinity;
-        series.forEach(s => s.values.forEach(([t, v]) => {
-          if (t < tMin) tMin = t; if (t > tMax) tMax = t;
-          if (v < vMin) vMin = v; if (v > vMax) vMax = v;
+        if (!series || !series.length)
+          return '<div style="font-size:10px;color:#94a3b8;padding:8px 0">No Prometheus data for this period.</div>';
+        const W=480,H=160,ML=44,MR=6,MT=8,MB=22,PW=W-ML-MR,PH=H-MT-MB;
+        let tMin=Infinity,tMax=-Infinity,vMin=Infinity,vMax=-Infinity;
+        series.forEach(s=>s.values.forEach(([t,v])=>{
+          if(t<tMin)tMin=t;if(t>tMax)tMax=t;if(v<vMin)vMin=v;if(v>vMax)vMax=v;
         }));
-        if (vMin === vMax) { vMin = 0; vMax = Math.max(vMax * 1.2, 1); }
-        const yLo = Math.max(0, vMin - (vMax - vMin) * 0.08);
-        const yHi = vMax + (vMax - vMin) * 0.08;
-
-        const xS = t => ML + ((t - tMin) / (tMax - tMin || 1)) * PW;
-        const yS = v => MT + PH - ((v - yLo) / (yHi - yLo || 1)) * PH;
-
-        const fmt = v => unit === 'm'   ? (v >= 1000 ? `${(v/1000).toFixed(1)}C` : `${Math.round(v)}m`)
-                       : unit === 'MiB' ? (v >= 1024 ? `${(v/1024).toFixed(1)}Gi` : `${Math.round(v)}Mi`)
-                       : v.toFixed(1);
-
-        const TICKS = 4;
-        let grid = '', xAxis = '';
-        for (let i = 0; i <= TICKS; i++) {
-          const v = yLo + (yHi - yLo) * (i / TICKS);
-          const y = yS(v).toFixed(1);
-          grid   += `<line x1="${ML}" y1="${y}" x2="${ML+PW}" y2="${y}" stroke="#e2e8f0" stroke-width="1"/>`;
-          grid   += `<text x="${ML-3}" y="${y}" text-anchor="end" dominant-baseline="middle" font-size="8" font-family="Consolas,monospace" fill="#64748b">${fmt(v)}</text>`;
+        if(vMin===vMax){vMin=0;vMax=Math.max(vMax*1.2,1);}
+        const yLo=Math.max(0,vMin-(vMax-vMin)*0.08),yHi=vMax+(vMax-vMin)*0.08;
+        const xS=t=>ML+((t-tMin)/(tMax-tMin||1))*PW;
+        const yS=v=>MT+PH-((v-yLo)/(yHi-yLo||1))*PH;
+        const fmt=v=>unit==='m'?(v>=1000?`${(v/1000).toFixed(1)}C`:`${Math.round(v)}m`)
+                    :unit==='MiB'?(v>=1024?`${(v/1024).toFixed(1)}Gi`:`${Math.round(v)}Mi`)
+                    :v.toFixed(1);
+        const TICKS=4;
+        let grid='',xAxis='';
+        for(let i=0;i<=TICKS;i++){
+          const v=yLo+(yHi-yLo)*(i/TICKS),y=yS(v).toFixed(1);
+          grid+=`<line x1="${ML}" y1="${y}" x2="${ML+PW}" y2="${y}" stroke="#e2e8f0" stroke-width="1"/>`;
+          grid+=`<text x="${ML-3}" y="${y}" text-anchor="end" dominant-baseline="middle" font-size="8" font-family="Consolas,monospace" fill="#64748b">${fmt(v)}</text>`;
         }
-        [0, 0.5, 1].forEach(f => {
-          const ts = tMin + (tMax - tMin) * f;
-          const d  = new Date(ts * 1000);
-          const lbl = d.toLocaleDateString('en-GB', { day:'2-digit', month:'short' })
-                    + ' ' + d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', hour12:false });
-          xAxis += `<text x="${(ML + f * PW).toFixed(1)}" y="${(MT+PH+14).toFixed(1)}" text-anchor="middle" font-size="7.5" font-family="Consolas,monospace" fill="#64748b">${lbl}</text>`;
+        [0,0.5,1].forEach(f=>{
+          const ts=tMin+(tMax-tMin)*f,d=new Date(ts*1000);
+          const lbl=d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'})+' '+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',hour12:false});
+          xAxis+=`<text x="${(ML+f*PW).toFixed(1)}" y="${(MT+PH+14).toFixed(1)}" text-anchor="middle" font-size="7.5" font-family="Consolas,monospace" fill="#64748b">${lbl}</text>`;
         });
-
-        const svgId = 'c' + Math.random().toString(36).slice(2, 8);
-        let paths = '';
-        series.forEach((s, i) => {
-          if (!s.values.length) return;
-          const col = CHART_COLORS[i % CHART_COLORS.length];
-          const pts = s.values.map(([t, v]) => `${xS(t).toFixed(1)},${yS(v).toFixed(1)}`).join(' ');
-          const first = s.values[0], last = s.values[s.values.length - 1];
-          const area  = `${xS(first[0]).toFixed(1)},${(MT+PH).toFixed(1)} ${pts} ${xS(last[0]).toFixed(1)},${(MT+PH).toFixed(1)}`;
-          paths += `<polygon points="${area}" fill="${col}" opacity="0.07"/>`;
-          paths += `<polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>`;
-          const lv = s.values[s.values.length - 1];
-          paths += `<circle cx="${xS(lv[0]).toFixed(1)}" cy="${yS(lv[1]).toFixed(1)}" r="2.5" fill="${col}"/>`;
+        const svgId='c'+Math.random().toString(36).slice(2,8);
+        let paths='';
+        series.forEach((s,i)=>{
+          if(!s.values.length)return;
+          const col=CHART_COLORS[i%CHART_COLORS.length];
+          const pts=s.values.map(([t,v])=>`${xS(t).toFixed(1)},${yS(v).toFixed(1)}`).join(' ');
+          const first=s.values[0],last=s.values[s.values.length-1];
+          const area=`${xS(first[0]).toFixed(1)},${(MT+PH).toFixed(1)} ${pts} ${xS(last[0]).toFixed(1)},${(MT+PH).toFixed(1)}`;
+          paths+=`<polygon points="${area}" fill="${col}" opacity="0.07"/>`;
+          paths+=`<polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+          const lv=s.values[s.values.length-1];
+          paths+=`<circle cx="${xS(lv[0]).toFixed(1)}" cy="${yS(lv[1]).toFixed(1)}" r="2.5" fill="${col}"/>`;
         });
-
-        const legend = series.map((s, i) => {
-          const col    = CHART_COLORS[i % CHART_COLORS.length];
-          const lastV  = s.values.length ? fmt(s.values[s.values.length-1][1]) : '—';
-          const lbl    = s.label.length > 30 ? s.label.slice(0,28)+'…' : s.label;
-          return `<div style="display:flex;align-items:center;gap:4px;font-size:8.5px;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">` +
-                 `<span style="width:8px;height:8px;border-radius:50%;background:${col};flex-shrink:0"></span>` +
-                 `<span style="flex:1;overflow:hidden;text-overflow:ellipsis">${lbl}</span>` +
+        const legend=series.map((s,i)=>{
+          const col=CHART_COLORS[i%CHART_COLORS.length];
+          const lastV=s.values.length?fmt(s.values[s.values.length-1][1]):'—';
+          const lbl=s.label.length>30?s.label.slice(0,28)+'…':s.label;
+          return `<div style="display:flex;align-items:center;gap:4px;font-size:8.5px;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">`+
+                 `<span style="width:8px;height:8px;border-radius:50%;background:${col};flex-shrink:0"></span>`+
+                 `<span style="flex:1;overflow:hidden;text-overflow:ellipsis">${lbl}</span>`+
                  `<span style="font-weight:700;color:${col};flex-shrink:0">${lastV}</span></div>`;
         }).join('');
-
-        return `<div style="margin-bottom:6px">
-          <div style="font-size:10px;font-weight:700;color:#075985;margin-bottom:3px">${title}</div>
-          <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block">
-            <defs><clipPath id="${svgId}"><rect x="${ML}" y="${MT}" width="${PW}" height="${PH}"/></clipPath></defs>
-            ${grid}
-            <g clip-path="url(#${svgId})">${paths}</g>
-            ${xAxis}
-            <line x1="${ML}" y1="${MT}" x2="${ML}" y2="${MT+PH}" stroke="#94a3b8" stroke-width="1"/>
-            <line x1="${ML}" y1="${MT+PH}" x2="${ML+PW}" y2="${MT+PH}" stroke="#94a3b8" stroke-width="1"/>
-          </svg>
-          <div style="display:flex;flex-direction:column;gap:2px;margin-top:4px">${legend}</div>
-        </div>`;
+        return `<div style="margin-bottom:6px">`+
+          `<div style="font-size:10px;font-weight:700;color:#075985;margin-bottom:3px">${title}</div>`+
+          `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block">`+
+          `<defs><clipPath id="${svgId}"><rect x="${ML}" y="${MT}" width="${PW}" height="${PH}"/></clipPath></defs>`+
+          `${grid}<g clip-path="url(#${svgId})">${paths}</g>${xAxis}`+
+          `<line x1="${ML}" y1="${MT}" x2="${ML}" y2="${MT+PH}" stroke="#94a3b8" stroke-width="1"/>`+
+          `<line x1="${ML}" y1="${MT+PH}" x2="${ML+PW}" y2="${MT+PH}" stroke="#94a3b8" stroke-width="1"/>`+
+          `</svg><div style="display:flex;flex-direction:column;gap:2px;margin-top:4px">${legend}</div></div>`;
       }
 
-      // Build all 6 charts (CPU + MEM × 3 windows)
-      const chartsCpu1d = buildLineChart(charts.cpu_1d, 'm',   'CPU Usage — Last 24 Hours (top 10 pods)');
-      const chartsMem1d = buildLineChart(charts.mem_1d, 'MiB', 'Memory Usage — Last 24 Hours (top 10 pods)');
-      const chartsCpu1w = buildLineChart(charts.cpu_1w, 'm',   'CPU Usage — Last 7 Days (top 10 pods)');
-      const chartsMem1w = buildLineChart(charts.mem_1w, 'MiB', 'Memory Usage — Last 7 Days (top 10 pods)');
-      const chartsCpu1m = buildLineChart(charts.cpu_1m, 'm',   'CPU Usage — Last 30 Days (top 10 pods)');
-      const chartsMem1m = buildLineChart(charts.mem_1m, 'MiB', 'Memory Usage — Last 30 Days (top 10 pods)');
+      const chartsCpu1d=buildLineChart(charts.cpu_1d,'m',  'CPU Usage — Last 24 Hours (top 10 pods)');
+      const chartsMem1d=buildLineChart(charts.mem_1d,'MiB','Memory Usage — Last 24 Hours (top 10 pods)');
+      const chartsCpu1w=buildLineChart(charts.cpu_1w,'m',  'CPU Usage — Last 7 Days (top 10 pods)');
+      const chartsMem1w=buildLineChart(charts.mem_1w,'MiB','Memory Usage — Last 7 Days (top 10 pods)');
+      const chartsCpu1m=buildLineChart(charts.cpu_1m,'m',  'CPU Usage — Last 30 Days (top 10 pods)');
+      const chartsMem1m=buildLineChart(charts.mem_1m,'MiB','Memory Usage — Last 30 Days (top 10 pods)');
 
-      // ── Date/time formatted like the sample ──────────────────────────────
       const now      = new Date();
-      const datePart = now.toLocaleDateString('en-GB', { day:'numeric', month:'long', year:'numeric' });
-      const timePart = now.toLocaleTimeString('en-US', {
-        hour:'numeric', minute:'2-digit', second:'2-digit',
-        hour12:true, timeZoneName:'short'
-      });
+      const datePart = now.toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'});
+      const timePart = now.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true,timeZoneName:'short'});
       const dateStr  = `${datePart}, ${timePart}`;
 
       const html = `<!DOCTYPE html>
@@ -3010,7 +3035,7 @@ inpEl.addEventListener('keydown', e=>{
   @media print { @page { size: A4; margin: 12mm 10mm; } body { padding: 0; } }
   * { box-sizing: border-box; }
   body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 10px; color: #1e293b; margin: 0; padding: 10px; line-height: 1.5; background:#fff; }
-  h1 { font-size: 16px; margin: 0 0 3px; color: #0369a1; display:flex; align-items:center; gap:6px; }
+  h1 { font-size: 16px; margin: 0 0 3px; color: #0369a1; }
   h2 { font-size: 11.5px; color: #075985; border-bottom: 1px solid #bae6fd; padding-bottom: 2px; margin: 16px 0 6px; page-break-after: avoid; }
   h3 { font-size: 10.5px; color: #0c4a6e; margin: 10px 0 3px; page-break-after: avoid; }
   p  { margin: 2px 0 6px; }
@@ -3028,58 +3053,38 @@ inpEl.addEventListener('keydown', e=>{
   .sep  { color:#0369a1; font-weight:700; padding:0 4px; }
   .chart-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:10px; }
   .chart-section { page-break-inside:avoid; }
-  @media print {
-    body { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-    h2,h3 { page-break-after:avoid; }
-    table { page-break-inside:avoid; }
-  }
+  @media print { body { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    h2,h3 { page-break-after:avoid; } table { page-break-inside:avoid; } }
 </style>
 </head><body>
-<h1>&#128203; ECS AI Ops &mdash; Cluster Health Report</h1>
+<h1>&#128203; ECS AI Ops — Cluster Health Report</h1>
 <div class="meta">Generated: ${dateStr} <span class="sep">|</span> Timezone: ${USER_TIMEZONE}</div>
-
 ${marked.parse(reportText)}
-
 <hr/>
-
-<h2>&#128200; Pod Resource Usage &mdash; Last 24 Hours</h2>
-<div class="chart-grid chart-section">
-  ${chartsCpu1d}
-  ${chartsMem1d}
-</div>
-
-<h2>&#128200; Pod Resource Usage &mdash; Last 7 Days</h2>
-<div class="chart-grid chart-section">
-  ${chartsCpu1w}
-  ${chartsMem1w}
-</div>
-
-<h2>&#128200; Pod Resource Usage &mdash; Last 30 Days</h2>
-<div class="chart-grid chart-section">
-  ${chartsCpu1m}
-  ${chartsMem1m}
-</div>
+<h2>&#128200; Pod Resource Usage — Last 24 Hours</h2>
+<div class="chart-grid chart-section">${chartsCpu1d}${chartsMem1d}</div>
+<h2>&#128200; Pod Resource Usage — Last 7 Days</h2>
+<div class="chart-grid chart-section">${chartsCpu1w}${chartsMem1w}</div>
+<h2>&#128200; Pod Resource Usage — Last 30 Days</h2>
+<div class="chart-grid chart-section">${chartsCpu1m}${chartsMem1m}</div>
 </body></html>`;
 
-      const printWindow = window.open('', '_blank');
-      if (printWindow && !printWindow.closed) {
-        printWindow.document.open();
-        printWindow.document.write(html);
-        printWindow.document.close();
-        printWindow.focus();
-        printWindow.onload = () => { printWindow.print(); };
-      } else {
-        // printWindow was blocked — fall back to file download
-        const blob = new Blob([html], { type: 'text/html' });
-        const url  = URL.createObjectURL(blob);
-        const a    = document.createElement('a');
-        a.href = url; a.download = 'ecs-health-report.html'; a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 2000);
-      }
+      // 3. Save to server
+      const saveRes = await fetch('/api/reports/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ html }),
+      });
+      const saveData = await saveRes.json();
+      if (!saveRes.ok) throw new Error(saveData.error || 'Save failed');
 
+      barEl.style.width = '100%';
       statusEl.style.color = '#22c55e';
-      statusEl.textContent = '✓ Report successfully compiled and ready.';
-      setTimeout(() => { progress.style.display = 'none'; barEl.style.width = '0%'; }, 2000);
+      statusEl.textContent = `✓ Report saved: ${saveData.filename} (${saveData.size_kb} KB)`;
+      setTimeout(() => { progress.style.display = 'none'; barEl.style.width = '0%'; }, 1500);
+
+      // 4. Refresh file list
+      await loadReportsList();
 
     } catch (err) {
       clearInterval(stepTimer);
@@ -3087,7 +3092,6 @@ ${marked.parse(reportText)}
       barEl.style.width = '0%';
       statusEl.style.color = '#ef4444';
       statusEl.textContent = '✗ ' + err.message;
-      if (printWindow && !printWindow.closed) printWindow.close();
     } finally {
       btn.disabled = false;
     }
