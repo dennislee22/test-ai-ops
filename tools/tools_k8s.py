@@ -2700,17 +2700,33 @@ def generate_healthcheck_report() -> str:
     def esc(s):
         return _html.escape(str(s)) if s is not None else ""
 
+    # SVG icon helpers — zero font dependency, renders perfectly in weasyprint air-gapped
+    _SVG_OK   = ('<svg width="11" height="11" viewBox="0 0 11 11" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle;margin-right:3px">'
+                 '<circle cx="5.5" cy="5.5" r="5" fill="#16a34a"/>'
+                 '<polyline points="2.5,5.5 4.5,7.5 8.5,3.5" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
+                 '</svg>')
+    _SVG_WARN = ('<svg width="11" height="11" viewBox="0 0 11 11" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle;margin-right:3px">'
+                 '<polygon points="5.5,1 10.5,10 0.5,10" fill="#d97706"/>'
+                 '<rect x="5" y="4" width="1" height="3.5" fill="#fff"/>'
+                 '<circle cx="5.5" cy="8.8" r="0.7" fill="#fff"/>'
+                 '</svg>')
+    _SVG_ERR  = ('<svg width="11" height="11" viewBox="0 0 11 11" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle;margin-right:3px">'
+                 '<circle cx="5.5" cy="5.5" r="5" fill="#dc2626"/>'
+                 '<line x1="3" y1="3" x2="8" y2="8" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>'
+                 '<line x1="8" y1="3" x2="3" y2="8" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>'
+                 '</svg>')
+
     def section(title):
         return f'<h2>{esc(title)}</h2>'
 
     def ok(msg):
-        return f'<p class="ok">✅ {esc(msg)}</p>'
+        return f'<p class="ok">{_SVG_OK}{esc(msg)}</p>'
 
     def warn(msg):
-        return f'<p class="warn">⚠️ {esc(msg)}</p>'
+        return f'<p class="warn">{_SVG_WARN}{esc(msg)}</p>'
 
     def err(msg):
-        return f'<p class="err">🔴 {esc(msg)}</p>'
+        return f'<p class="err">{_SVG_ERR}{esc(msg)}</p>'
 
     def info(msg):
         return f'<p>{esc(msg)}</p>'
@@ -2757,7 +2773,9 @@ def generate_healthcheck_report() -> str:
                 roles  = (",".join(k.split("/")[-1] for k in (node.metadata.labels or {})
                                    if "node-role.kubernetes.io" in k) or "worker")
                 conds  = {c.type: c.status for c in (node.status.conditions or [])}
-                status = "✅ Ready" if conds.get("Ready") == "True" else "🔴 NotReady"
+                status = ('<span style="color:#16a34a;font-weight:600">&#10003; Ready</span>'
+                          if conds.get("Ready") == "True" else
+                          '<span style="color:#dc2626;font-weight:600">&#10007; NotReady</span>')
                 alloc  = node.status.allocatable or {}
                 cpu    = alloc.get("cpu", "?")
                 mem_ki = alloc.get("memory", "0Ki")
@@ -2770,7 +2788,7 @@ def generate_healthcheck_report() -> str:
                 flags  = []
                 if conds.get("MemoryPressure") == "True": flags.append("MemPressure")
                 if conds.get("DiskPressure")   == "True": flags.append("DiskPressure")
-                status_str = status + (f" ⚠️ {','.join(flags)}" if flags else "")
+                status_str = status + (f' <span style="color:#d97706">[{",".join(flags)}]</span>' if flags else "")
                 rows.append([esc(node.metadata.name), esc(roles),
                               status_str, esc(cpu), esc(mem_gib), esc(gpu)])
             R.append(table(["NAME","ROLES","STATUS","CPU","MEMORY","GPU"], rows))
@@ -2884,7 +2902,9 @@ def generate_healthcheck_report() -> str:
                         else:
                             pct = round(int(str(used_val).split(".")[0]) /
                                         max(int(str(hard_val).split(".")[0]), 1) * 100, 1)
-                        icon = "🔴" if pct >= 90 else ("⚠️" if pct >= 80 else "✅")
+                        icon = ('<span style="color:#dc2626;font-weight:700">CRIT</span>' if pct >= 90
+                                else ('<span style="color:#d97706;font-weight:700">WARN</span>' if pct >= 80
+                                      else '<span style="color:#16a34a">OK</span>'))
                         pct_str = f"{icon} {pct}%"
                     except Exception:
                         pct_str = "-"
@@ -2927,7 +2947,7 @@ def generate_healthcheck_report() -> str:
                     "storageclass.kubernetes.io/is-default-class") == "true"
                 rows.append([esc(sc.metadata.name), esc(sc.provisioner),
                               esc(sc.reclaim_policy or "Delete"),
-                              "✅ Yes" if sc.allow_volume_expansion else "No",
+                              "Yes" if sc.allow_volume_expansion else "No",
                               "★ Default" if is_default else "-"])
             R.append(table(["NAME","PROVISIONER","RECLAIM POLICY","EXPANSION","DEFAULT"], rows))
         else:
@@ -3023,7 +3043,7 @@ def generate_healthcheck_report() -> str:
             avail_gib = round(avail_kb / (1024*1024), 2)
             total_gib = round(total_kb / (1024*1024), 2)
             free_pct  = round(avail_kb / total_kb * 100, 1) if total_kb > 0 else 0.0
-            flag      = "🔴" if pct >= 90 else ("⚠️" if pct >= 80 else "✅")
+            flag      = "red" if pct >= 90 else ("orange" if pct >= 80 else "green")
             pv_rows.append((pct, flag, ns, pvc_name, pct, used_gib, total_gib, avail_gib, free_pct))
 
         pv_rows.sort(key=lambda x: x[0], reverse=True)
@@ -3033,6 +3053,17 @@ def generate_healthcheck_report() -> str:
                         f'<circle cx="7" cy="7" r="6" fill="{color}"/></svg>')
 
             def _pv_table(rows, heading, hdr_cls):
+                # SVG icons for pv-hdr (no emoji font needed)
+                _warn_icon = ('<svg width="12" height="12" viewBox="0 0 12 12" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle;flex-shrink:0">'
+                              '<polygon points="6,1 11.5,11 0.5,11" fill="#d97706"/>'
+                              '<rect x="5.4" y="4.5" width="1.2" height="3.5" fill="#fff"/>'
+                              '<circle cx="6" cy="9.5" r="0.8" fill="#fff"/>'
+                              '</svg>')
+                _ok_icon   = ('<svg width="12" height="12" viewBox="0 0 12 12" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle;flex-shrink:0">'
+                              '<circle cx="6" cy="6" r="5.5" fill="#16a34a"/>'
+                              '<polyline points="3,6 5,8 9,4" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
+                              '</svg>')
+                icon = _warn_icon if hdr_cls == "pv-hdr-warn" else _ok_icon
                 trs = ""
                 for r in rows:
                     _,ns,pvc_name,pct,used,total,avail,fpct = r[1],r[2],r[3],r[4],r[5],r[6],r[7],r[8]
@@ -3051,7 +3082,7 @@ def generate_healthcheck_report() -> str:
                 col_hdr = ('<tr><th style="width:28px"></th>'
                            '<th>Namespace / PVC</th><th>Usage</th>'
                            '<th>Used (GiB)</th><th>Total (GiB)</th><th>Free (GiB)</th></tr>')
-                return (f'<div class="pv-hdr {hdr_cls}">{esc(heading)} ({len(rows)} PVC{"s" if len(rows)!=1 else ""})</div>'
+                return (f'<div class="pv-hdr {hdr_cls}">{icon}{esc(heading)} ({len(rows)} PVC{"s" if len(rows)!=1 else ""})</div>'
                         f'<div class="pv-table">'
                         f'<table><thead>{col_hdr}</thead><tbody>{trs}</tbody></table>'
                         f'</div>')
@@ -3059,9 +3090,9 @@ def generate_healthcheck_report() -> str:
             critical = [r for r in pv_rows if r[0] >= 80]
             healthy  = [r for r in pv_rows if r[0] < 80]
             if critical:
-                R.append(_pv_table(critical, "⚠️  Nearing or exceeding 80% capacity", "pv-hdr-warn"))
+                R.append(_pv_table(critical, "Nearing or exceeding 80% capacity", "pv-hdr-warn"))
             if healthy:
-                R.append(_pv_table(healthy[:5], "✅  Within capacity", "pv-hdr-ok"))
+                R.append(_pv_table(healthy[:5], "Within capacity", "pv-hdr-ok"))
                 if len(healthy) > 5:
                     R.append(f'<p class="note"><em>({len(healthy)-5} more healthy volumes not shown)</em></p>')
         else:
@@ -3231,13 +3262,13 @@ def generate_healthcheck_report() -> str:
                             stderr=False, stdin=False, stdout=True, tty=False, _preload_content=True)
                         out = resp.strip() if isinstance(resp, str) else ""
                         resolved = "Address" in out or "answer" in out.lower()
-                        flag = "✅" if resolved else "❌"
+                        flag = '<span style="color:#16a34a;font-weight:700">OK</span>' if resolved else '<span style="color:#dc2626;font-weight:700">FAIL</span>'
                         res_rows.append([flag,
                                           f"<code>{esc(target)}</code>",
                                           "Resolved" if resolved else
                                           f'<span style="color:#dc2626">FAILED</span>'])
                     except Exception as ex:
-                        res_rows.append(["⚠️", f"<code>{esc(target)}</code>",
+                        res_rows.append(['<span style="color:#d97706">ERR</span>', f"<code>{esc(target)}</code>",
                                           f"exec error: {esc(str(ex))}"])
                 R.append(table(["", "Target", "Result"], res_rows))
         else:
@@ -3304,7 +3335,7 @@ def generate_healthcheck_report() -> str:
             for c in cs_items:
                 cond   = c.conditions[0] if c.conditions else None
                 status = cond.status if cond else "Unknown"
-                flag   = "🟢" if status == "True" else "🔴"
+                flag   = '<span style="color:#16a34a;font-weight:700">&#10003;</span>' if status == "True" else '<span style="color:#dc2626;font-weight:700">&#10007;</span>'
                 rows.append([f"{flag} {esc(c.metadata.name)}",
                               esc(cond.message if cond else "-"),
                               esc(cond.error if cond else "-")])
@@ -3327,7 +3358,7 @@ def generate_healthcheck_report() -> str:
                 ready    = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
                 total    = len(pod.spec.containers)
                 restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
-                flag     = "🟢" if phase == "Running" and ready == total else "🔴"
+                flag     = '<span style="color:#16a34a;font-weight:700">&#10003;</span>' if phase == "Running" and ready == total else '<span style="color:#dc2626;font-weight:700">&#10007;</span>'
                 comp     = next((c for c in core_components if c in pod.metadata.name),
                                 pod.metadata.name.split("-")[0])
                 rows.append([esc(comp), esc(pod.metadata.name),
@@ -3365,8 +3396,8 @@ def generate_healthcheck_report() -> str:
         R.append(warn(f"Warning events: {e}"))
 
     R.append('<hr/>')
-    R.append('<p>&#128172; This is your complete health check report. '
-             '&#128203; Ask the chatbot to drill into any flagged area for deeper diagnostics.</p>')
+    R.append('<p>This is your complete health check report. '
+             'Ask the chatbot to drill into any flagged area for deeper diagnostics.</p>')
 
     return "\n".join(R)
 
