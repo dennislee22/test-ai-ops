@@ -707,8 +707,9 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
     async def _heartbeat_task():
         tick = 0
         while not _hb_stop.is_set():
-            try: await asyncio.wait_for(asyncio.shield(asyncio.sleep(15)), timeout=15)
-            except Exception: pass
+            try: await asyncio.wait_for(_hb_stop.wait(), timeout=15)
+            except asyncio.TimeoutError: pass
+            else: break  # stop event fired — exit cleanly without putting a tick
             tick += 15
             if not _hb_stop.is_set(): await _hb_queue.put(tick)
     _hb_task = asyncio.ensure_future(_heartbeat_task())
