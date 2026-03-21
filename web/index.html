@@ -3038,6 +3038,10 @@ inpEl.addEventListener('keydown', e=>{
 <h1>&#128203; ECS AI Ops &mdash; Cluster Health Report</h1>
 <div class="meta">Generated: ${dateStr} <span class="sep">|</span> Timezone: ${USER_TIMEZONE}</div>
 
+${marked.parse(reportText)}
+
+<hr/>
+
 <h2>&#128200; Pod Resource Usage &mdash; Last 24 Hours</h2>
 <div class="chart-grid chart-section">
   ${chartsCpu1d}
@@ -3055,10 +3059,6 @@ inpEl.addEventListener('keydown', e=>{
   ${chartsCpu1m}
   ${chartsMem1m}
 </div>
-
-<hr/>
-
-${marked.parse(reportText)}
 </body></html>`;
 
       const printWindow = window.open('', '_blank');
@@ -3067,7 +3067,7 @@ ${marked.parse(reportText)}
         printWindow.document.write(html);
         printWindow.document.close();
         printWindow.focus();
-        setTimeout(() => { printWindow.print(); printWindow.close(); }, 250);
+        printWindow.onload = () => { printWindow.print(); };
       } else {
         // printWindow was blocked — fall back to file download
         const blob = new Blob([html], { type: 'text/html' });
