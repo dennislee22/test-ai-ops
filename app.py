@@ -16,6 +16,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 
 import config.config as config
+import tools.tools_k8s as _tk
 from rag import init_db, get_doc_stats, RAG_TOOLS, rag_retrieve, ingest_directory, ingest_file, ingest_excel
 from rag.retrieve import _MSG_NO_INGEST
 from tools.tools_k8s import reload_kubeconfig, _core as _k8s_core
@@ -28,38 +29,42 @@ if not hasattr(config, "DISABLE_LOOP_PROTECTION"):
 _HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = _HERE / "config" / "settings.json"
 
+_SETTINGS_MAP = {
+    "kubectl_max_chars":       lambda v: setattr(_tk, "_KUBECTL_MAX_OUT", v),
+    "max_new_tokens":          lambda v: setattr(config, "MAX_NEW_TOKENS", v),
+    "llm_timeout":             lambda v: setattr(config, "LLM_TIMEOUT", v),
+    "disable_loop_protection": lambda v: setattr(config, "DISABLE_LOOP_PROTECTION", v),
+    "show_secret_values":      lambda v: setattr(config, "SHOW_SECRET_VALUES", v),
+}
+
 def load_settings():
-    if SETTINGS_FILE.exists():
-        try:
-            import tools.tools_k8s as _tk
-            with open(SETTINGS_FILE, "r") as f:
-                s = json.load(f)
-                if "kubectl_max_chars" in s: _tk._KUBECTL_MAX_OUT = s["kubectl_max_chars"]
-                if "max_new_tokens" in s: config.MAX_NEW_TOKENS = s["max_new_tokens"]
-                if "llm_timeout" in s: config.LLM_TIMEOUT = s["llm_timeout"]
-                if "disable_loop_protection" in s: config.DISABLE_LOOP_PROTECTION = s["disable_loop_protection"]
-                if "show_secret_values" in s: config.SHOW_SECRET_VALUES = s["show_secret_values"]
-        except Exception as e:
-            config.logger.error(f"Failed to load settings.json: {e}")
+    if not SETTINGS_FILE.exists():
+        return
+    try:
+        s = json.loads(SETTINGS_FILE.read_text())
+        for key, apply in _SETTINGS_MAP.items():
+            if key in s:
+                apply(s[key])
+    except Exception as e:
+        config.logger.error(f"Failed to load settings.json: {e}")
 
 def save_settings():
-    import tools.tools_k8s as _tk
     s = {
-        "kubectl_max_chars": _tk._KUBECTL_MAX_OUT,
-        "max_new_tokens": getattr(config, "MAX_NEW_TOKENS", 4096),
-        "llm_timeout": getattr(config, "LLM_TIMEOUT", 300),
+        "kubectl_max_chars":       _tk._KUBECTL_MAX_OUT,
+        "max_new_tokens":          getattr(config, "MAX_NEW_TOKENS", 4096),
+        "llm_timeout":             getattr(config, "LLM_TIMEOUT", 300),
         "disable_loop_protection": getattr(config, "DISABLE_LOOP_PROTECTION", False),
-        "show_secret_values": getattr(config, "SHOW_SECRET_VALUES", False)
+        "show_secret_values":      getattr(config, "SHOW_SECRET_VALUES", False),
     }
     try:
-        with open(SETTINGS_FILE, "w") as f:
-            json.dump(s, f, indent=2)
+        SETTINGS_FILE.write_text(json.dumps(s, indent=2))
     except Exception as e:
         config.logger.error(f"Failed to save settings.json: {e}")
 
 load_settings()
 
 _decode_secrets_ctx: ContextVar[bool] = ContextVar("decode_secrets", default=False)
+_timezone_ctx:       ContextVar[str]  = ContextVar("user_timezone",  default="UTC")
 
 _log_ag = config._log_ag
 _log_rag = config._log_rag
@@ -77,15 +82,39 @@ LOCAL_NS_MAP = {
 
 IGNORE_NS = {
     "all", "the", "any", "which", "what", "my", "this", "that", "a", "some", "in",
-    "for", "of", "to", "is", "not", "are", "and", "or", "pvc", "pvcs", "pod", "pods", 
+    "for", "of", "to", "is", "not", "are", "and", "or", "pvc", "pvcs", "pod", "pods",
     "node", "nodes", "deployment", "deployments", "status", "health", "check", "get",
     "show", "has", "have", "had", "with", "without", "using", "uses", "does", "do"
 }
 
+def _sse(payload: dict) -> str:
+    return f"data: {json.dumps(payload)}\n\n"
+
+_SHEET_KEYWORDS = [
+    (["past learning", "incident"],     "Past Learnings"),
+    (["known issue"],                   "Known Issues"),
+    (["dos and don", "best practice"],  "Dos and Donts"),
+    (["prerequisite"],                  "Prerequisites"),
+]
+
+def _detect_sheet(q: str) -> str | None:
+    ql = q.lower()
+    for keywords, sheet in _SHEET_KEYWORDS:
+        if any(k in ql for k in keywords):
+            return sheet
+    return None
+
+def _ingest_response(results: list) -> dict:
+    return {
+        "results":      results,
+        "total_files":  len(results),
+        "total_chunks": sum(r.get("chunks", 0) for r in results),
+    }
+
 # ── 1. SCHEMAS ───────────────────────────────────────────────────────────────
 
 class HistoryMessage(BaseModel): role: str; content: str
-class ChatRequest(BaseModel): message: str; decode_secrets: bool = False; history: list[HistoryMessage] = []; max_new_tokens: int = 0; skip_synthesise: bool = False
+class ChatRequest(BaseModel): message: str; decode_secrets: bool = False; history: list[HistoryMessage] = []; max_new_tokens: int = 0; skip_synthesise: bool = False; timezone: str = "UTC"
 class ChatResponse(BaseModel): response: str; tools_used: list; iterations: int; status_updates: list; elapsed_seconds: float
 class AskRequest(BaseModel): q: str; skip_synthesise: bool = False
 class KbAskRequest(BaseModel): q: str; top_k: int = 50; max_tokens: int = 1312; sheet: Optional[str] = None
@@ -137,9 +166,9 @@ def _call_tool(name: str, args: dict, all_tools: dict) -> str:
 
     for k, v in params.items():
         if k not in args and "default" in v: args[k] = v["default"]
-        
+
     args = {k: v for k, v in args.items() if k in params or k == "decode"}
-    
+
     try:
         return str(fn(**args))
     except Exception as e:
@@ -186,10 +215,8 @@ def _build_llm_gguf():
     except ImportError: raise ImportError("llama-cpp-python is required for GGUF models.")
 
     model_path = config.LLM_MODEL
-    #n_ctx      = int(os.environ.get("GGUF_N_CTX", "8192"))
-    n_ctx      = int(os.environ.get("GGUF_N_CTX", "40960")) #n_ctx_train (40960)
+    n_ctx      = int(os.environ.get("GGUF_N_CTX", "40960"))
     n_threads  = int(os.environ.get("GGUF_N_THREADS", str(os.cpu_count() or 4)))
-    #n_threads  = 4
 
     _log_ag.info(f"[LLM/GGUF] Loading {model_path} | ctx={n_ctx} threads={n_threads}")
     if not os.path.isfile(model_path):
@@ -200,7 +227,7 @@ def _build_llm_gguf():
                 parts = model_path.split("/")
                 if len(parts) == 3 and parts[-1].endswith(".gguf"):
                     repo_id, filename, quant = "/".join(parts[:2]), parts[-1], parts[-1]
-                try: 
+                try:
                     model_path = hf_hub_download(repo_id=repo_id, filename=filename)
                     _log_ag.info(f"[LLM/GGUF] Downloaded {filename} from {repo_id}")
                     break
@@ -215,11 +242,11 @@ def _build_llm_gguf():
 
 def _extract_namespace(text: str) -> str:
     text = text.lower()
-        
+
     # 1. Interrogative Short-Circuit: "which namespace", "what ns", "how many namespaces"
     if re.search(r'\b(which|what|how many|list all|show all)\b\s+(?:namespaces|namespace|ns)\b', text):
         return "all"
-    
+
     # 2. Map known hardcoded keywords (Sort by length descending: cdp-services, cdp-keda, cdp...)
     sorted_keywords = sorted(LOCAL_NS_MAP.keys(), key=len, reverse=True)
     for keyword in sorted_keywords:
@@ -229,24 +256,24 @@ def _extract_namespace(text: str) -> str:
     # 3. Explicit "all namespaces", "all ns", or "-a" flag
     if re.search(r'\ball\b[^a-z0-9-]+(?:namespace|namespaces|namespac|namespcs|ns)\b', text) or "-a" in text.split():
         return "all"
-        
+
     # 4. Explicit flag "-n xyz" or "--namespace=xyz"
     match_flag = re.search(r'\b(?:-n|--namespace)[\s=]+([a-z0-9-]+)\b', text)
     if match_flag:
         return match_flag.group(1)
-            
+
     # 5. Forward shorthand "namespace xyz" (ignores punctuation & typos)
     for match in re.finditer(r'\b(?:namespace|namespaces|namespac|namespcs|ns)\b[^a-z0-9-]+([a-z0-9-]+)\b', text):
         extracted = match.group(1)
         if extracted not in IGNORE_NS and len(extracted) > 1:
             return extracted
-    
+
     # 6. Reverse shorthand "xyz namespace"
     for match in re.finditer(r'\b([a-z0-9-]+)[^a-z0-9-]+\b(?:namespace|namespaces|namespac|namespcs|ns)\b', text):
         extracted = match.group(1)
         if extracted not in IGNORE_NS and len(extracted) > 1:
             return extracted
-        
+
     return "all"
 
 def build_agent():
@@ -273,7 +300,7 @@ def build_agent():
 
         original_question = next((m.content for m in msgs if isinstance(m, HumanMessage)), "")
         tool_results = [m for m in msgs if isinstance(m, ToolMessage)]
-        
+
         _tools_used = {getattr(tr, "name", "") for tr in tool_results}
 
         _EXEMPT_TOOLS = {
@@ -282,9 +309,9 @@ def build_agent():
             "get_node_resource_requests", "rag_search", "exec_db_query", "kubectl_exec",
             "get_node_labels", "get_node_taints", "get_storage_classes", "get_cluster_version"
         }
-        
+
         _needs_ns = bool(_tools_used - _EXEMPT_TOOLS - {""})
-        
+
         # Guardrail
         _ns_prefix = ""
         if _needs_ns:
@@ -300,7 +327,7 @@ def build_agent():
             body = tr.content if len(tr.content) <= _tool_char_limit else tr.content[:_tool_char_limit] + "\n...[truncated]"
             parts.append(f"--- TOOL RESULT {i} ---\n{body}\n")
         combined = "".join(parts)
-        
+
         _log_ag.info(f"[REQ:{req_id}] [prepare_msgs] combining {len(tool_results)} tool result(s) ({len(combined)} chars) for LLM synthesis")
 
         _TOOL_FORMATS = { # Unique prompt for individual tool
@@ -388,9 +415,9 @@ def build_agent():
             elif isinstance(m, ToolMessage): result.append({"role": "tool", "name": "tool", "content": m.content})
             else:
                 tcs = getattr(m, "tool_calls", None) or []
-                if tcs: 
+                if tcs:
                     result.append({"role": "assistant", "content": "", "tool_calls": [{"id": tc.get("id", ""), "type": "function", "function": {"name": tc["name"], "arguments": json.dumps(tc.get("args", {}))}} for tc in tcs]})
-                else: 
+                else:
                     result.append({"role": "assistant", "content": getattr(m, "content", "")})
         return result
 
@@ -406,16 +433,109 @@ def build_agent():
             except Exception: pass
         return tcs
 
+    def tool_node(state: AgentState):
+        last, results, tools_called, updates = state["messages"][-1], [], list(state.get("tool_calls_made", [])), list(state.get("status_updates", []))
+        user_q = next((m.content for m in state["messages"] if isinstance(m, HumanMessage)), "")
+        tcs, direct_answer = getattr(last, "tool_calls", []) or [], None
+
+        forced_ns = _extract_namespace(user_q)
+        forced_skip = state.get("skip_synthesise", False)
+
+        for tc in tcs:
+            name, args = tc["name"], dict(tc.get("args", {}) or {})
+
+            bad_ns = ["cluster", "across the cluster", "entire cluster", "any", "none"]
+            safe_ns = str(args.get("namespace") or "").lower()
+
+            if safe_ns in bad_ns:
+                args["namespace"] = "all"
+
+            if "namespace" in args and forced_ns != "all":
+                args["namespace"] = forced_ns
+                config.logger.info(f"[REQ:{state.get('req_id', '')}] Overriding LLM namespace -> forced to '{forced_ns}'")
+
+            if name == "get_secret_list":
+                args["decode"] = _decode_secrets_ctx.get()
+
+            if name in ("query_prometheus_metrics", "get_top_pods", "get_top_nodes"):
+                args["user_timezone"] = _timezone_ctx.get()
+
+            tools_called.append(name)
+
+            updates.append(
+                f"$ {args['command']}"
+                if name == "kubectl_exec" and "command" in args
+                else f"⚙️ {name}"
+            )
+
+            out = _call_tool(name, args, all_tools)
+            _out_str = str(out)
+
+            _log_ag.info(f"[REQ:{state.get('req_id', '')}] [tool_node] {name} returned {len(_out_str)} chars:\n{_out_str}")
+
+            results.append(ToolMessage(content=out, tool_call_id=tc["id"], name=name))
+
+            if name == "rag_search" and isinstance(out, str) and out.startswith("KB_EMPTY:"):
+                updates.append("⚠️ Knowledge base is empty")
+                direct_answer = "⚠️ " + _MSG_NO_INGEST + "\n\nUse the ⚙ Settings → RAG Documents panel to upload."
+
+            elif forced_skip:
+                pass
+
+            elif len(tcs) == 1 and should_bypass_llm(name, args, out, user_q, req_id=state.get("req_id", "")):
+                updates.append("⚡ Direct output (LLM synthesis skipped)")
+                direct_answer = out
+
+        return {
+            "messages": results,
+            "tool_calls_made": tools_called,
+            "iteration": state.get("iteration", 0),
+            "status_updates": updates,
+            "direct_answer": direct_answer,
+        }
+
     def llm_node(state: AgentState):
         itr, msgs, updates = state.get("iteration", 0) + 1, state["messages"], list(state.get("status_updates", []))
         req_id = state.get("req_id", "")
-        if state.get("direct_answer"): 
-            return {"messages": [AIMessage(content=state["direct_answer"])], "tool_calls_made": state.get("tool_calls_made", []), "iteration": itr, "status_updates": updates, "direct_answer": None}
-        
+
+        if state.get("direct_answer"):
+            return {
+                "messages": [AIMessage(content=state["direct_answer"])],
+                "tool_calls_made": state.get("tool_calls_made", []),
+                "iteration": itr,
+                "status_updates": updates,
+                "direct_answer": None,
+            }
+
+        if state.get("skip_synthesise", False):
+            tool_msgs = [m for m in msgs if isinstance(m, ToolMessage)]
+            if tool_msgs:
+                parts = []
+                for r in tool_msgs:
+                    content_str = str(r.content).strip()
+
+                    if "\n|" in content_str or content_str.startswith("|") or "|---" in content_str or "```" in content_str:
+                        parts.append(f"**Raw output from tool `{r.name}`**:\n\n{content_str}")
+                    else:
+                        parts.append(f"**Raw output from tool `{r.name}`**:\n\n```text\n{content_str}\n```")
+
+                fallback_answer = "\n\n".join(parts)
+                updates.append("⚡ Skip Synthesise toggled: LLM synthesis bypassed")
+
+                config.logger.info(f"[REQ:{req_id}] [llm_node] Skip Synthesise is ON. Bypassing LLM...")
+
+                return {
+                    "messages": [AIMessage(content=fallback_answer)],
+                    "tool_calls_made": state.get("tool_calls_made", []),
+                    "iteration": itr,
+                    "status_updates": updates,
+                    "direct_answer": None,
+                }
+
         has_tool_results = any(isinstance(m, ToolMessage) for m in msgs)
         invoke_msgs = _prepare_messages_for_hf(msgs, req_id=req_id)
         chat_msgs = [{"role": "system", "content": prompt}] + _msgs_to_qwen3(invoke_msgs, True)
-        
+
         _max_new = max(512, config.MAX_NEW_TOKENS) if has_tool_results else max(1024, config.MAX_NEW_TOKENS // 2)
 
         if tokenizer is None:
@@ -426,29 +546,56 @@ def build_agent():
                 "{\"name\": \"tool_name\", \"arguments\": {\"arg_name\": \"value\"}}\n"
                 "</tool_call>"
             )
+
             tools_json = json.dumps(tool_schemas, indent=2)
             tool_system = f"{prompt}\n\nAvailable tools:\n{tools_json}{format_rules}"
             gguf_msgs = [{"role": "system", "content": tool_system}] + chat_msgs[1:]
 
-            # CHANGED: Cleaned up duplicate lines and set temperature=0.1
-            resp = model.create_chat_completion(messages=gguf_msgs, max_tokens=_max_new, temperature=0.1, top_p=0.8, top_k=20, repeat_penalty=1.05)
+            resp = model.create_chat_completion(
+                messages=gguf_msgs,
+                max_tokens=_max_new,
+                temperature=0.1,
+                top_p=0.8,
+                top_k=20,
+                repeat_penalty=1.05
+            )
+
             raw_text = resp["choices"][0]["message"].get("content", "") or ""
+
         else:
             import torch
+
             kw = {"add_generation_prompt": True, "tools": tool_schemas}
-            if _is_qwen3: kw["enable_thinking"] = False
+            if _is_qwen3:
+                kw["enable_thinking"] = False
+
             encoded = tokenizer.apply_chat_template(chat_msgs, tokenize=True, return_tensors="pt", **kw)
-            input_ids = (encoded["input_ids"] if hasattr(encoded, "__getitem__") and not hasattr(encoded, "shape") else encoded).to(model.device)
-            with torch.no_grad(): 
-                # CHANGED: set temperature=0.1
-                output_ids = model.generate(input_ids, max_new_tokens=_max_new, do_sample=True, temperature=0.1, top_p=0.8, top_k=20, repetition_penalty=1.05, pad_token_id=tokenizer.eos_token_id)
+
+            input_ids = (
+                encoded["input_ids"]
+                if hasattr(encoded, "__getitem__") and not hasattr(encoded, "shape")
+                else encoded
+            ).to(model.device)
+
+            with torch.no_grad():
+                output_ids = model.generate(
+                    input_ids,
+                    max_new_tokens=_max_new,
+                    do_sample=True,
+                    temperature=0.1,
+                    top_p=0.8,
+                    top_k=20,
+                    repetition_penalty=1.05,
+                    pad_token_id=tokenizer.eos_token_id
+                )
+
             raw_text = tokenizer.decode(output_ids[0][input_ids.shape[-1]:], skip_special_tokens=True)
 
         _log_ag.info(f"[REQ:{req_id}] [llm_node] RAW LLM OUTPUT ({len(raw_text)} chars):\n{raw_text!r}")
 
         tcs = _parse_tool_calls(raw_text)
         content = re.sub(r'<tool_call>[\s\S]*?</tool_call>', '', raw_text).strip()
-        
+
         _ns_prepend = ""
         for m in invoke_msgs:
             if isinstance(m, HumanMessage):
@@ -456,87 +603,38 @@ def build_agent():
                 if _m:
                     _ns_prepend = _m.group(1).strip() + "\n\n"
                 break
+
         if _ns_prepend:
             content = _ns_prepend + content
 
         response = AIMessage(content=content, tool_calls=tcs)
-        if tcs: updates.append(f"🔧 {', '.join(tc['name'] for tc in tcs)}")
-        return {"messages": [response], "tool_calls_made": state.get("tool_calls_made", []), "iteration": itr, "status_updates": updates}
 
-    def tool_node(state: AgentState):
-        last, results, tools_called, updates = state["messages"][-1], [], list(state.get("tool_calls_made", [])), list(state.get("status_updates", []))
-        user_q = next((m.content for m in state["messages"] if isinstance(m, HumanMessage)), "")
-        tcs, direct_answer = getattr(last, "tool_calls", []) or [], None
+        if tcs:
+            updates.append(f"🔧 {', '.join(tc['name'] for tc in tcs)}")
 
-        # --- INTERCEPTOR: FORCE THE NAMESPACE ---
-        forced_ns = _extract_namespace(user_q)
-        forced_skip = state.get("skip_synthesise", False)
-
-        for tc in tcs:
-            name, args = tc["name"], dict(tc.get("args", {}) or {})
-        for tc in tcs:
-            name, args = tc["name"], dict(tc.get("args", {}) or {})
-            
-            # Catch LLM hallucinations before the interceptor runs
-            bad_ns = ["cluster", "across the cluster", "entire cluster", "any", "none"]
-            if args.get("namespace", "").lower() in bad_ns:
-                args["namespace"] = "all"
-
-            # Override LLM's namespace choice with our deterministic mapper
-            if "namespace" in args and forced_ns != "all":
-                args["namespace"] = forced_ns
-                config.logger.info(f"[REQ:{state.get('req_id', '')}] Overriding LLM namespace -> forced to '{forced_ns}'")
-            
-            if name == "get_secret_list": args["decode"] = _decode_secrets_ctx.get()
-            tools_called.append(name)
-            updates.append(f"$ {args['command']}" if name == "kubectl_exec" and "command" in args else f"⚙️ {name}")
-            
-            out = _call_tool(name, args, all_tools)
-            _out_str = str(out)
-            _log_ag.info(f"[REQ:{state.get('req_id', '')}] [tool_node] {name} returned {len(_out_str)} chars:\n{_out_str}")
-            
-            results.append(ToolMessage(content=out, tool_call_id=tc["id"], name=name))
-
-            if name == "rag_search" and isinstance(out, str) and out.startswith("KB_EMPTY:"):
-                updates.append("⚠️ Knowledge base is empty")
-                direct_answer = "⚠️ " + _MSG_NO_INGEST + "\n\nUse the ⚙ Settings → RAG Documents panel to upload."
-            elif forced_skip:
-                pass # Delaying to handle combined tools below
-            elif len(tcs) == 1 and should_bypass_llm(name, args, out, user_q, req_id=state.get("req_id", "")):
-                updates.append("⚡ Direct output (LLM synthesis skipped)")
-                direct_answer = out
-                
-        # SKIP SYNTHESISE
-        if forced_skip and direct_answer is None and results:
-            updates.append("⚡ Skip Synthesise toggled: LLM synthesis bypassed")
-            config.logger.info(f"[REQ:{state.get('req_id', '')}] [tool_node] Skip Synthesise is ON for query: {user_q!r}. Overriding normal sequence...")
-            
-            parts = []
-            for r in results:
-                content_str = str(r.content).strip()
-                
-                # If it looks like a Markdown table, skip the backticks so the UI renders HTML!
-                if "\n|" in content_str or content_str.startswith("|") or "|---" in content_str:
-                    parts.append(f"**Raw output from tool `{r.name}`**:\n\n{content_str}")
-                else:
-                    # Otherwise (logs, JSON, plain text), use backticks to keep it in a safe code block
-                    parts.append(f"**Raw output from tool `{r.name}`**:\n\n```text\n{content_str}\n```")
-                    
-            direct_answer = "\n\n".join(parts)
-
-        return {"messages": results, "tool_calls_made": tools_called, "iteration": state.get("iteration", 0), "status_updates": updates, "direct_answer": direct_answer}
+        return {
+            "messages": [response],
+            "tool_calls_made": state.get("tool_calls_made", []),
+            "iteration": itr,
+            "status_updates": updates,
+        }
 
     def router(state: AgentState) -> Literal["tools", "end"]:
-        if state.get("iteration", 0) >= 6: return "end"
-        tcs = getattr(state["messages"][-1], "tool_calls", None)
-        if not tcs: return "end"
-        already, pending = state.get("tool_calls_made", []), [tc["name"] for tc in tcs]
-        
-        # Check config before terminating for repeated tool calls
-        disable_loop_protection = getattr(config, "DISABLE_LOOP_PROTECTION", False)
-        if not disable_loop_protection and already and all(name in already for name in pending): 
+        if state.get("iteration", 0) >= 6:
             return "end"
-            
+
+        tcs = getattr(state["messages"][-1], "tool_calls", None)
+        if not tcs:
+            return "end"
+
+        already = state.get("tool_calls_made", [])
+        pending = [tc["name"] for tc in tcs]
+
+        disable_loop_protection = getattr(config, "DISABLE_LOOP_PROTECTION", False)
+
+        if not disable_loop_protection and already and all(name in already for name in pending):
+            return "end"
+
         return "tools"
 
     g = StateGraph(AgentState)
@@ -548,31 +646,31 @@ def build_agent():
     return g.compile()
 
 _agent = None
+
 def get_agent():
     global _agent
-    if _agent is None: 
+    if _agent is None:
         _agent = build_agent()
     return _agent
 
 def _clean_response(text: str, user_question: str = "") -> str:
     text = re.sub(r'<think>[\s\S]*?</think>\s*', '', text)
-    
+
     # Safely strip formatting tokens without matching random content in between
-    for tok in ['<|im_start|>', '<|im_end|>', '<s>', '</s>', '[INST]', '[/INST]', '<<SYS>>', '<</SYS>>']: 
+    for tok in ['<|im_start|>', '<|im_end|>', '<s>', '</s>', '[INST]', '[/INST]', '<<SYS>>', '<</SYS>>']:
         text = text.replace(tok, '')
-        
+
     text = text.strip()
     if text.startswith("assistant\n"):
         text = text[10:]
-        
+
     if user_question:
         q_stripped, escaped = user_question.strip(), re.escape(user_question.strip())
         text = re.sub(r'(?i)(\s*' + escaped + r'[?!.]?\s*){2,}', ' ', text)
         text = re.sub(r'(?i)^\s*' + escaped + r'[?!.]?\s*\n', '', text)
-        
+
     text = re.sub(r'Summarise the above tool results.*', '', text, flags=re.IGNORECASE)
     return re.sub(r'\n{3,}', '\n\n', text).strip()
-
 
 async def run_agent(user_message: str, skip_synthesise: bool = False) -> dict:
     import uuid
@@ -580,39 +678,28 @@ async def run_agent(user_message: str, skip_synthesise: bool = False) -> dict:
     config.logger.info(f"[REQ:{req_id}] /api/ask  q={user_message[:120]!r}")
     _runnable_agent = get_agent()
     t0 = time.time()
-    
-    if isinstance(_runnable_agent, dict):
-        _runnable_agent = build_agent()
-        global _agent
-        _agent = _runnable_agent
-        
+
     final = await _runnable_agent.ainvoke({"messages": [HumanMessage(content=user_message)], "tool_calls_made": [], "iteration": 0, "status_updates": [f"🤖 Model: {config.LLM_MODEL}"], "req_id": req_id, "skip_synthesise": skip_synthesise})
     elapsed, last = time.time() - t0, final["messages"][-1]
     raw = last.content if hasattr(last, "content") else str(last)
     updates = final.get("status_updates", [])
     updates.append(f"✅ Done in {elapsed:.0f}s")
-    
+
     _final_cleaned = _clean_response(raw, user_message)
     config.logger.info(f"[REQ:{req_id}] done elapsed={elapsed:.1f}s tools={final.get('tool_calls_made', [])}\n[QUESTION] {user_message}\n[FINAL ANSWER]\n{_final_cleaned}\n[END FINAL ANSWER]")
     return {"response": _final_cleaned, "tools_used": final.get("tool_calls_made", []), "iterations": final.get("iteration", 0), "status_updates": updates, "elapsed_seconds": round(elapsed, 1), "clarification_needed": False}
 
 async def run_agent_streaming(user_message: str, history: list = None, max_new_tokens: int = 0, skip_synthesise: bool = False):
-    def _sse(payload: dict) -> str: return f"data: {json.dumps(payload)}\n\n"
     import uuid, asyncio
     req_id, t0 = uuid.uuid4().hex[:8], time.time()
-    
     _runnable_agent = get_agent()
-    if isinstance(_runnable_agent, dict):
-        _runnable_agent = build_agent()
-        global _agent
-        _agent = _runnable_agent
-        
+
     yield _sse({"type": "status", "text": f"🤖 Model: {config.LLM_MODEL}"})
     config.logger.info(f"[REQ:{req_id}] /chat/stream  q={user_message[:120]!r}")
 
     _saved_max = config.MAX_NEW_TOKENS
     if max_new_tokens > 0: config.MAX_NEW_TOKENS = max_new_tokens
-    
+
     all_updates, tools_called, final_answer, iteration_count = [f"🤖 Model: {config.LLM_MODEL}"], [], "", 0
     last_tool_content = ""  # <-- Added fallback tracking variable
     _hb_queue, _hb_stop = asyncio.Queue(), asyncio.Event()
@@ -631,20 +718,15 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
         history_msgs = [HumanMessage(content=t.content) if t.role == "user" else _AIMessage(content=t.content) for t in (history or [])]
         all_messages = history_msgs + [HumanMessage(content=user_message)]
 
-        #async for event in _runnable_agent.astream_events(
-        #    {"messages": all_messages, "tool_calls_made": [], "iteration": 0, "status_updates": [], "req_id": req_id}, 
-        #    version="v2", 
-        #    config={"recursion_limit": 12}
-        #):
         async for event in _runnable_agent.astream_events(
-            {"messages": all_messages, "tool_calls_made": [], "iteration": 0, "status_updates": [], "req_id": req_id, "skip_synthesise": skip_synthesise}, 
-            version="v2", 
+            {"messages": all_messages, "tool_calls_made": [], "iteration": 0, "status_updates": [], "req_id": req_id, "skip_synthesise": skip_synthesise},
+            version="v2",
             config={"recursion_limit": 12}
         ):
-            while not _hb_queue.empty(): 
+            while not _hb_queue.empty():
                 tick = _hb_queue.get_nowait()
                 yield _sse({"type": "heartbeat", "text": f"⏳ Still processing… ({tick}s elapsed)", "timeout": config.LLM_TIMEOUT})
-            
+
             kind, name = event.get("event", ""), event.get("name", "")
 
             if kind == "on_chain_start" and name == "llm":
@@ -657,13 +739,13 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
                 output = event.get("data", {}).get("output", {})
                 if not isinstance(output, dict):
                     continue
-                
+
                 node_updates = output.get("status_updates", [])
                 for u in node_updates:
                     if u not in all_updates:
                         all_updates.append(u)
                         yield _sse({"type": "status", "text": u})
-                
+
                 node_tools = output.get("tool_calls_made", [])
                 for t in node_tools:
                     if t not in tools_called:
@@ -677,28 +759,28 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
 
                 if name == "llm":
                     has_tool_calls = any(getattr(m, "tool_calls", None) for m in output.get("messages", []))
-                    
+
                     for m in output.get("messages", []):
-                        if getattr(m, "content", "") and not getattr(m, "tool_calls", None): 
+                        if getattr(m, "content", "") and not getattr(m, "tool_calls", None):
                             final_answer = m.content
-                    
+
                     if has_tool_calls:
                         itr_txt = f"🔄 Loop {iteration_count} — LLM called tools, waiting for results…"
                     elif final_answer:
                         itr_txt = f"✍️ Loop {iteration_count} — LLM synthesising final answer…"
                     else:
                         itr_txt = f"🔄 Loop {iteration_count} — LLM processing…"
-                    
+
                     yield _sse({"type": "iteration", "iteration": iteration_count, "text": itr_txt, "has_tool_calls": has_tool_calls})
 
         elapsed = round(time.time() - t0, 1)
         _hb_stop.set(); _hb_task.cancel()
-        
+
         _final_cleaned = _clean_response(final_answer, user_message)
- 
+
         if not _final_cleaned.strip():
             config.logger.warning(f"[REQ:{req_id}] LLM returned blank response. Falling back to raw tool output.")
-            
+
             if last_tool_content:
                 _final_cleaned = f"⚠️ The AI could not synthesize a summary, but here is the raw data (generated by the tools):\n\n{last_tool_content}"
             else:
@@ -707,12 +789,12 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
         config.logger.info(f"[REQ:{req_id}] stream_done elapsed={elapsed}s tools={list(set(tools_called))}\n[QUESTION] {user_message}\n[FINAL ANSWER]\n{_final_cleaned}\n[END FINAL ANSWER]")
         yield _sse({"type": "status", "text": f"✅ Done in {elapsed}s"})
         yield _sse({
-            "type": "result", 
-            "response": _final_cleaned, 
-            "tools_used": list(dict.fromkeys(tools_called)), 
-            "iterations": iteration_count, 
-            "status_updates": all_updates, 
-            "elapsed_seconds": elapsed, 
+            "type": "result",
+            "response": _final_cleaned,
+            "tools_used": list(dict.fromkeys(tools_called)),
+            "iterations": iteration_count,
+            "status_updates": all_updates,
+            "elapsed_seconds": elapsed,
             "clarification_needed": False
         })
 
@@ -720,15 +802,15 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
         _hb_stop.set(); _hb_task.cancel()
         config.logger.error(f"[Stream Error] {exc}", exc_info=True)
         yield _sse({"type": "error", "text": str(exc)})
-    finally: 
+    finally:
         config.MAX_NEW_TOKENS = _saved_max
 
 def _llm_synthesise(context: str, question: str, top_k: int = 50, max_tokens: int = 0) -> str:
-    try: 
+    try:
         tok, mdl, is_q3 = globals()["_kb_tokenizer"], globals()["_kb_model"], globals()["_kb_is_qwen3"]
-    except KeyError: 
+    except KeyError:
         return context or ""
-    
+
     kb_prompt_path = config._HERE / "config" / "kb_prompt.txt"
     if kb_prompt_path.exists():
         sys_prompt = kb_prompt_path.read_text(encoding="utf-8")
@@ -739,12 +821,12 @@ def _llm_synthesise(context: str, question: str, top_k: int = 50, max_tokens: in
             "2. If the user greets you or asks what you can do, politely introduce yourself. Tell them you can search for 'Known Issues', 'Past Learnings', 'Dos and Donts', and 'Prerequisites'.\n"
             "3. For technical questions, answer STRICTLY using the context provided."
         )
-    
+
     user_msg = f"[KNOWLEDGE BASE CONTEXT]\n{context}\n[END CONTEXT]\n\nQuestion: {question}"
-    
+
     msgs = [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_msg}]
     _max_out = max_tokens if max_tokens > 0 else min(512 + top_k * 16, 4096)
-    
+
     try:
         if tok is None:
             resp = mdl.create_chat_completion(messages=msgs, max_tokens=_max_out, temperature=0.3, top_p=0.9, repeat_penalty=1.05)
@@ -755,12 +837,12 @@ def _llm_synthesise(context: str, question: str, top_k: int = 50, max_tokens: in
             if is_q3: kw["enable_thinking"] = False
             encoded = tok.apply_chat_template(msgs, tokenize=True, return_tensors="pt", **kw)
             input_ids = (encoded["input_ids"] if hasattr(encoded, "__getitem__") and not hasattr(encoded, "shape") else encoded).to(mdl.device)
-            with torch.no_grad(): 
+            with torch.no_grad():
                 out = mdl.generate(input_ids, max_new_tokens=_max_out, do_sample=False, temperature=1.0, repetition_penalty=1.05, pad_token_id=tok.eos_token_id)
             raw = tok.decode(out[0][input_ids.shape[-1]:], skip_special_tokens=True)
-            
+
         return re.sub(r'<think>[\s\S]*?</think>\s*', '', raw).strip() or context or ""
-    except Exception as exc: 
+    except Exception as exc:
         return context or ""
 
 # ── 3. FASTAPI SETUP & LIFESPAN ──────────────────────────────────────────────
@@ -799,9 +881,9 @@ async def _lifespan(app: FastAPI):
     config.logger.info("[Agent] Pre-warming LLM…")
     get_agent()
     config.logger.info("Startup complete ✓")
-    
+
     yield
-    
+
     config.logger.info("Shutting down")
 
 app = FastAPI(title="Cloudera ECS AI Ops", lifespan=_lifespan)
@@ -887,13 +969,13 @@ async def chat(req: ChatRequest):
 async def chat_stream(req: ChatRequest):
     if not req.message.strip(): raise HTTPException(400, "Empty message")
     _decode_secrets_ctx.set(req.decode_secrets)
-    
+    _timezone_ctx.set(req.timezone or "UTC")
+
     import asyncio
     async def _keepalive_stream():
         queue, _SENTINEL = asyncio.Queue(), object()
         async def _producer():
             try:
-                #async for chunk in run_agent_streaming(req.message, req.history, req.max_new_tokens): await queue.put(chunk)
                 async for chunk in run_agent_streaming(req.message, req.history, req.max_new_tokens, req.skip_synthesise): await queue.put(chunk)
             finally: await queue.put(_SENTINEL)
         task = asyncio.ensure_future(_producer())
@@ -906,46 +988,37 @@ async def chat_stream(req: ChatRequest):
         finally: task.cancel()
     return StreamingResponse(_keepalive_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-@app.get("/metrics")
-async def metrics():
+def _collect_metrics() -> dict:
     cpu_per = psutil.cpu_percent(interval=0.2, percpu=True)
     mem     = psutil.virtual_memory()
     freq    = psutil.cpu_freq()
+    cpu_total = round(psutil.cpu_percent(interval=None), 1)
     return {
-        "cpu_total":    round(psutil.cpu_percent(interval=None), 1),
-        "cpu_per_core": [round(p, 1) for p in cpu_per],
-        "cpu_count":    psutil.cpu_count(logical=True),
-        "freq_mhz":     round(freq.current) if freq else 0,
-        "load_avg":     [round(x, 2) for x in psutil.getloadavg()],
-        "mem_total_gb": round(mem.total / 1e9, 1),
-        "mem_used_gb":  round(mem.used  / 1e9, 1),
-        "mem_pct":      mem.percent,
-        "gpus":         _gpu_metrics(),
-        "num_gpu":      config.NUM_GPU,
+        "cpu_total":       cpu_total,
+        "cpu_total_pct":   cpu_total,
+        "cpu_per_core":    [round(p, 1) for p in cpu_per],
+        "cpu_count":       psutil.cpu_count(logical=True),
+        "freq_mhz":        round(freq.current) if freq else 0,
+        "load_avg":        [round(x, 2) for x in psutil.getloadavg()],
+        "mem_total_gb":    round(mem.total / 1e9, 1),
+        "mem_used_gb":     round(mem.used  / 1e9, 1),
+        "mem_pct":         mem.percent,
+        "gpus":            _gpu_metrics(),
+        "num_gpu":         config.NUM_GPU,
     }
+
+@app.get("/metrics")
+async def metrics():
+    return _collect_metrics()
 
 @app.get("/api/system", summary="Live CPU / RAM / GPU utilisation metrics")
 async def api_system():
-    cpu_per = psutil.cpu_percent(interval=0.2, percpu=True)
-    mem     = psutil.virtual_memory()
-    freq    = psutil.cpu_freq()
-    return {
-        "cpu_total_pct":  round(psutil.cpu_percent(interval=None), 1),
-        "cpu_per_core":   [round(p, 1) for p in cpu_per],
-        "cpu_count":      psutil.cpu_count(logical=True),
-        "freq_mhz":       round(freq.current) if freq else 0,
-        "load_avg_1_5_15": [round(x, 2) for x in psutil.getloadavg()],
-        "ram_total_gb":   round(mem.total / 1e9, 1),
-        "ram_used_gb":    round(mem.used  / 1e9, 1),
-        "ram_pct":        mem.percent,
-        "gpus":           _gpu_metrics(),
-        "num_gpu":        config.NUM_GPU,
-    }
+    return _collect_metrics()
 
 @app.post("/ingest")
 async def ingest_api(req: IngestRequest):
     results = ingest_directory(req.docs_dir, force=req.force)
-    return {"results": results, "total_files": len(results), "total_chunks": sum(r.get("chunks", 0) for r in results)}
+    return _ingest_response(results)
 
 @app.post("/api/ingest/upload")
 async def ingest_upload_real(files: list[UploadFile] = File(...), force: str = FastAPIForm(default="false")):
@@ -964,7 +1037,7 @@ async def ingest_upload_real(files: list[UploadFile] = File(...), force: str = F
         if suffix in (".xlsx", ".xls"): result = ingest_excel(str(dest), force=do_force)
         else: result = ingest_file(str(dest), force=do_force)
         results.append(result)
-    return {"results": results, "total_files": len(results), "total_chunks": sum(r.get("chunks", 0) for r in results)}
+    return _ingest_response(results)
 
 @app.post("/api/ask")
 async def api_ask(req: AskRequest):
@@ -974,6 +1047,223 @@ async def api_ask(req: AskRequest):
         return {"question": req.q, "answer": result["response"], "tools_used": result["tools_used"], "iterations": result["iterations"], "elapsed_seconds": result["elapsed_seconds"]}
     except Exception as e: return _JSONResponse(status_code=500, content={"error": str(e)})
 
+_REPORT_DIR = _HERE / "report"
+
+@app.get("/api/healthcheck-report", summary="Generate health report, save to /report/, return filename")
+async def api_healthcheck_report():
+    import asyncio, re as _re, uuid, time as _time
+    req_id  = uuid.uuid4().hex[:8]
+    t_start = _time.monotonic()
+    config.logger.info(f"[REQ:{req_id}] /api/healthcheck-report  generating full cluster health report")
+    try:
+        _REPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+        report = await asyncio.get_event_loop().run_in_executor(
+            None, _tk.generate_healthcheck_report)
+        report = _re.sub(r'```[^\n]*\n?', '', report)
+        report = _re.sub(r'\n{3,}', '\n\n', report).strip()
+
+        charts = {}
+        try:
+            charts = await asyncio.get_event_loop().run_in_executor(
+                None, _fetch_report_charts)
+        except Exception as e:
+            config.logger.warning(f"[REQ:{req_id}] /api/healthcheck-report  charts failed: {e}")
+
+        elapsed = _time.monotonic() - t_start
+        config.logger.info(
+            f"[REQ:{req_id}] /api/healthcheck-report  done elapsed={elapsed:.1f}s "
+            f"report={len(report)}chars charts={list(charts.keys())}")
+
+        return {"report": report, "charts": charts}
+    except Exception as e:
+        config.logger.error(f"[REQ:{req_id}] /api/healthcheck-report  error: {e}")
+        return _JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/api/reports/save", summary="Save compiled report to /report/ folder — PDF if weasyprint available, else HTML")
+async def api_reports_save(request: Request):
+    import uuid, time as _time, asyncio
+    req_id = uuid.uuid4().hex[:8]
+    try:
+        body = await request.json()
+        html = body.get("html", "")
+        if not html:
+            return _JSONResponse(status_code=400, content={"error": "html field required"})
+        _REPORT_DIR.mkdir(parents=True, exist_ok=True)
+        ts = _time.strftime("%Y%m%d-%H%M%S")
+
+        # Try weasyprint PDF first
+        try:
+            import weasyprint as _wp
+            filename = f"ecs-health-report-{ts}.pdf"
+            filepath = _REPORT_DIR / filename
+            def _write_pdf():
+                _wp.HTML(string=html).write_pdf(str(filepath))
+            await asyncio.get_event_loop().run_in_executor(None, _write_pdf)
+            size_kb  = filepath.stat().st_size // 1024
+            config.logger.info(f"[REQ:{req_id}] /api/reports/save  saved PDF {filename} ({size_kb} KB)")
+            return {"filename": filename, "size_kb": size_kb, "format": "pdf"}
+        except ImportError:
+            pass
+        except Exception as pdf_err:
+            config.logger.warning(f"[REQ:{req_id}] /api/reports/save  weasyprint failed ({pdf_err}), falling back to HTML")
+
+        # Fallback: save as HTML
+        filename = f"ecs-health-report-{ts}.html"
+        filepath = _REPORT_DIR / filename
+        filepath.write_text(html, encoding="utf-8")
+        size_kb  = filepath.stat().st_size // 1024
+        config.logger.info(f"[REQ:{req_id}] /api/reports/save  saved HTML {filename} ({size_kb} KB)")
+        return {"filename": filename, "size_kb": size_kb, "format": "html"}
+
+    except Exception as e:
+        config.logger.error(f"[REQ:{req_id}] /api/reports/save  error: {e}")
+        return _JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/api/reports", summary="List report files present in /report/ folder")
+async def api_reports_list():
+    try:
+        if not _REPORT_DIR.exists():
+            return {"reports": []}
+        files = []
+        for f in sorted(
+            list(_REPORT_DIR.glob("*.pdf")) + list(_REPORT_DIR.glob("*.html")),
+            key=lambda x: x.stat().st_mtime, reverse=True
+        ):
+            stat = f.stat()
+            files.append({
+                "filename": f.name,
+                "size_kb":  stat.st_size // 1024,
+                "created":  stat.st_mtime,
+                "format":   f.suffix.lstrip("."),
+            })
+        return {"reports": files}
+    except Exception as e:
+        return _JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/api/reports/{filename}", summary="Download a report file from /report/ folder")
+async def api_reports_download(filename: str):
+    import re
+    if not re.match(r'^[\w\-\.]+\.(html|pdf)$', filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    filepath = _REPORT_DIR / filename
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail=f"{filename} not found")
+    media_type = "application/pdf" if filename.endswith(".pdf") else "text/html"
+    return FileResponse(
+        path=str(filepath),
+        media_type=media_type,
+        filename=filename,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+def _fetch_report_charts() -> dict:
+    """
+    Query Prometheus for top-10 pod CPU and memory over 1d, 1w, 1m.
+    Returns a dict: { "cpu_1d": [...series...], "mem_1d": [...], ... }
+    Each series: { "label": "ns/pod", "values": [[ts, val], ...] }
+    """
+    import time as _time
+    from kubernetes.stream import stream as _k8s_stream
+
+    prom_pod = prom_ns = prom_container = None
+    try:
+        for p in _tk._core.list_pod_for_all_namespaces(
+                field_selector="status.phase=Running").items:
+            n = p.metadata.name.lower()
+            if "prometheus-server" in n and "operator" not in n:
+                cnames         = [c.name for c in (p.spec.containers or [])]
+                prom_pod       = p.metadata.name
+                prom_ns        = p.metadata.namespace
+                prom_container = ("prometheus-server" if "prometheus-server" in cnames
+                                  else (cnames[0] if cnames else "prometheus-server"))
+                break
+    except Exception:
+        pass
+    if not prom_pod:
+        return {}
+
+    def _exec(cmd):
+        try:
+            ws = _k8s_stream(
+                _tk._core.connect_get_namespaced_pod_exec,
+                prom_pod, prom_ns,
+                command=["/bin/sh", "-c", cmd],
+                container=prom_container,
+                stderr=False, stdin=False, stdout=True, tty=False,
+                _preload_content=False)
+            chunks = []
+            while ws.is_open():
+                ws.update(timeout=120)
+                if ws.peek_stdout():
+                    chunks.append(ws.read_stdout())
+            ws.close()
+            return "".join(chunks).strip()
+        except Exception as exc:
+            return f"[exec error: {exc}]"
+
+    base_url = "http://localhost:9090"
+    probe    = _exec(f"curl -s -o /dev/null -w '%{{http_code}}' '{base_url}/prometheus/api/v1/query?query=up'")
+    api_base = (f"{base_url}/prometheus/api/v1" if probe.strip() == "200"
+                else f"{base_url}/api/v1")
+
+    now_ts = int(_time.time())
+    windows = {
+        "1d": (now_ts - 86400,      now_ts, "5m"),
+        "1w": (now_ts - 86400 * 7,  now_ts, "30m"),
+        "1m": (now_ts - 86400 * 30, now_ts, "2h"),
+    }
+
+    cpu_pql = ('sum by (pod, namespace) '
+               '(rate(container_cpu_usage_seconds_total'
+               '{container!="",container!="POD"}[5m])) * 1000')
+    mem_pql = ('sum by (pod, namespace) '
+               '(container_memory_working_set_bytes'
+               '{container!="",container!="POD"}) / 1048576')
+
+    import json as _json, urllib.parse
+
+    def _query_range(pql, start, end, step):
+        enc = urllib.parse.quote(pql, safe="")
+        url = f"{api_base}/query_range?query={enc}&start={start}&end={end}&step={step}"
+        raw = _exec(f"curl -s --max-time 120 '{url}'")
+        if not raw or raw.startswith("[exec error"):
+            return []
+        try:
+            data = _json.loads(raw)
+        except Exception:
+            return []
+        if data.get("status") != "success":
+            return []
+        results = data.get("data", {}).get("result", [])
+
+        def _mean(r):
+            vals = [float(v[1]) for v in r.get("values", []) if v[1] != "NaN"]
+            return sum(vals) / len(vals) if vals else 0.0
+
+        results.sort(key=_mean, reverse=True)
+        series = []
+        for r in results[:10]:
+            ml    = r.get("metric", {})
+            ns_v  = ml.get("namespace", "")
+            pod_v = ml.get("pod", ml.get("pod_name", "?"))
+            label = f"{ns_v}/{pod_v}" if ns_v else pod_v
+            series.append({
+                "label":  label,
+                "values": [[float(ts), float(v)]
+                           for ts, v in r.get("values", [])
+                           if v != "NaN"],
+            })
+        return series
+
+    result = {}
+    for win, (start, end, step) in windows.items():
+        result[f"cpu_{win}"] = _query_range(cpu_pql, start, end, step)
+        result[f"mem_{win}"] = _query_range(mem_pql, start, end, step)
+    return result
 
 @app.post("/api/tool")
 async def api_tool(req: ToolCallRequest):
@@ -1011,7 +1301,7 @@ async def api_rag_files():
     docs_dir = config._HERE / "docs"
     if not docs_dir.exists():
         return {"count": 0, "files": []}
-    
+
     # List all supported files currently in the docs directory
     files = [f.name for f in docs_dir.iterdir() if f.is_file() and f.suffix.lower() in (".md", ".pdf", ".txt", ".xlsx", ".xls")]
     return {"count": len(files), "files": sorted(files)}
@@ -1029,62 +1319,47 @@ async def api_rag_query(query: str, top_k: int = 50, sheet: Optional[str] = None
 @app.post("/api/kb/ask")
 async def api_kb_ask(req: KbAskRequest):
     if not req.q.strip(): return _JSONResponse(status_code=400, content={"error": "q must not be empty"})
-    top_k, sheet = max(10, min(req.top_k, 500)), req.sheet
-    if not sheet:
-        ql = req.q.lower()
-        if any(k in ql for k in ["past learning", "incident"]): sheet = "Past Learnings"
-        elif any(k in ql for k in ["known issue"]): sheet = "Known Issues"
-        elif any(k in ql for k in ["dos and don", "best practice"]): sheet = "Dos and Donts"
-        elif any(k in ql for k in ["prerequisite"]): sheet = "Prerequisites"
+    top_k, sheet = max(10, min(req.top_k, 500)), req.sheet or _detect_sheet(req.q)
 
     import asyncio
     context = await asyncio.get_event_loop().run_in_executor(None, lambda: rag_retrieve(query=req.q, top_k=top_k, sheet=sheet))
     no_rag = not context.strip() or context == "No relevant documentation found." or (isinstance(context, str) and context.startswith("KB_EMPTY:"))
-    
+
     # Guardrail
-    if no_rag: 
+    if no_rag:
         ans = _MSG_NO_INGEST if "KB_EMPTY" in str(context) else "No relevant documentation found in the Knowledge Base."
         return {"answer": ans, "query": req.q, "top_k": top_k}
-        
+
     answer = await asyncio.get_event_loop().run_in_executor(None, lambda: _llm_synthesise(context, req.q, top_k, req.max_tokens))
     return {"answer": answer or "I'm sorry, I was unable to generate a response.", "query": req.q, "top_k": top_k}
 
 @app.post("/api/kb/stream")
 async def api_kb_stream(req: KbAskRequest):
-    import asyncio as _asyncio, time as _time, re
-    
+    import asyncio as _asyncio, time as _time
+
     async def _generate():
-        def _sse(obj): return f"data: {json.dumps(obj)}\n\n"
-        
         start, q = _time.time(), req.q.strip()
-        
-        if not q: 
+
+        if not q:
             yield _sse({"type": "error", "text": "Empty query"})
             return
-            
+
         # --- SANITY CHECK: ONLY BLOCK PURE GIBBERISH (e.g. "a a a") ---
         words = q.split()
         max_word_len = max((len(w) for w in words), default=0)
-        
+
         if len(words) < 3 or max_word_len < 3:
             yield _sse({
-                "type": "result", 
-                "answer": "Please ask a complete question or provide a more detailed statement (e.g., 'Why my vault pod is not running?' or 'List all known issues with Longhorn in 1.5.5 SP1').", 
-                "query": q, 
-                "elapsed": 0.0, 
+                "type": "result",
+                "answer": "Please ask a complete question or provide a more detailed statement (e.g., 'Why my vault pod is not running?' or 'List all known issues with Longhorn in 1.5.5 SP1').",
+                "query": q,
+                "elapsed": 0.0,
                 "top_k": req.top_k
             })
             return
         # --------------------------------------------------------------
 
-        top_k, sheet = max(10, min(req.top_k, 500)), req.sheet
-        
-        if not sheet:
-            ql = q.lower()
-            if any(k in ql for k in ["past learning", "incident"]): sheet = "Past Learnings"
-            elif any(k in ql for k in ["known issue"]): sheet = "Known Issues"
-            elif any(k in ql for k in ["dos and don"]): sheet = "Dos and Donts"
-            elif any(k in ql for k in ["prerequisite"]): sheet = "Prerequisites"
+        top_k, sheet = max(10, min(req.top_k, 500)), req.sheet or _detect_sheet(q)
 
         yield _sse({"type": "question", "text": q})
         yield _sse({"type": "status", "text": f"Searching knowledge base{(' · sheet: ' + sheet) if sheet else ''}…"})
@@ -1093,21 +1368,21 @@ async def api_kb_stream(req: KbAskRequest):
             # 1. Search the DB
             context = await _asyncio.get_event_loop().run_in_executor(None, lambda: rag_retrieve(query=q, top_k=top_k, sheet=sheet))
             no_rag = not context.strip() or context == "No relevant documentation found." or (isinstance(context, str) and context.startswith("KB_EMPTY:"))
-            
+
             # 2. DO NOT ABORT IF DB IS EMPTY. Format it for the LLM instead.
             if no_rag:
                 context = "KB_EMPTY"
-                
+
             yield _sse({"type": "status", "text": f"Synthesising answer…"})
-            
+
             # 3. ALWAYS INVOKE THE LLM
             answer = await _asyncio.get_event_loop().run_in_executor(None, lambda: _llm_synthesise(context, q, top_k, req.max_tokens))
-            
+
             yield _sse({"type": "result", "answer": answer or "I'm sorry, I was unable to generate a response.", "query": q, "elapsed": round(_time.time() - start, 1), "top_k": top_k})
-            
-        except Exception as exc: 
+
+        except Exception as exc:
             yield _sse({"type": "error", "text": str(exc)})
-            
+
     return StreamingResponse(_generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 @app.get("/api/prompt")
@@ -1132,18 +1407,16 @@ async def api_reload_prompt():
 
 @app.get("/api/config")
 async def api_get_config():
-    import tools.tools_k8s as _tk
     return {
-        "kubectl_max_chars": _tk._KUBECTL_MAX_OUT, 
-        "max_new_tokens": config.MAX_NEW_TOKENS, 
-        "llm_timeout": config.LLM_TIMEOUT,
+        "kubectl_max_chars":       _tk._KUBECTL_MAX_OUT,
+        "max_new_tokens":          config.MAX_NEW_TOKENS,
+        "llm_timeout":             config.LLM_TIMEOUT,
         "disable_loop_protection": getattr(config, "DISABLE_LOOP_PROTECTION", False),
-        "show_secret_values": getattr(config, "SHOW_SECRET_VALUES", False)
+        "show_secret_values":      getattr(config, "SHOW_SECRET_VALUES", False),
     }
 
 @app.post("/api/config")
 async def api_set_config(body: dict):
-    import tools.tools_k8s as _tk
     updated = {}
     if "kubectl_max_chars" in body:
         val = max(1000, min(int(body["kubectl_max_chars"]), 200000))
@@ -1165,10 +1438,10 @@ async def api_set_config(body: dict):
         val = bool(body["show_secret_values"])
         config.SHOW_SECRET_VALUES = val
         updated["show_secret_values"] = val
-        
+
     if updated:
         save_settings() # Persist to settings.json
-        
+
     return {"ok": True, "updated": updated}
 
 @app.get("/")
