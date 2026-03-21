@@ -2750,7 +2750,8 @@ def generate_healthcheck_report() -> str:
         if not nodes:
             R.append(warn("No nodes found."))
         else:
-            R.append(subsection(f"Nodes ({len(nodes)} total) — Kubernetes {esc(k8s_version)}"))
+            R.append(subsection(f"Nodes ({len(nodes)} total)"))
+            R.append(f'<p><strong>Kubernetes Version:</strong> {esc(k8s_version)}</p>')
             rows = []
             for node in sorted(nodes, key=lambda n: n.metadata.name):
                 roles  = (",".join(k.split("/")[-1] for k in (node.metadata.labels or {})
@@ -2772,7 +2773,7 @@ def generate_healthcheck_report() -> str:
                 status_str = status + (f" ⚠️ {','.join(flags)}" if flags else "")
                 rows.append([esc(node.metadata.name), esc(roles),
                               status_str, esc(cpu), esc(mem_gib), esc(gpu)])
-            R.append(table(["NAME","ROLES","STATUS","CPU","MEMORY (GiB)","GPU"], rows))
+            R.append(table(["NAME","ROLES","STATUS","CPU","MEMORY","GPU"], rows))
 
             R.append(subsection("Node Capacity (Allocatable vs Requested)"))
             rows2 = []
@@ -3027,38 +3028,40 @@ def generate_healthcheck_report() -> str:
 
         pv_rows.sort(key=lambda x: x[0], reverse=True)
         if pv_rows:
-            def _pv_table(rows, heading, hdr_bg, hdr_color):
+            def _circle(color):
+                return (f'<svg width="14" height="14" viewBox="0 0 14 14" xmlns="http://www.w3.org/2000/svg">' +
+                        f'<circle cx="7" cy="7" r="6" fill="{color}"/></svg>')
+
+            def _pv_table(rows, heading, hdr_cls):
                 trs = ""
                 for r in rows:
-                    flag,ns,pvc_name,pct,used,total,avail,fpct = r[1],r[2],r[3],r[4],r[5],r[6],r[7],r[8]
+                    _,ns,pvc_name,pct,used,total,avail,fpct = r[1],r[2],r[3],r[4],r[5],r[6],r[7],r[8]
+                    if pct >= 90:   fc = "#dc2626"
+                    elif pct >= 80: fc = "#d97706"
+                    else:           fc = "#16a34a"
                     usage_color = "#dc2626" if pct >= 90 else ("#d97706" if pct >= 80 else "#0369a1")
                     trs += (f'<tr>'
-                            f'<td style="text-align:center;font-size:13px;width:24px">{flag}</td>'
+                            f'<td class="flag-cell">{_circle(fc)}</td>'
                             f'<td><code>{esc(ns)}/{esc(pvc_name)}</code></td>'
                             f'<td style="color:{usage_color};font-weight:700;white-space:nowrap">{pct}%</td>'
                             f'<td style="white-space:nowrap">{used}Gi ({pct}%)</td>'
                             f'<td style="white-space:nowrap">{total}Gi</td>'
                             f'<td style="white-space:nowrap">{avail}Gi ({fpct}%)</td>'
                             f'</tr>')
-                section_hdr = (f'<p style="margin:8px 0 2px;padding:4px 8px;'
-                               f'background:{hdr_bg};color:{hdr_color};font-weight:700;'
-                               f'font-size:9.5px;border-radius:3px;'
-                               f'-webkit-print-color-adjust:exact;print-color-adjust:exact">'
-                               f'{esc(heading)} ({len(rows)} PVC{"s" if len(rows)!=1 else ""})</p>')
-                col_hdr = ("<tr><th style='width:24px'>Flag</th>"
-                           "<th>Namespace / PVC</th><th>Usage</th>"
-                           "<th>Used (GiB)</th><th>Total (GiB)</th><th>Free (GiB)</th></tr>")
-                return (section_hdr +
-                        f'<table><thead>{col_hdr}</thead><tbody>{trs}</tbody></table>')
+                col_hdr = ('<tr><th style="width:28px"></th>'
+                           '<th>Namespace / PVC</th><th>Usage</th>'
+                           '<th>Used (GiB)</th><th>Total (GiB)</th><th>Free (GiB)</th></tr>')
+                return (f'<div class="pv-hdr {hdr_cls}">{esc(heading)} ({len(rows)} PVC{"s" if len(rows)!=1 else ""})</div>'
+                        f'<div class="pv-table">'
+                        f'<table><thead>{col_hdr}</thead><tbody>{trs}</tbody></table>'
+                        f'</div>')
 
             critical = [r for r in pv_rows if r[0] >= 80]
             healthy  = [r for r in pv_rows if r[0] < 80]
             if critical:
-                R.append(_pv_table(critical,
-                    "⚠️  Nearing or exceeding 80% capacity", "#fef3c7", "#92400e"))
+                R.append(_pv_table(critical, "⚠️  Nearing or exceeding 80% capacity", "pv-hdr-warn"))
             if healthy:
-                R.append(_pv_table(healthy[:5],
-                    "✅  Within capacity", "#dcfce7", "#14532d"))
+                R.append(_pv_table(healthy[:5], "✅  Within capacity", "pv-hdr-ok"))
                 if len(healthy) > 5:
                     R.append(f'<p class="note"><em>({len(healthy)-5} more healthy volumes not shown)</em></p>')
         else:
