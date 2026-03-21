@@ -1081,50 +1081,81 @@ async def api_healthcheck_report():
         return _JSONResponse(status_code=500, content={"error": str(e)})
 
 
-@app.post("/api/reports/save", summary="Save cluster health report as PDF via ReportLab (server-side, no WeasyPrint)")
+@app.post("/api/reports/save", summary="Save compiled report to /report/ folder as PDF via pdfkit/wkhtmltopdf")
 async def api_reports_save(request: Request):
     """
-    Generates a PDF health report directly from live k8s data using ReportLab.
+    Receives the fully-assembled HTML document from the frontend and converts
+    it to PDF using pdfkit (wkhtmltopdf).  wkhtmltopdf uses the WebKit engine
+    so emoji (NotoColorEmoji), -webkit-print-color-adjust, and all table
+    styles render correctly — including the PV usage table.
 
-    The POST body is still accepted for backward compatibility but is no longer
-    required — the PDF is built server-side so emoji and the PV-usage table
-    always render correctly regardless of frontend HTML.
-
-    Body (optional JSON):
-        { "html": "<ignored>" }   ← kept for API compatibility; not used for PDF
+    Body JSON:
+        { "html": "<complete <!DOCTYPE html> document>" }
 
     Returns:
         { "filename": "ecs-health-report-YYYYMMDD-HHMMSS.pdf",
           "size_kb": N,
           "format": "pdf" }
     """
-    import uuid, time as _time, asyncio, sys
+    import uuid, time as _time, asyncio
     req_id = uuid.uuid4().hex[:8]
     try:
+        body = await request.json()
+        html = body.get("html", "")
+        if not html:
+            return _JSONResponse(status_code=400, content={"error": "html field required"})
+
         _REPORT_DIR.mkdir(parents=True, exist_ok=True)
         ts       = _time.strftime("%Y%m%d-%H%M%S")
         filename = f"ecs-health-report-{ts}.pdf"
         filepath = _REPORT_DIR / filename
 
-        # Add the agent/ directory to sys.path so pdf_report.py is importable
-        _agent_dir_str = str(_HERE / "agent")
-        if _agent_dir_str not in sys.path:
-            sys.path.insert(0, _agent_dir_str)
+        try:
+            import pdfkit as _pdfkit
 
-        from pdf_report import build_pdf  # local ReportLab module
+            _PDF_OPTS = {
+                "quiet":                    "",
+                "encoding":                 "UTF-8",
+                "page-size":                "A4",
+                "margin-top":               "15mm",
+                "margin-bottom":            "15mm",
+                "margin-left":              "14mm",
+                "margin-right":             "14mm",
+                "enable-local-file-access": "",   # allows local SVG/font refs
+                "print-media-type":         "",   # honour @media print rules
+                "no-outline":               "",   # suppress bookmark tree noise
+                "disable-smart-shrinking":  "",   # prevent layout rescaling
+            }
 
-        config.logger.info(f"[REQ:{req_id}] /api/reports/save  generating PDF via ReportLab …")
+            def _write_pdf():
+                _pdfkit.from_string(html, str(filepath), options=_PDF_OPTS)
 
-        def _write_pdf():
-            build_pdf(filepath)
+            config.logger.info(f"[REQ:{req_id}] /api/reports/save  generating PDF via pdfkit …")
+            await asyncio.get_event_loop().run_in_executor(None, _write_pdf)
+            size_kb = filepath.stat().st_size // 1024
+            config.logger.info(
+                f"[REQ:{req_id}] /api/reports/save  saved PDF {filename} ({size_kb} KB)"
+            )
+            return {"filename": filename, "size_kb": size_kb, "format": "pdf"}
 
-        await asyncio.get_event_loop().run_in_executor(None, _write_pdf)
+        except ImportError:
+            config.logger.warning(
+                f"[REQ:{req_id}] /api/reports/save  pdfkit not installed, falling back to HTML"
+            )
+        except Exception as pdf_err:
+            config.logger.warning(
+                f"[REQ:{req_id}] /api/reports/save  pdfkit failed ({pdf_err}), falling back to HTML"
+            )
 
-        size_kb = filepath.stat().st_size // 1024
+        # Fallback: save as HTML (user can Print → Save as PDF in browser)
+        filename = f"ecs-health-report-{ts}.html"
+        filepath = _REPORT_DIR / filename
+        filepath.write_text(html, encoding="utf-8")
+        size_kb  = filepath.stat().st_size // 1024
         config.logger.info(
-            f"[REQ:{req_id}] /api/reports/save  saved PDF {filename} ({size_kb} KB)"
+            f"[REQ:{req_id}] /api/reports/save  saved HTML {filename} ({size_kb} KB)"
         )
-        return {"filename": filename, "size_kb": size_kb, "format": "pdf"}
+        return {"filename": filename, "size_kb": size_kb, "format": "html"}
 
     except Exception as e:
         config.logger.error(f"[REQ:{req_id}] /api/reports/save  error: {e}")
