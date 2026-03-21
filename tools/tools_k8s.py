@@ -2690,84 +2690,118 @@ def run_cluster_health() -> str:
 
 def generate_healthcheck_report() -> str:
     """
-    Full, multi-section cluster health report. Covers every layer from nodes
-    to certificates. Each section is self-contained — healthy sections emit a
-    single green line; problem sections emit a full table capped at 20 rows.
+    Full, multi-section cluster health report — emits pure HTML for weasyprint.
     """
+    import html as _html
 
     now_str  = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    _DIV     = "─" * 60
     _MAX_ROWS = 20
 
-    def _section(title: str) -> str:
-        pad = max(0, 58 - len(title))
-        return f"\n{'─' * 2} {title} {'─' * pad}"
+    def esc(s):
+        return _html.escape(str(s)) if s is not None else ""
 
-    def _table_cap(rows: list[str], header_lines: list[str]) -> list[str]:
-        """Return header + up to _MAX_ROWS data rows + optional overflow note."""
-        out = list(header_lines)
-        out.extend(rows[:_MAX_ROWS])
-        overflow = len(rows) - _MAX_ROWS
+    def section(title):
+        return f'<h2>{esc(title)}</h2>'
+
+    def ok(msg):
+        return f'<p class="ok">&#9989; {esc(msg)}</p>'
+
+    def warn(msg):
+        return f'<p class="warn">&#9888;&#65039; {esc(msg)}</p>'
+
+    def err(msg):
+        return f'<p class="err">&#128308; {esc(msg)}</p>'
+
+    def info(msg):
+        return f'<p>{esc(msg)}</p>'
+
+    def table(headers, rows, cap=_MAX_ROWS):
+        if not rows:
+            return ""
+        ths = "".join(f"<th>{esc(h)}</th>" for h in headers)
+        trs = ""
+        for row in rows[:cap]:
+            trs += "<tr>" + "".join(f"<td>{c}</td>" for c in row) + "</tr>"
+        overflow = len(rows) - cap
+        t = f'<table><thead><tr>{ths}</tr></thead><tbody>{trs}</tbody></table>'
         if overflow > 0:
-            out.append(f"_… and {overflow} more row(s) — ask the chatbot to filter by namespace._")
-        return out
+            t += f'<p class="note"><em>… and {overflow} more row(s) not shown.</em></p>'
+        return t
 
-    report: list[str] = [
-        "# Cluster Health Report",
-        f"Generated: {now_str}",
-        "",
-    ]
+    def subsection(title):
+        return f'<h3>{esc(title)}</h3>'
 
-    report.append(_section("1. Executive Summary"))
+    R = []   # HTML fragments
+
+    # ── Header ────────────────────────────────────────────────────────────
+    R.append(f'<p class="note">Generated: {esc(now_str)}</p>')
+
+    # ── 1. Executive Summary ──────────────────────────────────────────────
+    R.append(section("1. Executive Summary"))
     try:
         v = _version_api.get_code()
-        report.append(f"Kubernetes: {v.git_version}")
+        R.append(info(f"Kubernetes: {v.git_version}"))
     except Exception:
-        report.append("Kubernetes version: unavailable")
+        R.append(warn("Kubernetes version: unavailable"))
 
     try:
         scorecard = run_cluster_health()
-        scorecard_lines = scorecard.splitlines()
-        trimmed = "\n".join(scorecard_lines[:-4]) if len(scorecard_lines) > 4 else scorecard
-        report.append(trimmed)
+        # Convert scorecard text to clean HTML — strip box-drawing chars, preserve structure
+        sc_lines = scorecard.splitlines()
+        R.append('<div class="scorecard">')
+        for line in sc_lines:
+            stripped = line.strip()
+            if not stripped or all(c in "─━│╔╗╚╝╠╣╦╩╬═" for c in stripped):
+                continue
+            # Detect table rows
+            if stripped.startswith("|") and "|" in stripped[1:]:
+                continue  # skip markdown table rows — scorecard has its own format
+            if stripped.startswith("🔴") or stripped.startswith("🟠"):
+                R.append(f'<p class="err">{esc(stripped)}</p>')
+            elif stripped.startswith("✅"):
+                R.append(f'<p class="ok">{esc(stripped)}</p>')
+            elif stripped.startswith("⚠") or stripped.startswith("⚠️"):
+                R.append(f'<p class="warn">{esc(stripped)}</p>')
+            elif stripped.startswith("🖥") or stripped.startswith("•"):
+                R.append(f'<p class="indent">{esc(stripped)}</p>')
+            else:
+                R.append(f'<p>{esc(stripped)}</p>')
+        R.append('</div>')
     except Exception as e:
-        report.append(f"⚠️  Could not generate scorecard: {e}")
+        R.append(warn(f"Could not generate scorecard: {e}"))
 
-    report.append(_section("2. Node Infrastructure"))
+    # ── 2. Node Infrastructure ────────────────────────────────────────────
+    R.append(section("2. Node Infrastructure"))
     try:
         nodes = _core.list_node().items
         if not nodes:
-            report.append("No nodes found.")
+            R.append(warn("No nodes found."))
         else:
-            report.append(f"**Nodes ({len(nodes)} total)**")
-            hdr = ["| NAME | ROLES | STATUS | CPU | MEMORY (GiB) | GPU |", "|---|---|---|---|---|---|"]
+            R.append(subsection(f"Nodes ({len(nodes)} total)"))
             rows = []
             for node in sorted(nodes, key=lambda n: n.metadata.name):
-                roles = (",".join(k.split("/")[-1] for k in (node.metadata.labels or {})
-                                  if "node-role.kubernetes.io" in k) or "worker")
+                roles  = (",".join(k.split("/")[-1] for k in (node.metadata.labels or {})
+                                   if "node-role.kubernetes.io" in k) or "worker")
                 conds  = {c.type: c.status for c in (node.status.conditions or [])}
                 status = "✅ Ready" if conds.get("Ready") == "True" else "🔴 NotReady"
                 alloc  = node.status.allocatable or {}
                 cpu    = alloc.get("cpu", "?")
                 mem_ki = alloc.get("memory", "0Ki")
                 try:
-                    mem_gib = round(int(mem_ki.rstrip("Ki")) / (1024 * 1024), 1)
-                    mem_str = f"{mem_gib} GiB"
+                    mem_gib = f"{round(int(mem_ki.rstrip('Ki')) / (1024*1024), 1)} GiB"
                 except Exception:
-                    mem_str = mem_ki
+                    mem_gib = mem_ki
                 gpu    = next((alloc[k] for k in alloc
                                if "nvidia.com/gpu" in k or "amd.com/gpu" in k), "-")
-                flags = []
+                flags  = []
                 if conds.get("MemoryPressure") == "True": flags.append("MemPressure")
                 if conds.get("DiskPressure")   == "True": flags.append("DiskPressure")
                 status_str = status + (f" ⚠️ {','.join(flags)}" if flags else "")
-                rows.append(f"| `{node.metadata.name}` | {roles} | {status_str} | {cpu} | {mem_str} | {gpu} |")
-            report.extend(_table_cap(rows, hdr))
+                rows.append([esc(node.metadata.name), esc(roles),
+                              status_str, esc(cpu), esc(mem_gib), esc(gpu)])
+            R.append(table(["NAME","ROLES","STATUS","CPU","MEMORY (GiB)","GPU"], rows))
 
-            report.append("")
-            report.append("**Node Capacity (Allocatable vs Requested)**")
-            hdr2 = ["| NODE | CPU ALLOC | CPU REQ | CPU AVAIL | RAM ALLOC (Gi) | RAM REQ (Gi) | RAM AVAIL (Gi) |",
-                    "|---|---|---|---|---|---|---|"]
+            R.append(subsection("Node Capacity (Allocatable vs Requested)"))
             rows2 = []
             for node in sorted(nodes, key=lambda n: n.metadata.name):
                 alloc     = node.status.allocatable or {}
@@ -2779,57 +2813,51 @@ def generate_healthcheck_report() -> str:
                                 for p in pods_on for c in (p.spec.containers or []) if c.resources)
                 mem_req   = sum(_parse_mem_gib((c.resources.requests or {}).get("memory", "0"))
                                 for p in pods_on for c in (p.spec.containers or []) if c.resources)
-                cpu_avail = round(cpu_alloc - cpu_req, 2)
-                mem_avail = round(mem_alloc - mem_req, 2)
-                pct       = lambda a, b: f"({round(a/b*100,1)}%)" if b > 0 else "(0%)"
-                rows2.append(
-                    f"| `{node.metadata.name}` | {round(cpu_alloc,2)} "
-                    f"| {round(cpu_req,2)} {pct(cpu_req,cpu_alloc)} "
-                    f"| {cpu_avail} {pct(cpu_avail,cpu_alloc)} "
-                    f"| {round(mem_alloc,2)} "
-                    f"| {round(mem_req,2)} {pct(mem_req,mem_alloc)} "
-                    f"| {mem_avail} {pct(mem_avail,mem_alloc)} |"
-                )
-            report.extend(_table_cap(rows2, hdr2))
+                pct = lambda a, b: f"({round(a/b*100,1)}%)" if b > 0 else "(0%)"
+                rows2.append([
+                    esc(node.metadata.name),
+                    str(round(cpu_alloc,2)),
+                    f"{round(cpu_req,2)} {pct(cpu_req,cpu_alloc)}",
+                    f"{round(cpu_alloc-cpu_req,2)} {pct(cpu_alloc-cpu_req,cpu_alloc)}",
+                    str(round(mem_alloc,2)),
+                    f"{round(mem_req,2)} {pct(mem_req,mem_alloc)}",
+                    f"{round(mem_alloc-mem_req,2)} {pct(mem_alloc-mem_req,mem_alloc)}",
+                ])
+            R.append(table(["NODE","CPU ALLOC","CPU REQ","CPU AVAIL",
+                             "RAM ALLOC (Gi)","RAM REQ (Gi)","RAM AVAIL (Gi)"], rows2))
 
             tainted = [(n.metadata.name, t) for n in nodes for t in (n.spec.taints or [])]
             if tainted:
-                report.append("")
-                report.append("**Node Taints**")
-                hdr3 = ["| NODE | KEY | VALUE | EFFECT |", "|---|---|---|---|"]
-                rows3 = [f"| `{nm}` | {t.key or '<any>'} | {t.value or '-'} | {t.effect or '-'} |"
-                         for nm, t in tainted]
-                report.extend(_table_cap(rows3, hdr3))
+                R.append(subsection("Node Taints"))
+                R.append(table(["NODE","KEY","VALUE","EFFECT"],
+                    [[esc(nm), esc(t.key or "<any>"), esc(t.value or "-"), esc(t.effect or "-")]
+                     for nm, t in tainted]))
             else:
-                report.append("✅ No node taints defined.")
+                R.append(ok("No node taints defined."))
 
-            gpu_nodes = [n for n in nodes
-                         if any("gpu" in k.lower() for k in (n.status.allocatable or {}))]
+            gpu_nodes = [n for n in nodes if any("gpu" in k.lower()
+                         for k in (n.status.allocatable or {}))]
             if gpu_nodes:
-                report.append("")
-                report.append("**GPU Nodes**")
-                hdr4 = ["| NODE | PRODUCT | COUNT | VRAM | ALLOCATABLE |", "|---|---|---|---|---|"]
+                R.append(subsection("GPU Nodes"))
                 rows4 = []
                 for node in gpu_nodes:
-                    labels   = node.metadata.labels or {}
-                    alloc    = node.status.allocatable or {}
-                    gpu_key  = next((k for k in alloc if "gpu" in k.lower()), None)
+                    labels  = node.metadata.labels or {}
+                    alloc   = node.status.allocatable or {}
+                    gpu_key = next((k for k in alloc if "gpu" in k.lower()), None)
                     gpu_alloc = alloc.get(gpu_key, "0") if gpu_key else "0"
-                    product  = (labels.get(f"{gpu_key}.product") or
-                                labels.get("gpu.product") or "Unknown") if gpu_key else "Unknown"
-                    count    = (labels.get(f"{gpu_key}.count") or
-                                labels.get("gpu.count") or gpu_alloc) if gpu_key else gpu_alloc
-                    memory   = (labels.get(f"{gpu_key}.memory") or
-                                labels.get("gpu.memory") or "n/a") if gpu_key else "n/a"
-                    rows4.append(f"| `{node.metadata.name}` | {product} | {count} | {memory}Mi | {gpu_alloc} |")
-                report.extend(_table_cap(rows4, hdr4))
+                    product = labels.get("gpu.product", "Unknown")
+                    count   = labels.get("gpu.count", gpu_alloc)
+                    memory  = labels.get("gpu.memory", "n/a")
+                    rows4.append([esc(node.metadata.name), esc(product),
+                                  esc(count), f"{esc(memory)}Mi", esc(gpu_alloc)])
+                R.append(table(["NODE","PRODUCT","COUNT","VRAM","ALLOCATABLE"], rows4))
             else:
-                report.append("✅ No GPU nodes detected.")
-
+                R.append(ok("No GPU nodes detected."))
     except Exception as e:
-        report.append(f"⚠️  Could not gather node data: {e}")
+        R.append(warn(f"Could not gather node data: {e}"))
 
-    report.append(_section("3. Resource Capacity"))
+    # ── 3. Resource Capacity ──────────────────────────────────────────────
+    R.append(section("3. Resource Capacity"))
     try:
         all_ns = [ns.metadata.name for ns in _core.list_namespace().items]
         ns_data = []
@@ -2849,31 +2877,22 @@ def generate_healthcheck_report() -> str:
                     ns_data.append((ns, len(pods), cpu_req, mem_req, cpu_lim, mem_lim))
             except Exception:
                 pass
-
         ns_data.sort(key=lambda x: x[2], reverse=True)
-        report.append("**Namespace Resource Requests vs Limits (top namespaces by CPU request)**")
-        hdr = ["| NAMESPACE | PODS | CPU REQ | MEM REQ | CPU LIM | MEM LIM |",
-               "|---|---|---|---|---|---|"]
+        R.append(subsection("Namespace Resource Requests vs Limits (top by CPU request)"))
         rows = []
         for ns, pod_count, cpu_req, mem_req, cpu_lim, mem_lim in ns_data:
-            rows.append(
-                f"| `{ns}` | {pod_count} "
-                f"| {cpu_req}m | {mem_req:.0f}Mi "
-                f"| {cpu_lim or 'none'}{'m' if cpu_lim else ''} "
-                f"| {mem_lim:.0f}Mi |"
-            )
-        report.extend(_table_cap(rows, hdr))
-
+            rows.append([esc(ns), str(pod_count),
+                         f"{cpu_req}m", f"{mem_req:.0f}Mi",
+                         f"{cpu_lim}m" if cpu_lim else "none",
+                         f"{mem_lim:.0f}Mi"])
+        R.append(table(["NAMESPACE","PODS","CPU REQ","MEM REQ","CPU LIM","MEM LIM"], rows))
     except Exception as e:
-        report.append(f"⚠️  Could not gather resource data: {e}")
+        R.append(warn(f"Could not gather resource data: {e}"))
 
     try:
         q_items = _core.list_resource_quota_for_all_namespaces().items
         if q_items:
-            report.append("")
-            report.append("**Resource Quotas**")
-            hdr = ["| NAMESPACE | QUOTA | RESOURCE | USED | HARD | % |",
-                   "|---|---|---|---|---|---|"]
+            R.append(subsection("Resource Quotas"))
             rows = []
             for q in sorted(q_items, key=lambda x: (x.metadata.namespace, x.metadata.name)):
                 hard = q.status.hard or {}
@@ -2891,90 +2910,77 @@ def generate_healthcheck_report() -> str:
                         else:
                             pct = round(int(str(used_val).split(".")[0]) /
                                         max(int(str(hard_val).split(".")[0]), 1) * 100, 1)
-                        pct_str = f"{'🔴' if pct >= 90 else '⚠️' if pct >= 80 else '✅'} {pct}%"
+                        icon = "🔴" if pct >= 90 else ("⚠️" if pct >= 80 else "✅")
+                        pct_str = f"{icon} {pct}%"
                     except Exception:
                         pct_str = "-"
-                    rows.append(
-                        f"| `{q.metadata.namespace}` | `{q.metadata.name}` "
-                        f"| {res} | {used_val} | {hard_val} | {pct_str} |"
-                    )
-            report.extend(_table_cap(rows, hdr))
+                    rows.append([esc(q.metadata.namespace), esc(q.metadata.name),
+                                  esc(res), esc(str(used_val)), esc(str(hard_val)), pct_str])
+            R.append(table(["NAMESPACE","QUOTA","RESOURCE","USED","HARD","%"], rows))
         else:
-            report.append("✅ No ResourceQuotas defined.")
+            R.append(ok("No ResourceQuotas defined."))
     except Exception as e:
-        report.append(f"⚠️  Could not gather quota data: {e}")
+        R.append(warn(f"Could not gather quota data: {e}"))
 
     try:
         lr_items = _core.list_limit_range_for_all_namespaces().items
         if lr_items:
-            report.append("")
-            report.append("**LimitRanges**")
-            hdr = ["| NAMESPACE | LIMITRANGE | TYPE | CPU DEFAULT | MEM DEFAULT | CPU MAX | MEM MAX |",
-                   "|---|---|---|---|---|---|---|"]
+            R.append(subsection("LimitRanges"))
             rows = []
             def _g(v, key): return (v or {}).get(key, "-")
             for lr in sorted(lr_items, key=lambda x: (x.metadata.namespace, x.metadata.name)):
                 for item in (lr.spec.limits or []):
-                    rows.append(
-                        f"| `{lr.metadata.namespace}` | `{lr.metadata.name}` | {item.type} "
-                        f"| {_g(item.default,'cpu')} | {_g(item.default,'memory')} "
-                        f"| {_g(item.max,'cpu')} | {_g(item.max,'memory')} |"
-                    )
-            report.extend(_table_cap(rows, hdr))
+                    rows.append([esc(lr.metadata.namespace), esc(lr.metadata.name),
+                                  esc(item.type), esc(_g(item.default,"cpu")),
+                                  esc(_g(item.default,"memory")),
+                                  esc(_g(item.max,"cpu")), esc(_g(item.max,"memory"))])
+            R.append(table(["NAMESPACE","LIMITRANGE","TYPE","CPU DEFAULT",
+                             "MEM DEFAULT","CPU MAX","MEM MAX"], rows))
         else:
-            report.append("✅ No LimitRanges defined.")
+            R.append(ok("No LimitRanges defined."))
     except Exception as e:
-        report.append(f"⚠️  Could not gather LimitRange data: {e}")
+        R.append(warn(f"Could not gather LimitRange data: {e}"))
 
-    report.append(_section("4. Storage Health"))
+    # ── 4. Storage Health ─────────────────────────────────────────────────
+    R.append(section("4. Storage Health"))
     try:
         scs = _storage.list_storage_class().items
         if scs:
-            report.append("**Storage Classes**")
-            hdr = ["| NAME | PROVISIONER | RECLAIM POLICY | EXPANSION | DEFAULT |",
-                   "|---|---|---|---|---|"]
+            R.append(subsection("Storage Classes"))
             rows = []
             for sc in scs:
                 is_default = (sc.metadata.annotations or {}).get(
                     "storageclass.kubernetes.io/is-default-class") == "true"
-                rows.append(
-                    f"| `{sc.metadata.name}` | {sc.provisioner} "
-                    f"| {sc.reclaim_policy or 'Delete'} "
-                    f"| {'✅ Yes' if sc.allow_volume_expansion else 'No'} "
-                    f"| {'★ Default' if is_default else '-'} |"
-                )
-            report.extend(_table_cap(rows, hdr))
+                rows.append([esc(sc.metadata.name), esc(sc.provisioner),
+                              esc(sc.reclaim_policy or "Delete"),
+                              "✅ Yes" if sc.allow_volume_expansion else "No",
+                              "★ Default" if is_default else "-"])
+            R.append(table(["NAME","PROVISIONER","RECLAIM POLICY","EXPANSION","DEFAULT"], rows))
         else:
-            report.append("✅ No StorageClasses defined.")
+            R.append(ok("No StorageClasses defined."))
     except Exception as e:
-        report.append(f"⚠️  Could not gather StorageClass data: {e}")
+        R.append(warn(f"Could not gather StorageClass data: {e}"))
 
     try:
-        pvcs = _core.list_persistent_volume_claim_for_all_namespaces().items
+        pvcs    = _core.list_persistent_volume_claim_for_all_namespaces().items
         bound   = [p for p in pvcs if p.status.phase == "Bound"]
         unbound = [p for p in pvcs if p.status.phase != "Bound"]
-        report.append("")
         if unbound:
-            report.append(f"**PersistentVolumeClaims — 🔴 {len(unbound)} not Bound / {len(bound)} Bound / {len(pvcs)} total**")
-            hdr = ["| NAMESPACE | PVC | PHASE | CLASS | CAPACITY |",
-                   "|---|---|---|---|---|"]
-            rows = [
-                f"| `{p.metadata.namespace}` | `{p.metadata.name}` "
-                f"| {p.status.phase or 'Unknown'} "
-                f"| {p.spec.storage_class_name or '-'} "
-                f"| {(p.status.capacity or {}).get('storage','?')} |"
-                for p in unbound
-            ]
-            report.extend(_table_cap(rows, hdr))
-            report.append(f"✅ {len(bound)} PVCs Bound, 0 not Bound.")
+            R.append(warn(f"{len(unbound)} PVC(s) not Bound / {len(bound)} Bound / {len(pvcs)} total"))
+            rows = []
+            for p in unbound:
+                rows.append([esc(p.metadata.namespace), esc(p.metadata.name),
+                              esc(p.status.phase or "Unknown"),
+                              esc(p.spec.storage_class_name or "-"),
+                              esc((p.status.capacity or {}).get("storage","?"))])
+            R.append(table(["NAMESPACE","PVC","PHASE","CLASS","CAPACITY"], rows))
         else:
-            report.append(f"✅ All {len(pvcs)} PVCs Bound — 0 not Bound.")
+            R.append(ok(f"All {len(pvcs)} PVCs Bound — 0 not Bound."))
     except Exception as e:
-        report.append(f"⚠️  Could not gather PVC data: {e}")
+        R.append(warn(f"Could not gather PVC data: {e}"))
 
     try:
-        report.append("")
-        report.append("**PV Disk Usage** _(requires running pod with mounted volume)_")
+        R.append(subsection("PV Disk Usage (requires running pod with mounted volume)"))
         from kubernetes.stream import stream as _k8s_stream
 
         def _exec_df_inner(pod_name, ns, mount_path, container=None):
@@ -2998,8 +3004,7 @@ def generate_healthcheck_report() -> str:
             ns, pvc_name = pvc.metadata.namespace, pvc.metadata.name
             pod_hit = pod_container = mount_path = None
             try:
-                pods_in_ns = _core.list_namespaced_pod(namespace=ns).items
-                for pod in pods_in_ns:
+                for pod in _core.list_namespaced_pod(namespace=ns).items:
                     if pod.status.phase != "Running":
                         continue
                     for vol in (pod.spec.volumes or []):
@@ -3040,212 +3045,176 @@ def generate_healthcheck_report() -> str:
                 pv_skip += 1
                 continue
 
-            used_gib  = round(used_kb  / (1024 * 1024), 2)
-            avail_gib = round(avail_kb / (1024 * 1024), 2)
-            total_gib = round(total_kb / (1024 * 1024), 2)
+            used_gib  = round(used_kb  / (1024*1024), 2)
+            avail_gib = round(avail_kb / (1024*1024), 2)
+            total_gib = round(total_kb / (1024*1024), 2)
             free_pct  = round(avail_kb / total_kb * 100, 1) if total_kb > 0 else 0.0
             flag      = "🔴" if pct >= 90 else ("⚠️" if pct >= 80 else "✅")
             pv_rows.append((pct, flag, ns, pvc_name, pct, used_gib, total_gib, avail_gib, free_pct))
 
         pv_rows.sort(key=lambda x: x[0], reverse=True)
         if pv_rows:
-            def _pv_html_table(rows, heading, heading_flag):
-                lines = [f"{heading_flag} **{heading} ({len(rows)} PVCs)**"]
-                lines.append('<div class="pv-table">')
-                lines.append('<table><thead><tr>'
-                             '<th>Flag</th><th>Namespace / PVC</th>'
-                             '<th>Usage</th><th>Used (GiB)</th>'
-                             '<th>Total (GiB)</th><th>Free (GiB)</th>'
-                             '</tr></thead><tbody>')
+            def _pv_table(rows, heading, cls):
+                color_map = {"err":"#dc2626","warn":"#d97706","ok":"#16a34a"}
+                trs = ""
                 for r in rows:
-                    flag, ns, pvc_name, pct, used, total, avail, fpct = r[1],r[2],r[3],r[4],r[5],r[6],r[7],r[8]
-                    color = '#dc2626' if pct >= 90 else ('#d97706' if pct >= 80 else '#16a34a')
-                    lines.append(
-                        f'<tr>'
-                        f'<td style="text-align:center">{flag}</td>'
-                        f'<td><code>{ns}/{pvc_name}</code></td>'
-                        f'<td style="color:{color};font-weight:700">{pct}%</td>'
-                        f'<td>{used}Gi ({pct}%)</td>'
-                        f'<td>{total}Gi</td>'
-                        f'<td>{avail}Gi ({fpct}%)</td>'
-                        f'</tr>'
-                    )
-                lines.append('</tbody></table></div>')
-                return lines
+                    flag,ns,pvc_name,pct,used,total,avail,fpct = r[1],r[2],r[3],r[4],r[5],r[6],r[7],r[8]
+                    color = "#dc2626" if pct >= 90 else ("#d97706" if pct >= 80 else "#16a34a")
+                    trs += (f'<tr><td style="text-align:center;font-size:12px">{flag}</td>'
+                            f'<td><code>{esc(ns)}/{esc(pvc_name)}</code></td>'
+                            f'<td style="color:{color};font-weight:700">{pct}%</td>'
+                            f'<td>{used}Gi&nbsp;({pct}%)</td>'
+                            f'<td>{total}Gi</td>'
+                            f'<td>{avail}Gi&nbsp;({fpct}%)</td></tr>')
+                hdr = "<tr><th>Flag</th><th>Namespace / PVC</th><th>Usage</th><th>Used (GiB)</th><th>Total (GiB)</th><th>Free (GiB)</th></tr>"
+                return (f'<p class="{cls}"><strong>{esc(heading)} ({len(rows)} PVCs)</strong></p>'
+                        f'<table><thead>{hdr}</thead><tbody>{trs}</tbody></table>')
 
             critical = [r for r in pv_rows if r[0] >= 80]
             healthy  = [r for r in pv_rows if r[0] < 80]
-
             if critical:
-                report.extend(_pv_html_table(critical,
-                    "Nearing or exceeding 80% capacity", "⚠️"))
-                report.append("")
+                R.append(_pv_table(critical, "⚠️ Nearing or exceeding 80% capacity", "warn"))
             if healthy:
-                report.extend(_pv_html_table(healthy[:5],
-                    f"Within capacity", "✅"))
+                R.append(_pv_table(healthy[:5], "✅ Within capacity", "ok"))
                 if len(healthy) > 5:
-                    report.append(f"_({len(healthy) - 5} more healthy volume(s) not shown)_")
-            if not critical and not healthy:
-                report.append("✅ No volume usage data available (no mounted running pods found).")
+                    R.append(f'<p class="note"><em>({len(healthy)-5} more healthy volumes not shown)</em></p>')
+        else:
+            R.append(ok("No volume usage data available (no mounted running pods found)."))
         if pv_skip:
-            report.append(f"_({pv_skip} PVC(s) skipped — no running pod with mount found.)_")
+            R.append(f'<p class="note"><em>({pv_skip} PVC(s) skipped — no running pod with mount found.)</em></p>')
     except Exception as e:
-        report.append(f"⚠️  Could not gather PV usage data: {e}")
+        R.append(warn(f"Could not gather PV usage data: {e}"))
 
-    report.append(_section("5. Workload Health"))
+    # ── 5. Workload Health ────────────────────────────────────────────────
+    R.append(section("5. Workload Health"))
 
     def _workload_section(kind, items, desired_fn, ready_fn, avail_fn):
-        """Generic workload table — healthy = one line, degraded = full table."""
         if not items:
-            report.append(f"✅ No {kind}s found.")
+            R.append(ok(f"No {kind}s found."))
             return
         degraded = [i for i in items
                     if (desired_fn(i) or 0) > 0 and (ready_fn(i) or 0) < (desired_fn(i) or 0)]
         if not degraded:
-            report.append(f"✅ {len(items)} {kind}(s) — all healthy.")
+            R.append(ok(f"{len(items)} {kind}(s) — all healthy."))
             return
-        report.append(f"⚠️  {len(degraded)}/{len(items)} {kind}(s) degraded:")
-        hdr = [f"| NAMESPACE | NAME | DESIRED | READY | AVAILABLE |",
-               "|---|---|---|---|---|"]
-        rows = [
-            f"| `{i.metadata.namespace}` | `{i.metadata.name}` "
-            f"| {desired_fn(i) or 0} | {ready_fn(i) or 0} | {avail_fn(i) or 0} |"
-            for i in degraded
-        ]
-        report.extend(_table_cap(rows, hdr))
+        R.append(warn(f"{len(degraded)}/{len(items)} {kind}(s) degraded:"))
+        rows = [[esc(i.metadata.namespace), esc(i.metadata.name),
+                 str(desired_fn(i) or 0), str(ready_fn(i) or 0), str(avail_fn(i) or 0)]
+                for i in degraded]
+        R.append(table(["NAMESPACE","NAME","DESIRED","READY","AVAILABLE"], rows))
 
     try:
-        _workload_section("Deployment",
-                          _apps.list_deployment_for_all_namespaces().items,
+        _workload_section("Deployment", _apps.list_deployment_for_all_namespaces().items,
                           lambda d: d.spec.replicas or 0,
                           lambda d: d.status.ready_replicas or 0,
                           lambda d: d.status.available_replicas or 0)
     except Exception as e:
-        report.append(f"⚠️  Deployments: {e}")
+        R.append(warn(f"Deployments: {e}"))
 
     try:
-        _workload_section("DaemonSet",
-                          _apps.list_daemon_set_for_all_namespaces().items,
+        _workload_section("DaemonSet", _apps.list_daemon_set_for_all_namespaces().items,
                           lambda d: d.status.desired_number_scheduled or 0,
                           lambda d: d.status.number_ready or 0,
                           lambda d: d.status.number_available or 0)
     except Exception as e:
-        report.append(f"⚠️  DaemonSets: {e}")
+        R.append(warn(f"DaemonSets: {e}"))
 
     try:
-        _workload_section("StatefulSet",
-                          _apps.list_stateful_set_for_all_namespaces().items,
+        _workload_section("StatefulSet", _apps.list_stateful_set_for_all_namespaces().items,
                           lambda s: s.spec.replicas or 0,
                           lambda s: s.status.ready_replicas or 0,
-                          lambda s: getattr(s.status, "available_replicas", None) or 0)
+                          lambda s: getattr(s.status,"available_replicas",None) or 0)
     except Exception as e:
-        report.append(f"⚠️  StatefulSets: {e}")
+        R.append(warn(f"StatefulSets: {e}"))
 
     try:
-        all_rs  = _apps.list_replica_set_for_all_namespaces().items
-        orphaned = [r for r in all_rs
-                    if not r.metadata.owner_references
-                    and (r.spec.replicas or 0) > 0
-                    and (r.status.ready_replicas or 0) < (r.spec.replicas or 0)]
+        rss = _apps.list_replica_set_for_all_namespaces().items
+        orphaned = [r for r in rss
+                    if (r.spec.replicas or 0) > 0
+                    and (r.status.ready_replicas or 0) < (r.spec.replicas or 0)
+                    and not r.metadata.owner_references]
         if orphaned:
-            report.append(f"⚠️  {len(orphaned)} orphaned/degraded ReplicaSet(s):")
-            hdr = ["| NAMESPACE | NAME | DESIRED | READY |", "|---|---|---|---|"]
-            rows = [f"| `{r.metadata.namespace}` | `{r.metadata.name}` "
-                    f"| {r.spec.replicas or 0} | {r.status.ready_replicas or 0} |"
+            R.append(warn(f"{len(orphaned)} orphaned/degraded ReplicaSet(s):"))
+            rows = [[esc(r.metadata.namespace), esc(r.metadata.name),
+                     str(r.spec.replicas or 0), str(r.status.ready_replicas or 0)]
                     for r in orphaned]
-            report.extend(_table_cap(rows, hdr))
+            R.append(table(["NAMESPACE","NAME","DESIRED","READY"], rows))
         else:
-            report.append("✅ No orphaned/degraded ReplicaSets.")
+            R.append(ok("No orphaned/degraded ReplicaSets."))
     except Exception as e:
-        report.append(f"⚠️  ReplicaSets: {e}")
+        R.append(warn(f"ReplicaSets: {e}"))
 
     try:
         jobs = _batch.list_job_for_all_namespaces().items
         failed_jobs = [j for j in jobs
-                       if not any(o.kind == "CronJob" for o in (j.metadata.owner_references or []))
-                       and (j.status.failed or 0) > 0
-                       and not (j.status.succeeded or 0) > 0]
+                       if j.status.failed and (j.status.failed or 0) > 0
+                       and not (j.status.completion_time)]
         if failed_jobs:
-            report.append(f"⚠️  {len(failed_jobs)} failed Job(s):")
-            hdr = ["| NAMESPACE | NAME | ACTIVE | SUCCEEDED | FAILED |", "|---|---|---|---|---|"]
-            rows = [f"| `{j.metadata.namespace}` | `{j.metadata.name}` "
-                    f"| {j.status.active or 0} | {j.status.succeeded or 0} | {j.status.failed or 0} |"
+            R.append(warn(f"{len(failed_jobs)} failed Job(s):"))
+            rows = [[esc(j.metadata.namespace), esc(j.metadata.name),
+                     str(j.status.failed or 0)]
                     for j in failed_jobs]
-            report.extend(_table_cap(rows, hdr))
+            R.append(table(["NAMESPACE","NAME","FAILURES"], rows))
         else:
-            report.append("✅ No failed Jobs.")
+            R.append(ok("No failed Jobs."))
     except Exception as e:
-        report.append(f"⚠️  Jobs: {e}")
+        R.append(warn(f"Jobs: {e}"))
 
     try:
-        cjs = _batch.list_cron_job_for_all_namespaces().items
-        if cjs:
-            report.append("")
-            report.append(f"**CronJobs ({len(cjs)} total)**")
-            hdr = ["| NAMESPACE | NAME | SCHEDULE | SUSPENDED | LAST RUN |",
-                   "|---|---|---|---|---|"]
+        cronjobs = _batch.list_cron_job_for_all_namespaces().items
+        if cronjobs:
+            R.append(subsection(f"CronJobs ({len(cronjobs)} total)"))
             rows = []
-            for cj in cjs:
+            for cj in sorted(cronjobs, key=lambda x: (x.metadata.namespace, x.metadata.name)):
                 last = cj.status.last_schedule_time
                 if last:
-                    diff = datetime.datetime.now(timezone.utc) - last
-                    d, s = diff.days, diff.seconds
-                    last_str = (f"{d}d {s//3600}h ago" if d > 0 else f"{s//3600}h {(s%3600)//60}m ago")
+                    delta = datetime.datetime.now(timezone.utc) - last.replace(tzinfo=timezone.utc)
+                    h, m = divmod(int(delta.total_seconds()) // 60, 60)
+                    last_str = f"{h}h {m}m ago"
                 else:
                     last_str = "Never"
-                rows.append(
-                    f"| `{cj.metadata.namespace}` | `{cj.metadata.name}` "
-                    f"| `{cj.spec.schedule}` "
-                    f"| {'⏸️ Yes' if cj.spec.suspend else '▶️ No'} "
-                    f"| {last_str} |"
-                )
-            report.extend(_table_cap(rows, hdr))
-        else:
-            report.append("✅ No CronJobs defined.")
+                suspended = "⏸ Yes" if cj.spec.suspend else "▶ No"
+                rows.append([esc(cj.metadata.namespace), esc(cj.metadata.name),
+                              esc(cj.spec.schedule), suspended, last_str])
+            R.append(table(["NAMESPACE","NAME","SCHEDULE","SUSPENDED","LAST RUN"], rows))
     except Exception as e:
-        report.append(f"⚠️  CronJobs: {e}")
+        R.append(warn(f"CronJobs: {e}"))
 
     try:
-        report.append("")
-        non_running = []
-        for phase in _NOT_RUNNING_PHASES:
-            try:
-                non_running += _core.list_pod_for_all_namespaces(
-                    field_selector=f"status.phase={phase}").items
-            except Exception:
-                pass
+        all_pods = _core.list_pod_for_all_namespaces().items
+        non_running = [p for p in all_pods
+                       if p.status.phase not in ("Running","Succeeded")
+                       and not any(c.type == "Ready" and c.status == "True"
+                                   for c in (p.status.conditions or []))]
         if non_running:
-            report.append(f"**🔴 Non-Running Pods ({len(non_running)} total)**")
-            hdr = ["| NAMESPACE | NAME | PHASE | READY | RESTARTS | REASON |",
-                   "|---|---|---|---|---|---|"]
+            R.append(warn(f"Non-Running Pods ({len(non_running)} total)"))
             rows = []
-            for pod in sorted(non_running,
-                              key=lambda p: (p.metadata.namespace, p.metadata.name)):
-                phase    = pod.status.phase or "Unknown"
-                restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
-                ready    = sum(1 for cs in (pod.status.container_statuses or []) if cs.ready)
-                total    = len(pod.spec.containers)
-                reason   = ""
-                for cs in (pod.status.container_statuses or []):
-                    if cs.state and cs.state.waiting and cs.state.waiting.reason:
-                        reason = cs.state.waiting.reason; break
-                    if cs.state and cs.state.terminated and cs.state.terminated.reason:
-                        reason = cs.state.terminated.reason; break
-                rows.append(
-                    f"| `{pod.metadata.namespace}` | `{pod.metadata.name}` "
-                    f"| {phase} | {ready}/{total} | {restarts} | {reason or '-'} |"
-                )
-            report.extend(_table_cap(rows, hdr))
+            for p in non_running[:_MAX_ROWS]:
+                cs     = p.status.container_statuses or []
+                ready  = sum(1 for c in cs if c.ready)
+                restarts = sum(c.restart_count or 0 for c in cs)
+                reason = (p.status.reason or
+                          next((s.state.waiting.reason for c in cs
+                                if (s := c) and c.state and c.state.waiting
+                                and c.state.waiting.reason), "") or
+                          p.status.phase or "")
+                rows.append([esc(p.metadata.namespace), esc(p.metadata.name),
+                              esc(p.status.phase or "Unknown"),
+                              f"{ready}/{len(p.spec.containers)}",
+                              str(restarts), esc(reason)])
+            R.append(table(["NAMESPACE","NAME","PHASE","READY","RESTARTS","REASON"], rows))
+            if len(non_running) > _MAX_ROWS:
+                R.append(f'<p class="note"><em>({len(non_running)-_MAX_ROWS} more not shown)</em></p>')
         else:
-            report.append("✅ All pods are Running — no Pending/Failed/Unknown pods.")
+            R.append(ok("All pods running."))
     except Exception as e:
-        report.append(f"⚠️  Non-running pods: {e}")
+        R.append(warn(f"Pod status: {e}"))
 
-    report.append(_section("6. Networking & DNS"))
-
+    # ── 6. Networking & DNS ───────────────────────────────────────────────
+    R.append(section("6. Networking & DNS"))
     try:
         DNS_NS       = "kube-system"
-        DNS_PATTERNS = ["coredns", "core-dns", "kube-dns"]
+        DNS_PATTERNS = ["coredns","core-dns","kube-dns"]
         dns_pods = [p for p in _core.list_namespaced_pod(namespace=DNS_NS).items
                     if any(pat in p.metadata.name.lower() for pat in DNS_PATTERNS)
                     and "autoscaler" not in p.metadata.name.lower()
@@ -3255,17 +3224,18 @@ def generate_healthcheck_report() -> str:
                              if sum(1 for cs in (p.status.container_statuses or []) if cs.ready)
                              < len(p.spec.containers or [])]
             if not_ready_dns:
-                report.append(f"⚠️  CoreDNS: {len(not_ready_dns)}/{len(dns_pods)} pods not ready — "
-                               f"{_cap([p.metadata.name for p in not_ready_dns])}")
+                R.append(warn(f"CoreDNS: {len(not_ready_dns)}/{len(dns_pods)} pods not ready — "
+                               f"{_cap([p.metadata.name for p in not_ready_dns])}"))
             else:
-                report.append(f"✅ CoreDNS: {len(dns_pods)}/{len(dns_pods)} pods ready")
+                R.append(ok(f"CoreDNS: {len(dns_pods)}/{len(dns_pods)} pods ready"))
 
-            # DNS resolution test — try 2 cluster service names
-            from kubernetes.stream import stream as _k8s_stream
             dns_test_pod = next((p for p in dns_pods if p.status.phase == "Running"), None)
             if dns_test_pod:
-                test_targets = ["kubernetes.default.svc.cluster.local", "kube-dns.kube-system.svc.cluster.local"]
-                report.append("**CoreDNS Resolution Tests:**")
+                from kubernetes.stream import stream as _k8s_stream
+                test_targets = ["kubernetes.default.svc.cluster.local",
+                                "kube-dns.kube-system.svc.cluster.local"]
+                R.append(subsection("CoreDNS Resolution Tests"))
+                res_rows = []
                 for target in test_targets:
                     try:
                         resp = _k8s_stream(
@@ -3273,79 +3243,77 @@ def generate_healthcheck_report() -> str:
                             dns_test_pod.metadata.name, DNS_NS,
                             command=["/bin/sh", "-c", f"nslookup {target} 2>&1 | head -5"],
                             stderr=False, stdin=False, stdout=True, tty=False, _preload_content=True)
-                        out = (resp.strip() if isinstance(resp, str) else "")
+                        out = resp.strip() if isinstance(resp, str) else ""
                         resolved = "Address" in out or "answer" in out.lower()
                         flag = "✅" if resolved else "❌"
-                        report.append(f"{flag} `nslookup {target}` → {'resolved' if resolved else 'FAILED'}")
-                        if not resolved:
-                            report.append(f"  ```\n  {out[:200]}\n  ```")
+                        res_rows.append([flag,
+                                          f"<code>{esc(target)}</code>",
+                                          "Resolved" if resolved else
+                                          f'<span style="color:#dc2626">FAILED</span>'])
                     except Exception as ex:
-                        report.append(f"⚠️  `nslookup {target}` — could not exec: {ex}")
+                        res_rows.append(["⚠️", f"<code>{esc(target)}</code>",
+                                          f"exec error: {esc(str(ex))}"])
+                R.append(table(["", "Target", "Result"], res_rows))
         else:
-            report.append("⚠️  CoreDNS: no DNS pods found in kube-system")
+            R.append(warn("CoreDNS: no DNS pods found in kube-system"))
     except Exception as e:
-        report.append(f"⚠️  CoreDNS check failed: {e}")
-
-    # Ingress list removed (point 6)
+        R.append(warn(f"CoreDNS check failed: {e}"))
 
     try:
-        nps      = _net.list_network_policy_for_all_namespaces().items
-        covered  = {np.metadata.namespace for np in nps}
+        nps       = _net.list_network_policy_for_all_namespaces().items
+        covered   = {np.metadata.namespace for np in nps}
         all_ns_names = {n.metadata.name for n in _core.list_namespace().items}
         uncovered = sorted(all_ns_names - covered)
         if uncovered:
-            report.append(f"⚠️  {len(uncovered)} namespace(s) have no NetworkPolicy: "
-                          f"{_cap(uncovered)}")
+            R.append(warn(f"{len(uncovered)} namespace(s) have no NetworkPolicy: "
+                          f"{_cap(uncovered)}"))
         else:
-            report.append(f"✅ All namespaces have NetworkPolicies ({len(nps)} total)")
+            R.append(ok(f"All namespaces have NetworkPolicies ({len(nps)} total)"))
     except Exception as e:
-        report.append(f"⚠️  NetworkPolicies: {e}")
+        R.append(warn(f"NetworkPolicies: {e}"))
 
-    report.append(_section("7. Certificates & RBAC"))
-
+    # ── 7. Certificates & RBAC ────────────────────────────────────────────
+    R.append(section("7. Certificates & RBAC"))
     try:
         custom = _k8s.CustomObjectsApi()
         certs  = custom.list_cluster_custom_object(
-            "cert-manager.io", "v1", "certificates").get("items", [])
+            "cert-manager.io","v1","certificates").get("items",[])
         if certs:
             not_ready_certs = []
             expiring_soon   = []
             for cert in certs:
-                meta    = cert.get("metadata", {})
-                status  = cert.get("status", {})
-                conditions = status.get("conditions", [])
-                ready   = next((c for c in conditions if c.get("type") == "Ready"), None)
+                meta   = cert.get("metadata",{})
+                status = cert.get("status",{})
+                ready  = next((c for c in status.get("conditions",[])
+                               if c.get("type") == "Ready"), None)
                 is_ready = ready and ready.get("status") == "True"
                 not_after = status.get("notAfter")
                 if not is_ready:
-                    not_ready_certs.append(
-                        f"`{meta.get('namespace')}/{meta.get('name')}`")
+                    not_ready_certs.append(f"{meta.get('namespace')}/{meta.get('name')}")
                 elif not_after:
                     try:
-                        exp = datetime.datetime.fromisoformat(
-                            not_after.replace("Z", "+00:00"))
+                        exp = datetime.datetime.fromisoformat(not_after.replace("Z","+00:00"))
                         days_left = (exp - datetime.datetime.now(timezone.utc)).days
                         if days_left <= 30:
                             expiring_soon.append(
-                                f"`{meta.get('namespace')}/{meta.get('name')}` ({days_left}d)")
+                                f"{meta.get('namespace')}/{meta.get('name')} ({days_left}d)")
                     except Exception:
                         pass
-
             if not_ready_certs:
-                report.append(f"🔴 {len(not_ready_certs)} cert(s) not Ready: "
-                               f"{_cap(not_ready_certs)}")
+                R.append(err(f"{len(not_ready_certs)} cert(s) not Ready: "
+                              f"{_cap(not_ready_certs)}"))
             if expiring_soon:
-                report.append(f"⚠️  {len(expiring_soon)} cert(s) expiring within 30 days: "
-                               f"{_cap(expiring_soon)}")
+                R.append(warn(f"{len(expiring_soon)} cert(s) expiring within 30 days: "
+                               f"{_cap(expiring_soon)}"))
             if not not_ready_certs and not expiring_soon:
-                report.append(f"✅ {len(certs)} cert-manager certificate(s) — all Ready and not expiring soon")
+                R.append(ok(f"{len(certs)} cert-manager certificate(s) — all Ready and not expiring soon"))
         else:
-            report.append("✅ No cert-manager Certificates found (cert-manager may not be installed)")
+            R.append(ok("No cert-manager Certificates found (cert-manager may not be installed)"))
     except Exception as e:
         if "404" in str(e):
-            report.append("✅ cert-manager not installed — skipping certificate check")
+            R.append(ok("cert-manager not installed — skipping certificate check"))
         else:
-            report.append(f"⚠️  Certificates: {e}")
+            R.append(warn(f"Certificates: {e}"))
 
     try:
         adm_api    = _k8s.AdmissionregistrationV1Api()
@@ -3355,24 +3323,52 @@ def generate_healthcheck_report() -> str:
         for config in mutating + validating:
             for wh in (config.webhooks or []):
                 if wh.failure_policy == "Fail":
-                    fail_webhooks.append(
-                        f"`{config.metadata.name}/{wh.name}`")
+                    fail_webhooks.append(f"{config.metadata.name}/{wh.name}")
         if fail_webhooks:
-            report.append(f"⚠️  {len(fail_webhooks)} webhook(s) with FailurePolicy=Fail "
-                          f"(may block deployments): {_cap(fail_webhooks)}")
+            R.append(warn(f"{len(fail_webhooks)} webhook(s) with FailurePolicy=Fail "
+                          f"(may block deployments): {_cap(fail_webhooks)}"))
         else:
-            report.append("✅ No Fail-policy admission webhooks")
+            R.append(ok("No Fail-policy admission webhooks"))
     except Exception as e:
-        report.append(f"⚠️  Webhooks: {e}")
+        R.append(warn(f"Webhooks: {e}"))
 
-    report.append(_section("8. Control Plane & Recent Diagnostics"))
-
-    # Full control plane status using get_control_plane_status
+    # ── 8. Control Plane & Recent Diagnostics ────────────────────────────
+    R.append(section("8. Control Plane & Recent Diagnostics"))
     try:
         cp_report = get_control_plane_status()
-        report.append(cp_report)
+        # Convert markdown output of get_control_plane_status to HTML
+        for line in cp_report.splitlines():
+            s = line.strip()
+            if not s or s.startswith("###"):
+                if s.startswith("###"):
+                    R.append(subsection(s.lstrip("#").strip()))
+            elif s.startswith("|") and "|" in s[1:]:
+                pass  # handled as block below
+            elif s.startswith("🟢") or s.startswith("✅"):
+                R.append(ok(s))
+            elif s.startswith("🔴"):
+                R.append(err(s))
+            elif s.startswith("⚠"):
+                R.append(warn(s))
+            elif s.startswith("**"):
+                R.append(subsection(s.strip("*")))
+            else:
+                if s:
+                    R.append(info(s))
+        # Also render the markdown tables from get_control_plane_status
+        import re as _re
+        table_blocks = _re.findall(
+            r'(\|[^\n]+\|\n\|[-| :]+\|\n(?:\|[^\n]+\|\n?)*)', cp_report)
+        for block in table_blocks:
+            rows_raw = [l.strip() for l in block.strip().splitlines()]
+            header = [c.strip() for c in rows_raw[0].strip("|").split("|")]
+            data   = []
+            for row_line in rows_raw[2:]:
+                cells = [c.strip() for c in row_line.strip("|").split("|")]
+                data.append([esc(c) for c in cells])
+            R.append(table(header, data))
     except Exception as e:
-        report.append(f"⚠️  Control plane status: {e}")
+        R.append(warn(f"Control plane status: {e}"))
 
     try:
         events = _core.list_event_for_all_namespaces(
@@ -3381,31 +3377,31 @@ def generate_healthcheck_report() -> str:
         for e in events:
             if _is_noisy_event(e.message or ""):
                 continue
-            key  = (e.reason or "", getattr(e.involved_object, "name", ""))
+            key  = (e.reason or "", getattr(e.involved_object,"name",""))
             prev = seen.get(key)
             if prev is None or (e.count or 1) > (prev[0] or 1):
                 seen[key] = (e.count or 1, e.metadata.namespace,
                              e.reason or "-", key[1], e.message or "")
         top = sorted(seen.values(), key=lambda x: x[0], reverse=True)[:15]
         if top:
-            report.append(f"\n**Top Warning Events ({len(top)} unique)**")
-            hdr = ["| COUNT | REASON | NAMESPACE / OBJECT | MESSAGE |",
-                   "|---|---|---|---|"]
+            R.append(subsection(f"Top Warning Events ({len(top)} unique)"))
             rows = []
             for count, ns, reason, obj, msg in top:
-                short_msg = msg[:70] + "…" if len(msg) > 70 else msg
-                rows.append(f"| x{count} | {reason} | `{ns}/{obj}` | {short_msg} |")
-            report.extend(_table_cap(rows, hdr))
+                short_msg = msg[:80] + "…" if len(msg) > 80 else msg
+                rows.append([f"x{count}", esc(reason),
+                              f"<code>{esc(ns)}/{esc(obj)}</code>", esc(short_msg)])
+            R.append(table(["COUNT","REASON","NAMESPACE / OBJECT","MESSAGE"], rows))
         else:
-            report.append("✅ No recent warning events")
+            R.append(ok("No recent warning events"))
     except Exception as e:
-        report.append(f"⚠️  Warning events: {e}")
+        R.append(warn(f"Warning events: {e}"))
 
-    report.append(f"\n{_DIV}")
-    report.append("💬 This is your complete health check report.")
-    report.append("📋 Ask the chatbot to drill into any flagged area for deeper diagnostics.")
+    R.append('<hr/>')
+    R.append('<p>&#128172; This is your complete health check report. '
+             '&#128203; Ask the chatbot to drill into any flagged area for deeper diagnostics.</p>')
 
-    return "\n".join(report)
+    return "\n".join(R)
+
 
 def get_control_plane_status() -> str:
     try:
