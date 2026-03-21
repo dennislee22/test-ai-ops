@@ -3041,27 +3041,34 @@ def generate_healthcheck_report() -> str:
                 continue
 
             used_gib  = round(used_kb  / (1024 * 1024), 2)
+            avail_gib = round(avail_kb / (1024 * 1024), 2)
             total_gib = round(total_kb / (1024 * 1024), 2)
+            free_pct  = round(avail_kb / total_kb * 100, 1) if total_kb > 0 else 0.0
             flag      = "🔴" if pct >= 90 else ("⚠️" if pct >= 80 else "✅")
-            pv_rows.append((pct, f"| {flag} | `{ns}/{pvc_name}` | {pct}% | {used_gib}Gi | {total_gib}Gi |"))
+            pv_rows.append((pct, flag, ns, pvc_name, pct, used_gib, total_gib, avail_gib, free_pct))
 
         pv_rows.sort(key=lambda x: x[0], reverse=True)
         if pv_rows:
-            red_rows   = [r for r in pv_rows if r[0] >= 90]
-            warn_rows  = [r for r in pv_rows if 80 <= r[0] < 90]
-            green_rows = [r for r in pv_rows if r[0] < 80]
-            hdr = ["| | NAMESPACE / PVC | USAGE | USED | TOTAL |", "|---|---|---|---|---|"]
-            display_rows = (
-                [r[1] for r in red_rows] +
-                [r[1] for r in warn_rows] +
-                [r[1] for r in green_rows[:5]]
-            )
-            report.extend([hdr[0], hdr[1]] + display_rows)
-            hidden_green = len(green_rows) - 5
-            if hidden_green > 0:
-                report.append(f"_… and {hidden_green} more healthy volume(s) not shown._")
-        else:
-            report.append("✅ No volume usage data available (no mounted running pods found).")
+            hdr = ["| Flag | Namespace / PVC | Usage | Used (GiB) | Total (GiB) | Free (GiB) |",
+                   "|---|---|---|---|---|---|"]
+            def _row(r):
+                flag, ns, pvc_name, pct, used, total, avail, fpct = r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8]
+                return f"| {flag} | `{ns}/{pvc_name}` | {pct}% | {used}Gi ({pct}%) | {total}Gi | {avail}Gi ({fpct}%) |"
+
+            critical = [r for r in pv_rows if r[0] >= 80]
+            healthy  = [r for r in pv_rows if r[0] < 80]
+
+            if critical:
+                report.append(f"⚠️  **Nearing or exceeding 80% capacity ({len(critical)} PVCs)**")
+                report.extend([hdr[0], hdr[1]] + [_row(r) for r in critical])
+                report.append("")
+            if healthy:
+                report.append(f"✅ **Within capacity ({len(healthy)} PVCs)**")
+                report.extend([hdr[0], hdr[1]] + [_row(r) for r in healthy[:5]])
+                if len(healthy) > 5:
+                    report.append(f"_… and {len(healthy) - 5} more healthy volume(s) not shown._")
+            if not critical and not healthy:
+                report.append("✅ No volume usage data available (no mounted running pods found).")
         if pv_skip:
             report.append(f"_({pv_skip} PVC(s) skipped — no running pod with mount found.)_")
     except Exception as e:
@@ -3379,10 +3386,6 @@ def generate_healthcheck_report() -> str:
     report.append(f"\n{_DIV}")
     report.append("💬 This is your complete health check report.")
     report.append("📋 Ask the chatbot to drill into any flagged area for deeper diagnostics.")
-    report.append("")
-    report.append(f"{'─' * 60}")
-    report.append("**— End of Report —**")
-    report.append(f"{'─' * 60}")
 
     return "\n".join(report)
 
