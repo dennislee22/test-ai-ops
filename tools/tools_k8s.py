@@ -3049,24 +3049,42 @@ def generate_healthcheck_report() -> str:
 
         pv_rows.sort(key=lambda x: x[0], reverse=True)
         if pv_rows:
-            hdr = ["| Flag | Namespace / PVC | Usage | Used (GiB) | Total (GiB) | Free (GiB) |",
-                   "|---|---|---|---|---|---|"]
-            def _row(r):
-                flag, ns, pvc_name, pct, used, total, avail, fpct = r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8]
-                return f"| {flag} | `{ns}/{pvc_name}` | {pct}% | {used}Gi ({pct}%) | {total}Gi | {avail}Gi ({fpct}%) |"
+            def _pv_html_table(rows, heading, heading_flag):
+                lines = [f"{heading_flag} **{heading} ({len(rows)} PVCs)**"]
+                lines.append('<div class="pv-table">')
+                lines.append('<table><thead><tr>'
+                             '<th>Flag</th><th>Namespace / PVC</th>'
+                             '<th>Usage</th><th>Used (GiB)</th>'
+                             '<th>Total (GiB)</th><th>Free (GiB)</th>'
+                             '</tr></thead><tbody>')
+                for r in rows:
+                    flag, ns, pvc_name, pct, used, total, avail, fpct = r[1],r[2],r[3],r[4],r[5],r[6],r[7],r[8]
+                    color = '#dc2626' if pct >= 90 else ('#d97706' if pct >= 80 else '#16a34a')
+                    lines.append(
+                        f'<tr>'
+                        f'<td style="text-align:center">{flag}</td>'
+                        f'<td><code>{ns}/{pvc_name}</code></td>'
+                        f'<td style="color:{color};font-weight:700">{pct}%</td>'
+                        f'<td>{used}Gi ({pct}%)</td>'
+                        f'<td>{total}Gi</td>'
+                        f'<td>{avail}Gi ({fpct}%)</td>'
+                        f'</tr>'
+                    )
+                lines.append('</tbody></table></div>')
+                return lines
 
             critical = [r for r in pv_rows if r[0] >= 80]
             healthy  = [r for r in pv_rows if r[0] < 80]
 
             if critical:
-                report.append(f"⚠️  **Nearing or exceeding 80% capacity ({len(critical)} PVCs)**")
-                report.extend([hdr[0], hdr[1]] + [_row(r) for r in critical])
+                report.extend(_pv_html_table(critical,
+                    "Nearing or exceeding 80% capacity", "⚠️"))
                 report.append("")
             if healthy:
-                report.append(f"✅ **Within capacity ({len(healthy)} PVCs)**")
-                report.extend([hdr[0], hdr[1]] + [_row(r) for r in healthy[:5]])
+                report.extend(_pv_html_table(healthy[:5],
+                    f"Within capacity", "✅"))
                 if len(healthy) > 5:
-                    report.append(f"_… and {len(healthy) - 5} more healthy volume(s) not shown._")
+                    report.append(f"_({len(healthy) - 5} more healthy volume(s) not shown)_")
             if not critical and not healthy:
                 report.append("✅ No volume usage data available (no mounted running pods found).")
         if pv_skip:
