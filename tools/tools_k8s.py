@@ -90,6 +90,20 @@ _init_api_clients()
 def _api_error(e: ApiException) -> str:
     return f"[K8s API error {e.status}] {e.reason}"
 
+def _k8s_err(e: Exception) -> str:
+    """Clean one-line error string for any kubernetes-client exception.
+    Handles both ApiException and the raw WebSocket/wsproto errors that
+    RKE2 clusters raise (e.g. 'Handshake status 200 OK -+-+- {...}').
+    """
+    if isinstance(e, ApiException):
+        return f"[K8s API error {e.status}] {e.reason}"
+    s = str(e)
+    if 'Handshake status' in s or '-+-+' in s:
+        # Strip verbose HTTP header dump — keep only the status line
+        first = s.split('\n')[0].split('-+-+')[0].strip().rstrip('-').strip()
+        return f"[K8s API error] {first[:120] or 'WebSocket connection error'}"
+    return f"[K8s API error] {s[:160]}"
+
 def _ns_header(kind: str, namespace: str, search: str | None = None) -> str:
     """
     Returns a single plain sentence describing the query scope.
@@ -382,6 +396,8 @@ def get_pod_tolerations(namespace: str = "all", pod_name: str | None = None,
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_pod_resource_requests(namespace: str = "all", search: str | None = None) -> str:
     try:
@@ -418,6 +434,8 @@ def get_pod_resource_requests(namespace: str = "all", search: str | None = None)
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_pod_containers_resources(namespace: str = "all", search: str | None = None) -> str:
     try:
@@ -445,6 +463,8 @@ def get_pod_containers_resources(namespace: str = "all", search: str | None = No
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 _NOT_RUNNING_PHASES = ("Pending", "Failed", "Unknown")
 _NOT_RUNNING_WORDS  = {
@@ -575,9 +595,32 @@ def get_pod_status(namespace: str = "all", search: str | None = None,
 
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_pod_logs(namespace: str = "all", search: str | None = None,
                  tail_lines: int = 50, container: str = "") -> str:
+    from kubernetes.stream import stream as _k8s_stream
+
+    def _fetch_logs_stream(pod_name, ns_name, container_name, tail):
+        """Fallback: fetch logs via WebSocket exec when REST log endpoint fails."""
+        try:
+            cmd = ["tail", f"-n{tail}", f"/proc/1/fd/1"]
+            # Use kubectl-equivalent: exec cat of the log via shell
+            cmd = ["/bin/sh", "-c",
+                   f"tail -n {tail} /proc/1/fd/1 2>/dev/null || "
+                   f"kubectl logs --tail={tail} {pod_name} -n {ns_name} 2>/dev/null || "
+                   f"echo '[No log output available]'"]
+            kw = dict(command=cmd, stderr=True, stdin=False,
+                      stdout=True, tty=False, _preload_content=True)
+            if container_name:
+                kw["container"] = container_name
+            resp = _k8s_stream(_core.connect_get_namespaced_pod_exec,
+                               pod_name, ns_name, **kw)
+            return resp.strip() if isinstance(resp, str) else ""
+        except Exception:
+            return ""
+
     tail_lines = min(tail_lines, 100)
     try:
         pods = _list_pods(namespace)
@@ -601,19 +644,31 @@ def get_pod_logs(namespace: str = "all", search: str | None = None,
                             (c for c in containers if stem in c or c in stem), containers[-1])
                     else:
                         kw["container"] = containers[0]
+            clabel = f" [{kw['container']}]" if "container" in kw else ""
             try:
                 logs = _core.read_namespaced_pod_log(name=pod_name, namespace=ns_name, **kw)
-                clabel = f" [{kw['container']}]" if "container" in kw else ""
-                entry  = (f"### `{ns_name}/{pod_name}`{clabel}\n```\n{logs}\n```" if logs.strip()
-                          else f"### `{ns_name}/{pod_name}`{clabel}\n_No logs available._")
-            except ApiException as e:
-                entry = f"### `{ns_name}/{pod_name}`\n_Error fetching logs: {e.reason}_"
+                entry = (f"### `{ns_name}/{pod_name}`{clabel}\n```\n{logs}\n```" if logs.strip()
+                         else f"### `{ns_name}/{pod_name}`{clabel}\n_No logs available._")
+            except (ApiException, Exception) as e:
+                # ApiException(status=0) = RKE2 WebSocket handshake error on REST log endpoint
+                # Fall back to streaming exec
+                is_ws_err = (isinstance(e, ApiException) and e.status == 0) or \
+                            ('Handshake' in str(e) or '-+-+' in str(e))
+                if is_ws_err:
+                    logs = _fetch_logs_stream(pod_name, ns_name, kw.get("container", ""), tail_lines)
+                    entry = (f"### `{ns_name}/{pod_name}`{clabel}\n```\n{logs}\n```" if logs
+                             else f"### `{ns_name}/{pod_name}`{clabel}\n_No logs available (WebSocket fallback also failed)._")
+                else:
+                    reason = e.reason if isinstance(e, ApiException) else _k8s_err(e)
+                    entry = f"### `{ns_name}/{pod_name}`{clabel}\n_Error fetching logs: {reason}_"
             log_entries.append(entry)
         header = (_ns_header("Pod Logs", namespace, search) + "\n\n"
                   if namespace == "all" else "")
         return header + "\n\n".join(log_entries)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def describe_pod(pod_name: str, namespace: str = "all", search: str | None = None,
                  show_yaml: bool = False) -> str:
@@ -713,6 +768,8 @@ def get_pod_images(namespace: str = "all", search: str | None = None) -> str:
                 else _core.list_namespaced_pod(namespace=namespace))
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
     if not pods.items:
         return f"No pods found in namespace '{namespace}'."
     rows = [f"- `{p.metadata.namespace}/{p.metadata.name}` [{c.name}]: `{c.image or '?'}`"
@@ -760,6 +817,8 @@ def get_pod_storage(namespace: str = "all", search: str | None = None) -> str:
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_unhealthy_pods_detail(namespace: str = "all") -> str:
     def _collect():
@@ -843,6 +902,7 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
         return lines
 
     def _get_logs(pod_name, ns):
+        from kubernetes.stream import stream as _k8s_stream
         for prev in (False, True):
             try:
                 kw = {"tail_lines": 20, "timestamps": False}
@@ -850,8 +910,21 @@ def get_unhealthy_pods_detail(namespace: str = "all") -> str:
                 logs = _core.read_namespaced_pod_log(name=pod_name, namespace=ns, **kw)
                 if logs and logs.strip():
                     return ("(previous container)\n" if prev else "") + logs.strip()
-            except ApiException:
-                pass
+            except (ApiException, Exception) as e:
+                is_ws = (isinstance(e, ApiException) and e.status == 0) or \
+                        ('Handshake' in str(e) or '-+-+' in str(e))
+                if is_ws and not prev:
+                    # Try WebSocket exec fallback
+                    try:
+                        resp = _k8s_stream(
+                            _core.connect_get_namespaced_pod_exec,
+                            pod_name, ns,
+                            command=["/bin/sh", "-c", "tail -n 20 /proc/1/fd/1 2>/dev/null || echo ''"],
+                            stderr=True, stdin=False, stdout=True, tty=False, _preload_content=True)
+                        if resp and resp.strip():
+                            return resp.strip()
+                    except Exception:
+                        pass
         return ""
 
     try:
@@ -1041,6 +1114,8 @@ def get_storage_classes() -> str:
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_pvc_status(namespace: str = "all", show_all: bool = False,
                    search: str | None = None) -> str:
@@ -1080,6 +1155,8 @@ def get_pvc_status(namespace: str = "all", show_all: bool = False,
         return "\n".join(md_lines)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_persistent_volumes() -> str:
     _AM = {"ReadWriteOnce":"RWO","ReadWriteMany":"RWX","ReadOnlyMany":"ROX","ReadWriteOncePod":"RWOP"}
@@ -1100,6 +1177,8 @@ def get_persistent_volumes() -> str:
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def _get_pv_usage_data(threshold: int = 80) -> list:
     """
@@ -1296,6 +1375,8 @@ def get_endpoints(namespace: str = "all", search: str | None = None) -> str:
         return "\n".join(md_lines)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_service(namespace: str = "all", search: str = None) -> str:
     try:
@@ -1329,6 +1410,8 @@ def get_service(namespace: str = "all", search: str = None) -> str:
         return "\n".join(md_lines)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_ingress(namespace: str = "all", name: str = "", port: int = 0) -> str:
     def _get_ports(ing) -> list:
@@ -1429,6 +1512,8 @@ def get_ingress(namespace: str = "all", name: str = "", port: int = 0) -> str:
         return "\n".join(out)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_network_policy_status(namespace: str = "all") -> str:
     try:
@@ -1488,6 +1573,8 @@ def get_node_capacity() -> str:
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_node_labels(search: str = None) -> str:
     try:
@@ -1513,6 +1600,8 @@ def get_node_labels(search: str = None) -> str:
         return "\n".join(results) if results else f"No nodes or labels found matching '{search}'."
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def _fmt_ts(ts: float, tz_name: str) -> str:
     """Format a Unix timestamp in the user's timezone."""
@@ -1888,6 +1977,8 @@ def get_node_taints(search: str = None, tainted_only: bool = False,
 
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_node_info(node_name: str = None) -> str:
     headers = ["NODE","ROLES","STATUS","CPU","MEMORY","GPU"]
@@ -1946,6 +2037,8 @@ def get_deployment(namespace: str = "all", search: str = None) -> str:
                                lambda d: d.status.available_replicas or 0, search)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_daemonset(namespace: str = "all") -> str:
     try:
@@ -1957,6 +2050,8 @@ def get_daemonset(namespace: str = "all") -> str:
                                lambda d: d.status.number_available or 0)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_replicaset(namespace: str = "all", search: str = None) -> str:
     try:
@@ -1979,6 +2074,8 @@ def get_statefulset(namespace: str = "all", search: str = None) -> str:
                                lambda s: getattr(s.status, "available_replicas", None) or 0, search)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_hpa_status(namespace: str = "all") -> str:
     try:
@@ -1999,6 +2096,8 @@ def get_hpa_status(namespace: str = "all") -> str:
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_adhoc_job_status(namespace: str = "all", show_all: bool = False,
                          raw_output: bool = False, failed_only: bool = False,
@@ -2219,6 +2318,8 @@ def get_gpu_info() -> str:
         return "\n".join(lines) if has_gpu else "No GPU nodes detected in the cluster."
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def find_resource(name_substring: str, resource_type: str = None, namespace: str = None) -> str:
     try:
@@ -3524,6 +3625,8 @@ def get_configmap_list(namespace: str = "all", search: str | None = None,
         return "\n".join(lines) if len(lines) > 2 else "No matching ConfigMaps found."
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_secret_list(namespace: str = "all", name: str = "", pod_name: str = None,
                     filter_keys: list = None, decode: bool = False) -> str:
@@ -3602,6 +3705,8 @@ def get_secret_list(namespace: str = "all", name: str = "", pod_name: str = None
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_resource_quotas(namespace: str = "all", search: str | None = None) -> str:
     try:
@@ -3622,6 +3727,8 @@ def get_resource_quotas(namespace: str = "all", search: str | None = None) -> st
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_limit_ranges(namespace: str = "all", search: str | None = None) -> str:
     try:
@@ -3645,6 +3752,8 @@ def get_limit_ranges(namespace: str = "all", search: str | None = None) -> str:
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_serviceaccounts(namespace: str = "all", search: str | None = None) -> str:
     try:
@@ -3686,6 +3795,8 @@ def get_cluster_role_bindings() -> str:
         return "\n".join(lines)
     except ApiException as e:
         return _api_error(e)
+    except Exception as e:
+        return _k8s_err(e)
 
 def get_namespace_resource_summary(namespace: str) -> str:
     try:
