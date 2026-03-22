@@ -1018,8 +1018,10 @@ K8S_TOOL_METADATA: dict = {
             "'lowest node cpu', "
             "'show cluster cpu usage', "
             "'total cluster memory usage over the last 24 hours', "
-            "'show disk I/O for all nodes', "
-            "'node disk read write over the last hour'. "
+            "show disk I/O for all nodes', "
+            "'node disk read write over the last hour', "
+            "'disk throughput on nodes'. "
+            "For disk queries: set sort_by='disk' — duration is optional (defaults to 1h automatically). "
             "Do NOT use get_node_capacity for live usage — that shows allocatable vs requested. "
             "IMPORTANT: When the user asks for a graph or chart of node usage, "
             "ALWAYS set duration (e.g. '1h') to get the time-series data needed for the graph."
@@ -1035,9 +1037,10 @@ K8S_TOOL_METADATA: dict = {
                 "default":     "cpu",
                 "description": (
                     "Sort/display metric: 'cpu' (default), 'memory', or 'disk'. "
-                    "Set 'disk' when user asks about disk I/O, read/write throughput, or storage usage on nodes. "
+                    "ALWAYS set 'disk' when user mentions: disk, disk I/O, read, write, throughput, IOPS, storage I/O. "
+                    "disk mode always uses Prometheus and defaults duration to '1h' if not set. "
                     "Extract from user question: 'cpu' → 'cpu', 'memory'/'ram' → 'memory', "
-                    "'disk'/'disk i/o'/'read'/'write'/'throughput' → 'disk'."
+                    "'disk'/'disk i/o'/'read'/'write'/'throughput'/'iops' → 'disk'."
                 ),
             },
             "ascending": {

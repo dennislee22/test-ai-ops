@@ -1966,6 +1966,8 @@ def get_top_nodes(limit: int = 0, ascending: bool = False,
     When duration is empty : live snapshot from metrics-server (like kubectl top nodes).
     When duration is set   : average usage from Prometheus (node-exporter) over that
                              period — always emits §GRAPH§ for the UI chart.
+    sort_by="disk"         : always uses Prometheus path (no metrics-server for disk).
+                             Defaults duration to "1h" if not set.
     'cluster' queries are simply all nodes with limit=0.
     """
     import time as _time
@@ -1975,9 +1977,18 @@ def get_top_nodes(limit: int = 0, ascending: bool = False,
         sort_by   = "cpu"
         ascending = True
 
-    sort_key_label = "memory" if sort_by.lower() == "memory" else "CPU"
+    _DISK_WORDS = {"disk", "disk_io", "io", "read", "write", "throughput", "iops"}
+    if sort_by.strip().lower() in _DISK_WORDS:
+        sort_by = "disk"
+
+    disk_mode      = sort_by.lower() == "disk"
+    sort_key_label = "memory" if sort_by.lower() == "memory" else ("disk" if disk_mode else "CPU")
     direction      = "lowest" if ascending else "top"
     tz_label       = user_timezone if user_timezone != "UTC" else "UTC"
+
+    # Disk I/O has no metrics-server source — always use Prometheus with default 1h
+    if disk_mode and not duration:
+        duration = "1h"
 
     # ── Live snapshot (metrics-server) ────────────────────────────────────────
     if not duration:
@@ -2066,7 +2077,7 @@ def _get_top_nodes_prometheus(limit: int, ascending: bool, sort_by: str,
     import time as _time
     from kubernetes.stream import stream as _k8s_stream
 
-    disk_mode      = sort_by.lower() in ("disk", "disk_io", "io")
+    disk_mode      = sort_by.lower() == "disk"
     sort_key_label = "memory" if sort_by.lower() == "memory" else ("disk" if disk_mode else "CPU")
     direction      = "lowest" if ascending else "top"
     tz_label       = user_timezone if user_timezone != "UTC" else "UTC"
