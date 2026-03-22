@@ -1873,46 +1873,101 @@ def _get_top_pods_prometheus(namespace: str, limit: int, sort_by: str,
 
 
 def get_top_nodes(limit: int = 0, ascending: bool = False,
+                  sort_by: str = "cpu", duration: str = "",
+                  scope: str = "node",
                   user_timezone: str = "UTC") -> str:
-    tz_label = user_timezone if user_timezone != "UTC" else "UTC"
-    custom   = _k8s.CustomObjectsApi()
-    try:
-        items = custom.list_cluster_custom_object(
-            "metrics.k8s.io", "v1beta1", "nodes").get("items", [])
-    except ApiException as e:
-        return f"[ERROR] Metrics not available: {e.reason}. Is metrics-server installed?"
+    """
+    Show top (or bottom) nodes by CPU or memory.
 
-    if not items:
-        return "No node metrics found. Is metrics-server installed and running?"
+    scope="node"    : per-node breakdown (default)
+    scope="cluster" : single cluster-wide aggregate (sum of all nodes)
 
-    try:
-        import zoneinfo
-        tz      = zoneinfo.ZoneInfo(user_timezone)
-        now_str = datetime.datetime.now(tz).strftime(f"%Y-%m-%d %H:%M {tz_label}")
-    except Exception:
-        now_str = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    When duration is empty : live snapshot from metrics-server (like kubectl top nodes).
+    When duration is set   : average usage from Prometheus (node-exporter) over that
+                             period — always emits §GRAPH§ for the UI chart.
+    """
+    import time as _time
 
-    rows = []
-    for item in items:
-        name  = item["metadata"]["name"]
-        cpu_m = _parse_cpu_to_millicores(item["usage"].get("cpu",    "0"))
-        mem_m = _parse_mem_to_mib(        item["usage"].get("memory", "0"))
-        rows.append((name, cpu_m, mem_m))
+    _LOWEST_WORDS = {"lowest", "least", "bottom", "smallest", "lightest", "minimum", "min", "low"}
+    if sort_by.strip().lower() in _LOWEST_WORDS:
+        sort_by   = "cpu"
+        ascending = True
 
-    rows.sort(key=lambda x: x[1], reverse=not ascending)
-    if limit > 0:
-        rows = rows[:limit]
+    sort_key_label = "memory" if sort_by.lower() == "memory" else "CPU"
+    direction      = "lowest" if ascending else "top"
+    tz_label       = user_timezone if user_timezone != "UTC" else "UTC"
+    cluster_mode   = scope.strip().lower() == "cluster"
 
-    direction = "lowest" if ascending else "top"
-    col_node  = max(len("NODE"), max(len(r[0]) for r in rows))
-    hdr_row   = f"{'NODE':<{col_node}}  {'CPU(m)':>9}  {'MEMORY(MiB)':>12}"
-    sep       = "-" * len(hdr_row)
-    title     = f"Node resource usage — {direction} {len(rows)} node(s) by CPU — live at {now_str}."
-    lines     = [title, "```", hdr_row, sep]
-    for name, cpu_m, mem_mib in rows:
-        lines.append(f"{name:<{col_node}}  {cpu_m:>8}m  {mem_mib:>10.0f}Mi")
-    lines.append("```")
-    return "\n".join(lines)
+    # ── Live snapshot (metrics-server) ────────────────────────────────────────
+    if not duration:
+        custom = _k8s.CustomObjectsApi()
+        try:
+            items = custom.list_cluster_custom_object(
+                "metrics.k8s.io", "v1beta1", "nodes").get("items", [])
+        except ApiException as e:
+            return f"[ERROR] Metrics not available: {e.reason}. Is metrics-server installed?"
+
+        if not items:
+            return "No node metrics found. Is metrics-server installed and running?"
+
+        try:
+            import zoneinfo
+            tz      = zoneinfo.ZoneInfo(user_timezone)
+            now_str = datetime.datetime.now(tz).strftime(f"%Y-%m-%d %H:%M {tz_label}")
+        except Exception:
+            now_str = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+        rows = []
+        for item in items:
+            name  = item["metadata"]["name"]
+            cpu_m = _parse_cpu_to_millicores(item["usage"].get("cpu",    "0"))
+            mem_m = _parse_mem_to_mib(        item["usage"].get("memory", "0"))
+            rows.append((name, cpu_m, mem_m))
+
+        if cluster_mode:
+            total_cpu = sum(r[1] for r in rows)
+            total_mem = sum(r[2] for r in rows)
+            rows = [("Cluster (all nodes)", total_cpu, total_mem)]
+        else:
+            sort_idx = 2 if sort_key_label == "memory" else 1
+            rows.sort(key=lambda x: x[sort_idx], reverse=not ascending)
+            if limit > 0:
+                rows = rows[:limit]
+
+        col_node = max(len("NODE"), max(len(r[0]) for r in rows))
+        hdr_row  = f"{'NODE':<{col_node}}  {'CPU(m)':>9}  {'MEMORY(MiB)':>12}"
+        sep      = "-" * len(hdr_row)
+        title    = (
+            f"Cluster resource usage — live at {now_str}." if cluster_mode else
+            f"Node resource usage — {direction} {len(rows)} node(s) "
+            f"by {sort_key_label} — live at {now_str}."
+        )
+        lines    = [title, "```", hdr_row, sep]
+        for name, cpu_m, mem_mib in rows:
+            lines.append(f"{name:<{col_node}}  {cpu_m:>8}m  {mem_mib:>10.0f}Mi")
+        lines.append("```")
+
+        now_ts     = int(_time.time())
+        sk_label   = "CPU(m)" if sort_key_label == "CPU" else "Memory(MiB)"
+        series_out = [
+            {
+                "label":  name,
+                "values": [[now_ts, float(cpu_m if sort_key_label == "CPU" else mem_mib)]],
+            }
+            for name, cpu_m, mem_mib in rows
+        ]
+        graph_json = _json.dumps(
+            {"title": f"{'Cluster' if cluster_mode else direction.title()+' '+str(len(rows))+' nodes'} — {sk_label} live",
+             "unit":  "m" if sort_key_label == "CPU" else "MiB",
+             "duration": "live", "series": series_out},
+            separators=(",", ":"))
+        return "\n".join(lines) + f"\n§GRAPH§{graph_json}§GRAPH§"
+
+    # ── Historical (Prometheus / node-exporter) ───────────────────────────────
+    return _get_top_nodes_prometheus(
+        limit=limit, ascending=ascending, sort_by=sort_by,
+        duration=duration, scope=scope, user_timezone=user_timezone)
+
 
 def _find_node_exporter_prometheus_pod() -> tuple[str | None, str | None, str]:
     """Locate the operator-managed Prometheus pod that scrapes node-exporter.
@@ -1935,24 +1990,17 @@ def _find_node_exporter_prometheus_pod() -> tuple[str | None, str | None, str]:
     return None, None, "prometheus"
 
 
-def get_node_metrics_prometheus(duration: str = "1h", step: str = "60s",
-                                ascending: bool = False, limit: int = 0,
-                                user_timezone: str = "UTC") -> str:
-    """
-    Show per-node CPU and memory usage over a time window using node-exporter
-    metrics scraped by the operator-managed Prometheus (infra-prometheus).
-
-    CPU  : sum by (instance) of rate(node_cpu_seconds_total{mode!="idle"}[5m])
-           expressed as cores (float, 2 d.p.)
-    Memory: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / GiB
-    Node name resolved via kube_node_info{internal_ip} → FQDN.
-    Emits a ranked table + §GRAPH§ time-series block (same contract as get_top_pods).
-    """
+def _get_top_nodes_prometheus(limit: int, ascending: bool, sort_by: str,
+                               duration: str, scope: str, user_timezone: str) -> str:
     import time as _time
     from kubernetes.stream import stream as _k8s_stream
 
-    tz_label = user_timezone if user_timezone != "UTC" else "UTC"
-    dur_map  = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    sort_key_label = "memory" if sort_by.lower() == "memory" else "CPU"
+    direction      = "lowest" if ascending else "top"
+    tz_label       = user_timezone if user_timezone != "UTC" else "UTC"
+    cluster_mode   = scope.strip().lower() == "cluster"
+
+    dur_map = {"s": 1, "m": 60, "h": 3600, "d": 86400}
     try:
         dur_sec = int(duration[:-1]) * dur_map.get(duration[-1], 1)
     except Exception:
@@ -2005,7 +2053,7 @@ def get_node_metrics_prometheus(duration: str = "1h", step: str = "60s",
         end_ts   = int(_time.time())
         start_ts = end_ts - dur_sec
         enc      = urllib.parse.quote(promql, safe="")
-        url      = f"{api_base}/query_range?query={enc}&start={start_ts}&end={end_ts}&step={step}"
+        url      = f"{api_base}/query_range?query={enc}&start={start_ts}&end={end_ts}&step=60s"
         raw      = _exec(f"curl -s --max-time 60 '{url}'", large=True)
         if not raw or raw.startswith("[exec error"):
             return [], raw or "Empty response from Prometheus"
@@ -2031,7 +2079,7 @@ def get_node_metrics_prometheus(duration: str = "1h", step: str = "60s",
             pass
         return []
 
-    # --- Build IP → node FQDN map from kube_node_info ---
+    # Build IP → node FQDN map
     ip_to_node: dict[str, str] = {}
     for r in _query_instant("kube_node_info"):
         m  = r.get("metric", {})
@@ -2042,63 +2090,105 @@ def get_node_metrics_prometheus(duration: str = "1h", step: str = "60s",
 
     def _resolve(instance: str) -> str:
         ip = instance.split(":")[0]
-        return ip_to_node.get(ip, ip)   # fall back to bare IP if not in map
+        return ip_to_node.get(ip, ip)
 
     def _mean(values: list) -> float:
         vals = [float(v[1]) for v in values if v[1] not in ("NaN", "Inf", "+Inf", "-Inf")]
         return sum(vals) / len(vals) if vals else 0.0
 
-    # --- CPU: cores used (all modes except idle), range query for graph ---
-    cpu_promql = (
-        'sum by (instance) ('
-        'rate(node_cpu_seconds_total{mode!="idle"}[5m])'
-        ')'
-    )
-    cpu_results, cpu_err = _query_range(cpu_promql)
+    # ── PromQL: cluster mode uses no `by` clause → single scalar series ──────
+    if cluster_mode:
+        cpu_results, cpu_err = _query_range(
+            'sum(rate(node_cpu_seconds_total{mode!="idle"}[5m]))')
+        if cpu_err:
+            return f"CPU query failed: {cpu_err}"
+        mem_results, mem_err = _query_range(
+            'sum(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes)')
+        if mem_err:
+            return f"Memory query failed: {mem_err}"
+
+        if not cpu_results and not mem_results:
+            return (f"No node-exporter data found in Prometheus over the last {duration}. "
+                    f"Prometheus pod: {prom_pod} in {prom_ns}.")
+
+        cpu_vals = cpu_results[0].get("values", []) if cpu_results else []
+        mem_vals = mem_results[0].get("values", []) if mem_results else []
+        avg_cpu  = _mean(cpu_vals)
+        avg_mem_gib = _mean(mem_vals) / (1024 ** 3)
+
+        end_ts   = int(_time.time())
+        start_ts = end_ts - dur_sec
+        try:
+            import zoneinfo
+            tz       = zoneinfo.ZoneInfo(user_timezone)
+            from_str = datetime.datetime.fromtimestamp(start_ts, tz=timezone.utc).astimezone(tz).strftime("%H:%M")
+            to_str   = datetime.datetime.fromtimestamp(end_ts,   tz=timezone.utc).astimezone(tz).strftime(f"%H:%M {tz_label}")
+        except Exception:
+            from_str = datetime.datetime.utcfromtimestamp(start_ts).strftime("%H:%M")
+            to_str   = datetime.datetime.utcfromtimestamp(end_ts).strftime("%H:%M UTC")
+
+        header  = f"Cluster resource usage — avg over last {duration} ({from_str}–{to_str})."
+        lines   = [header, "```",
+                   f"  AVG CPU (cores) : {avg_cpu:.2f}",
+                   f"  AVG MEM (GiB)   : {avg_mem_gib:.2f}",
+                   "```"]
+
+        if sort_key_label == "memory":
+            graph_vals  = [[float(ts), float(v) / (1024 ** 3)]
+                           for ts, v in mem_vals if v not in ("NaN", "Inf", "+Inf", "-Inf")]
+            graph_title = f"Cluster memory usage (GiB) — {from_str}–{to_str}"
+            graph_unit  = "GiB"
+        else:
+            graph_vals  = [[float(ts), float(v)]
+                           for ts, v in cpu_vals if v not in ("NaN", "Inf", "+Inf", "-Inf")]
+            graph_title = f"Cluster CPU usage (cores) — {from_str}–{to_str}"
+            graph_unit  = "cores"
+
+        series_out = [{"label": "Cluster", "values": graph_vals}]
+        graph_json = _json.dumps(
+            {"title": graph_title, "unit": graph_unit,
+             "duration": duration, "series": series_out},
+            separators=(",", ":"))
+        return "\n".join(lines) + f"\n§GRAPH§{graph_json}§GRAPH§"
+
+    # ── PromQL: per-node breakdown ────────────────────────────────────────────
+    cpu_results, cpu_err = _query_range(
+        'sum by (instance) (rate(node_cpu_seconds_total{mode!="idle"}[5m]))')
     if cpu_err:
         return f"CPU query failed: {cpu_err}"
 
-    # --- Memory: used bytes range query for graph ---
-    mem_promql = (
-        'sum by (instance) ('
-        'node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes'
-        ')'
-    )
-    mem_results, mem_err = _query_range(mem_promql)
+    mem_results, mem_err = _query_range(
+        'sum by (instance) (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes)')
     if mem_err:
         return f"Memory query failed: {mem_err}"
 
-    # --- Merge by instance ---
-    cpu_by_instance: dict[str, tuple[float, list]] = {}
-    for r in cpu_results:
-        inst = r.get("metric", {}).get("instance", "?")
-        cpu_by_instance[inst] = (_mean(r.get("values", [])), r.get("values", []))
+    cpu_by_inst: dict[str, tuple[float, list]] = {
+        r.get("metric", {}).get("instance", "?"): (_mean(r.get("values", [])), r.get("values", []))
+        for r in cpu_results
+    }
+    mem_by_inst: dict[str, tuple[float, list]] = {
+        r.get("metric", {}).get("instance", "?"): (_mean(r.get("values", [])), r.get("values", []))
+        for r in mem_results
+    }
 
-    mem_by_instance: dict[str, tuple[float, list]] = {}
-    for r in mem_results:
-        inst = r.get("metric", {}).get("instance", "?")
-        mem_by_instance[inst] = (_mean(r.get("values", [])), r.get("values", []))
-
-    all_instances = sorted(set(cpu_by_instance) | set(mem_by_instance))
+    all_instances = sorted(set(cpu_by_inst) | set(mem_by_inst))
     if not all_instances:
-        return (
-            f"No node-exporter data found in Prometheus over the last {duration}. "
-            f"Prometheus pod: {prom_pod} in {prom_ns}."
-        )
+        return (f"No node-exporter data found in Prometheus over the last {duration}. "
+                f"Prometheus pod: {prom_pod} in {prom_ns}.")
 
     rows = []
     for inst in all_instances:
         node_name               = _resolve(inst)
-        avg_cpu_cores, cpu_vals = cpu_by_instance.get(inst, (0.0, []))
-        avg_mem_bytes, mem_vals = mem_by_instance.get(inst, (0.0, []))
+        avg_cpu_cores, cpu_vals = cpu_by_inst.get(inst, (0.0, []))
+        avg_mem_bytes, mem_vals = mem_by_inst.get(inst, (0.0, []))
         avg_mem_gib             = avg_mem_bytes / (1024 ** 3)
-        rows.append((node_name, inst, avg_cpu_cores, avg_mem_gib, cpu_vals, mem_vals))
+        rows.append((node_name, avg_cpu_cores, avg_mem_gib, cpu_vals, mem_vals))
 
-    rows.sort(key=lambda x: x[2], reverse=not ascending)
+    sort_idx = 2 if sort_key_label == "memory" else 1
+    rows.sort(key=lambda x: x[sort_idx], reverse=not ascending)
     if limit > 0:
         rows = rows[:limit]
 
-    # --- Time window labels ---
     end_ts   = int(_time.time())
     start_ts = end_ts - dur_sec
     try:
@@ -2110,38 +2200,45 @@ def get_node_metrics_prometheus(duration: str = "1h", step: str = "60s",
         from_str = datetime.datetime.utcfromtimestamp(start_ts).strftime("%H:%M")
         to_str   = datetime.datetime.utcfromtimestamp(end_ts).strftime("%H:%M UTC")
 
-    direction = "lowest" if ascending else "top"
-    header    = (
-        f"Node CPU & memory usage — {direction} {len(rows)} node(s) "
-        f"— avg over last {duration} ({from_str}–{to_str})."
-    )
+    header   = (f"{direction.title()} {len(rows)} nodes by avg {sort_key_label} "
+                f"— last {duration} ({from_str}–{to_str}).")
     col_node = max(len("NODE"), max(len(r[0]) for r in rows))
-    hdr_row  = f"{'NODE':<{col_node}}  {'AVG CPU(cores)':>14}  {'AVG MEM(GiB)':>12}"
+    unit     = "cores" if sort_key_label == "CPU" else "GiB"
+    col_hdr  = f"AVG {sort_key_label}({unit})"
+    hdr_row  = f"{'NODE':<{col_node}}  {col_hdr:>16}  {'AVG MEM(GiB)':>12}"
     sep      = "-" * len(hdr_row)
     lines    = [header, "```", hdr_row, sep]
-    for node_name, _, avg_cpu, avg_mem_gib, _, _ in rows:
-        lines.append(f"{node_name:<{col_node}}  {avg_cpu:>14.2f}  {avg_mem_gib:>11.2f}")
+    for node_name, avg_cpu, avg_mem_gib, _, _ in rows:
+        lines.append(f"{node_name:<{col_node}}  {avg_cpu:>14.2f}c  {avg_mem_gib:>11.2f}")
     lines.append("```")
 
-    # --- Graph payload (CPU cores series) ---
-    series_out = [
-        {
-            "label":  node_name,
-            "values": [[float(ts), float(v)] for ts, v in cpu_vals if v not in ("NaN", "Inf", "+Inf", "-Inf")],
-        }
-        for node_name, _, _, _, cpu_vals, _ in rows
-    ]
+    if sort_key_label == "memory":
+        series_out = [
+            {"label":  node_name,
+             "values": [[float(ts), float(v) / (1024 ** 3)]
+                        for ts, v in mem_vals
+                        if v not in ("NaN", "Inf", "+Inf", "-Inf")]}
+            for node_name, _, _, _, mem_vals in rows
+        ]
+        graph_title = f"Node memory usage (GiB) — {from_str}–{to_str}"
+        graph_unit  = "GiB"
+    else:
+        series_out = [
+            {"label":  node_name,
+             "values": [[float(ts), float(v)]
+                        for ts, v in cpu_vals
+                        if v not in ("NaN", "Inf", "+Inf", "-Inf")]}
+            for node_name, _, _, cpu_vals, _ in rows
+        ]
+        graph_title = f"Node CPU usage (cores) — {from_str}–{to_str}"
+        graph_unit  = "cores"
+
     graph_json = _json.dumps(
-        {
-            "title":    f"Node CPU usage (cores) — {from_str}–{to_str}",
-            "unit":     "cores",
-            "duration": duration,
-            "series":   series_out,
-        },
+        {"title": graph_title, "unit": graph_unit,
+         "duration": duration, "series": series_out},
         separators=(",", ":"))
 
     return "\n".join(lines) + f"\n§GRAPH§{graph_json}§GRAPH§"
-
 
 def get_node_taints(search: str = None, tainted_only: bool = False,
                     taint_search: str = None) -> str:

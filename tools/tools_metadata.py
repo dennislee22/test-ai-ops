@@ -9,9 +9,9 @@ from tools.tools_k8s import (
     get_pod_tolerations, get_pod_resource_requests, run_cluster_health, get_replicaset,
     get_namespace_resource_summary, get_pod_images, get_unhealthy_pods_detail,
     get_coredns_health, get_pv_usage, find_resource, get_pod_containers_resources, get_cronjob_status,
-    query_prometheus_metrics, kubectl_exec, exec_db_query, get_pod_storage, get_pdb_status,
+    kubectl_exec, exec_db_query, get_pod_storage, get_pdb_status,
     get_certificate_status, get_control_plane_status, get_network_policy_status, get_webhook_health,
-    get_top_pods, get_top_nodes, get_node_metrics_prometheus,
+    get_top_pods, get_top_nodes,
 )
 
 _P_NS = {
@@ -544,7 +544,7 @@ K8S_TOOL_METADATA: dict = {
             "and how much CPU/memory has been requested by pods, with the remaining available. "
             "Use for questions like: 'how many CPUs/memory are available per node?', "
             "'which nodes have GPUs?', or 'node capacity details'. "
-            "Do NOT use for real-time usage — use get_node_health or query_prometheus_metrics instead."
+            "Do NOT use for real-time usage — use get_top_nodes instead."
         ),
         "parameters":  {},
     },
@@ -791,7 +791,7 @@ K8S_TOOL_METADATA: dict = {
             "Use for: 'total cpu requested in namespace', 'sum of memory requests in namespace', "
             "'namespace resource allocation', 'how much CPU or RAM is requested in namespace X'. "
             "Do NOT use for a single pod — use get_pod_resource_requests instead. "
-            "Do NOT use for real-time utilization — use query_prometheus_metrics instead."
+            "Do NOT use for real-time utilization — use get_top_pods or get_top_nodes instead."
         ),
         "parameters":  {"namespace": _P_NS},
     },
@@ -881,64 +881,6 @@ K8S_TOOL_METADATA: dict = {
         },
     },
 
-    "query_prometheus_metrics": {
-        "fn":          query_prometheus_metrics,
-        "description": (
-            "Query Prometheus for real-time usage metrics and render an inline time-series chart. "
-            "Use for any question about actual usage, load, consumption, or trends — regardless of "
-            "whether the user says 'nodes' or 'pods'. "
-            "IMPORTANT: this cluster has no node-exporter installed, so per-node CPU/memory consumption "
-            "is not available. All metrics are pod-level. When a user asks for node usage, use this tool "
-            "and note that pod-level data is the closest available proxy. "
-            "Available metrics: 'cpu'/'pod_cpu' (pod CPU in millicores), 'memory'/'pod_memory' "
-            "(pod memory in MiB), 'cluster_cpu', 'cluster_memory'. "
-            "Disk I/O and network metrics are unavailable (no node-exporter). "
-            "duration sets the time window (e.g. '1h', '6h', '24h', '7d'). "
-            "namespace filters to a specific namespace (leave empty for all)."
-        ),
-        "parameters":  {
-            "metric":    {
-                "type":    "string",
-                "default": "cpu",
-                "description": (
-                    "Metric shortcut or raw PromQL. Shortcuts: cpu, memory, pod_cpu, pod_memory, "
-                    "disk_io, network_in, network_out. Extract from user question — "
-                    "'CPU usage' → 'cpu', 'memory' → 'memory', 'pod memory' → 'pod_memory', "
-                    "'disk I/O' or 'PVC I/O' → 'disk_io'. Default: 'cpu'."
-                ),
-            },
-            "duration":  {
-                "type":    "string",
-                "default": "1h",
-                "description": (
-                    "Time window to query. Extract from user question — "
-                    "'last hour' → '1h', 'last 6 hours' → '6h', 'today' / 'last 24 hours' → '24h', "
-                    "'last week' → '7d'. Default: '1h'."
-                ),
-            },
-            "step":      {
-                "type":    "string",
-                "default": "60s",
-                "description": (
-                    "Query resolution. Use '60s' for ≤6h windows, '5m' for ≤24h, '15m' for >24h. "
-                    "Auto-scale: if duration is >24h, use '15m'; if >6h, use '5m'; else '60s'."
-                ),
-            },
-            "namespace": {
-                "type":    "string",
-                "default": "",
-                "description": (
-                    "Filter results to a specific Kubernetes namespace. "
-                    "Extract from user question — 'in cdp namespace' → 'cdp', "
-                    "'in the vault namespace' → 'vault'. "
-                    "Leave EMPTY (do not pass anything) when the question is about all namespaces, "
-                    "all nodes, or does not mention a specific namespace. "
-                    "NEVER pass 'all', 'any', 'cluster', or similar — use empty string instead."
-                ),
-            },
-        },
-    },
-
     "exec_db_query": {
         "fn":          exec_db_query,
         "description": (
@@ -1006,7 +948,7 @@ K8S_TOOL_METADATA: dict = {
             "'show cpu usage for grafana pods', "
             "'lowest cpu pods', "
             "'which pods use the least memory over the last 6 hours'. "
-            "Do NOT use query_prometheus_metrics for ranked pod lists — use this tool. "
+            "Do NOT use get_top_nodes for ranked pod lists — use this tool. "
             "IMPORTANT: When the user asks for a graph or chart of top pods, "
             "ALWAYS set duration (e.g. '1h') to get the time-series data needed for the graph."
         ),
@@ -1051,76 +993,65 @@ K8S_TOOL_METADATA: dict = {
     "get_top_nodes": {
         "fn":          get_top_nodes,
         "description": (
-            "Show live CPU and memory usage per node via metrics-server. "
-            "Supports ascending sort to show least-loaded nodes first. "
-            "Requires metrics-server to be installed on the cluster. "
+            "Show live or historical CPU and memory usage for nodes, ranked highest or lowest. "
+            "ALWAYS emits both a ranked table AND a time-series graph in the output. "
+            "When duration is empty: uses metrics-server for a live snapshot (instant, like kubectl top nodes). "
+            "When duration is set: queries Prometheus (node-exporter) for average usage over that period — "
+            "use this when the user mentions a time window OR asks for a graph/chart of node metrics. "
+            "Supports scope='cluster' to show total cluster-wide CPU and memory as a single aggregate "
+            "instead of per-node breakdown. "
             "Use for queries like: "
-            "'top nodes', 'which node uses the most cpu', "
-            "'node resource usage', 'how loaded are the nodes', "
-            "'which node has the least load', 'lowest node cpu'. "
+            "'top nodes by cpu', "
+            "'which node uses the most memory', "
+            "'show me node cpu usage graph', "
+            "'node cpu usage over the last hour', "
+            "'show me node usage for the past 6 hours', "
+            "'which node has the least load', "
+            "'lowest node cpu', "
+            "'show cluster cpu usage', "
+            "'total cluster memory usage over the last 24 hours', "
+            "'cluster-wide cpu trend'. "
             "Do NOT use get_node_capacity for live usage — that shows allocatable vs requested. "
-            "Use this tool for actual live consumption."
+            "IMPORTANT: When the user asks for a graph or chart of node usage, "
+            "ALWAYS set duration (e.g. '1h') to get the time-series data needed for the graph."
         ),
         "parameters":  {
             "limit":     {
                 "type":        "integer",
                 "default":     0,
-                "description": "Max nodes to show. 0 (default) means show all nodes.",
+                "description": "Max nodes to return. 0 (default) means all nodes. Ignored when scope='cluster'.",
+            },
+            "sort_by":   {
+                "type":        "string",
+                "default":     "cpu",
+                "description": "Sort metric: 'cpu' (default) or 'memory'. Extract from user question.",
             },
             "ascending": {
                 "type":        "boolean",
                 "default":     False,
-                "description": "When True, show least-loaded nodes first. Set True for: 'lowest node', 'least load', 'which node has most headroom'.",
+                "description": "When True, show lowest nodes first. Set True for: 'lowest node', 'least load', 'which node has most headroom'.",
             },
-            "user_timezone": {
+            "scope":     {
                 "type":        "string",
-                "default":     "UTC",
-                "description": "User's IANA timezone. Auto-injected from browser — do not set manually.",
-            },
-        },
-    },
-
-    "get_node_metrics_prometheus": {
-        "fn":          get_node_metrics_prometheus,
-        "description": (
-            "Show per-node CPU and memory usage over a time window using node-exporter metrics "
-            "scraped by the operator-managed Prometheus (infra-prometheus namespace). "
-            "CPU is reported in cores (float), memory in GiB. "
-            "Node instances are resolved to human-readable FQDNs via kube_node_info. "
-            "ALWAYS emits both a ranked table AND a time-series graph in the output. "
-            "Use for queries like: "
-            "'show node cpu usage', "
-            "'node resource graph over the last hour', "
-            "'which node uses the most cpu', "
-            "'node memory usage past 6 hours', "
-            "'show me a graph of node cpu'. "
-            "Do NOT use get_top_nodes for historical or graph data — that tool is live/snapshot only. "
-            "Use this tool whenever the user asks for a time window or graph of node-level metrics."
-        ),
-        "parameters": {
-            "duration": {
-                "type":        "string",
-                "default":     "1h",
+                "default":     "node",
                 "description": (
-                    "Time window for historical data. "
-                    "'1h' (default), '6h', '24h', '7d'. "
-                    "ALWAYS set when the user mentions a time period or asks for a graph."
+                    "Aggregation scope. "
+                    "'node' (default): per-node breakdown. "
+                    "'cluster': single cluster-wide aggregate — use when user asks about "
+                    "total cluster CPU/memory, cluster-wide usage, or overall cluster load."
                 ),
             },
-            "step": {
+            "duration":  {
                 "type":        "string",
-                "default":     "60s",
-                "description": "Prometheus query resolution step. Default '60s'. Use '300s' for windows > 12h.",
-            },
-            "ascending": {
-                "type":        "boolean",
-                "default":     False,
-                "description": "When True, show lowest CPU nodes first.",
-            },
-            "limit": {
-                "type":        "integer",
-                "default":     0,
-                "description": "Max nodes to return. 0 means all nodes.",
+                "default":     "",
+                "description": (
+                    "Time window for historical data from Prometheus. "
+                    "Leave empty for live metrics-server snapshot. "
+                    "ALWAYS set this when the user asks for a graph, chart, or mentions a time period: "
+                    "'graph' or 'chart' → '1h' (default), "
+                    "'past 1 hour' → '1h', 'last 6 hours' → '6h', "
+                    "'last day' → '24h', 'last week' → '7d'."
+                ),
             },
             "user_timezone": {
                 "type":        "string",
