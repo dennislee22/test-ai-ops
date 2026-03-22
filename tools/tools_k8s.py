@@ -1640,6 +1640,8 @@ def get_top_pods(namespace: str = "all", limit: int = 10,
 
     When duration is empty: live snapshot from metrics-server.
     When duration is set (e.g. '1h', '6h'): average usage from Prometheus over that period.
+    sort_by="both": runs two independent queries and emits two §GRAPH§ blocks —
+                    top-N by CPU and independently top-N by memory.
     """
     import time as _time
 
@@ -1648,7 +1650,11 @@ def get_top_pods(namespace: str = "all", limit: int = 10,
         sort_by   = "cpu"
         ascending = True
 
-    sort_key_label = "CPU" if sort_by.lower() in ("cpu", "cpu_m") else "memory"
+    _BOTH_WORDS = {"both", "all", "cpu and memory", "memory and cpu", "cpu and ram", "ram and cpu"}
+    if sort_by.strip().lower() in _BOTH_WORDS:
+        sort_by = "both"
+
+    sort_key_label = "CPU" if sort_by.lower() in ("cpu", "cpu_m") else ("both" if sort_by == "both" else "memory")
     direction      = "lowest" if ascending else "top"
     scope          = f"namespace `{namespace}`" if namespace != "all" else "all namespaces"
     filter_note    = f" matching `{search}`" if search else ""
@@ -1737,7 +1743,8 @@ def _get_top_pods_prometheus(namespace: str, limit: int, sort_by: str,
     import time as _time
     from kubernetes.stream import stream as _k8s_stream
 
-    sort_key_label = "CPU" if sort_by.lower() in ("cpu", "cpu_m") else "memory"
+    both_mode      = sort_by.lower() == "both"
+    sort_key_label = "CPU" if sort_by.lower() in ("cpu", "cpu_m") else ("both" if both_mode else "memory")
     direction      = "lowest" if ascending else "top"
     scope          = f"namespace `{namespace}`" if namespace != "all" else "all namespaces"
     filter_note    = f" matching `{search}`" if search else ""
@@ -1749,25 +1756,23 @@ def _get_top_pods_prometheus(namespace: str, limit: int, sort_by: str,
     except Exception:
         dur_sec = 3600
 
-    ns_filter = f',namespace="{namespace}"' if namespace not in ("all", "") else ""
+    ns_filter   = f',namespace="{namespace}"' if namespace not in ("all", "") else ""
     base_filter = f'container!="",container!="POD"{ns_filter}'
 
-    if sort_key_label == "CPU":
-        promql = (
-            'avg_over_time('
-            'sum by (pod, namespace) ('
-            'rate(container_cpu_usage_seconds_total{' + base_filter + '}[5m])'
-            ')[' + duration + ':60s]'
-            ') * 1000'
-        )
-    else:
-        promql = (
-            'avg_over_time('
-            'sum by (pod, namespace) ('
-            'container_memory_working_set_bytes{' + base_filter + '}'
-            ')[' + duration + ':60s]'
-            ') / 1048576'
-        )
+    cpu_promql = (
+        'avg_over_time('
+        'sum by (pod, namespace) ('
+        'rate(container_cpu_usage_seconds_total{' + base_filter + '}[5m])'
+        ')[' + duration + ':60s]'
+        ') * 1000'
+    )
+    mem_promql = (
+        'avg_over_time('
+        'sum by (pod, namespace) ('
+        'container_memory_working_set_bytes{' + base_filter + '}'
+        ')[' + duration + ':60s]'
+        ') / 1048576'
+    )
 
     prom_pod, prom_ns, prom_container = _find_prometheus_pod()
     if not prom_pod:
@@ -1810,49 +1815,45 @@ def _get_top_pods_prometheus(namespace: str, limit: int, sort_by: str,
 
     end_ts   = int(_time.time())
     start_ts = end_ts - dur_sec
-    enc      = urllib.parse.quote(promql, safe="")
-    url      = f"{api_base}/query_range?query={enc}&start={start_ts}&end={end_ts}&step=60s"
-    raw      = _exec(f"curl -s --max-time 60 '{url}'", large=True)
 
-    if not raw:
-        return "Prometheus returned an empty response. The query may have timed out or returned no data."
-
-    try:
-        data = _json.loads(raw)
-    except Exception:
-        return f"Prometheus returned non-JSON: {raw[:300]}"
-
-    if data.get("status") != "success":
-        return f"Prometheus query failed: {data.get('error', data)}"
-
-    results = data.get("data", {}).get("result", [])
-    if not results:
-        return f"No Prometheus data for metric '{sort_key_label}' over the last {duration}."
+    def _run_query(promql: str):
+        enc = urllib.parse.quote(promql, safe="")
+        url = f"{api_base}/query_range?query={enc}&start={start_ts}&end={end_ts}&step=60s"
+        raw = _exec(f"curl -s --max-time 60 '{url}'", large=True)
+        if not raw:
+            return None, "Prometheus returned an empty response."
+        try:
+            data = _json.loads(raw)
+        except Exception:
+            return None, f"Prometheus returned non-JSON: {raw[:300]}"
+        if data.get("status") != "success":
+            return None, f"Prometheus query failed: {data.get('error', data)}"
+        return data.get("data", {}).get("result", []), None
 
     def _mean(r):
         vals = [float(v[1]) for v in r.get("values", []) if v[1] != "NaN"]
         return sum(vals) / len(vals) if vals else 0.0
 
-    ranked = []
-    for r in results:
-        ml    = r.get("metric", {})
-        ns_v  = ml.get("namespace", "-")
-        pod_v = ml.get("pod", ml.get("pod_name", "?"))
-        if search and search.lower() not in pod_v.lower() \
-                  and search.lower() not in ns_v.lower():
-            continue
-        ranked.append((ns_v, pod_v, _mean(r), r.get("values", [])))
+    def _rank(results, lim):
+        ranked = []
+        for r in results:
+            ml    = r.get("metric", {})
+            ns_v  = ml.get("namespace", "-")
+            pod_v = ml.get("pod", ml.get("pod_name", "?"))
+            if search and search.lower() not in pod_v.lower() \
+                      and search.lower() not in ns_v.lower():
+                continue
+            ranked.append((ns_v, pod_v, _mean(r), r.get("values", [])))
+        ranked.sort(key=lambda x: x[2], reverse=not ascending)
+        return ranked[:max(1, lim)]
 
-    if not ranked:
-        return (f"No Prometheus data matching `{search}` over the last {duration}."
-                if search else f"No Prometheus data over the last {duration}.")
+    def _make_series(ranked, unit):
+        return [
+            {"label":  f"{ns_v}/{pod_v}" if ns_v != "-" else pod_v,
+             "values": [[float(ts), float(v)] for ts, v in vals if v != "NaN"]}
+            for ns_v, pod_v, _, vals in ranked
+        ]
 
-    ranked.sort(key=lambda x: x[2], reverse=not ascending)
-    ranked = ranked[:max(1, limit)]
-
-    rows = [(ns_v, pod_v, mean_v) for ns_v, pod_v, mean_v, _ in ranked]
-
-    unit = "m" if sort_key_label == "CPU" else "Mi"
     try:
         import zoneinfo
         tz       = zoneinfo.ZoneInfo(user_timezone)
@@ -1861,6 +1862,80 @@ def _get_top_pods_prometheus(namespace: str, limit: int, sort_by: str,
     except Exception:
         from_str = datetime.datetime.utcfromtimestamp(start_ts).strftime("%H:%M")
         to_str   = datetime.datetime.utcfromtimestamp(end_ts).strftime("%H:%M UTC")
+
+    # ── Both mode: two independent queries, two tables, two graphs ───────────
+    if both_mode:
+        cpu_results, cpu_err = _run_query(cpu_promql)
+        if cpu_err: return cpu_err
+        mem_results, mem_err = _run_query(mem_promql)
+        if mem_err: return mem_err
+
+        cpu_ranked = _rank(cpu_results or [], limit)
+        mem_ranked = _rank(mem_results or [], limit)
+
+        if not cpu_ranked and not mem_ranked:
+            return f"No Prometheus data over the last {duration}."
+
+        lines = []
+
+        # CPU table
+        if cpu_ranked:
+            cpu_rows = [(ns_v, pod_v, mean_v) for ns_v, pod_v, mean_v, _ in cpu_ranked]
+            col_ns  = max(len("NAMESPACE"), max(len(r[0]) for r in cpu_rows))
+            col_pod = max(len("POD"),       max(len(r[1]) for r in cpu_rows))
+            lines += [
+                f"{direction.title()} {len(cpu_rows)} pods by avg CPU in {scope}{filter_note} — last {duration} ({from_str}–{to_str}).",
+                "```",
+                f"{'NAMESPACE':<{col_ns}}  {'POD':<{col_pod}}  {'AVG CPU(m)':>12}",
+                "-" * (col_ns + col_pod + 16),
+            ]
+            for ns_v, pod_v, mean_v in cpu_rows:
+                lines.append(f"{ns_v:<{col_ns}}  {pod_v:<{col_pod}}  {mean_v:>10.1f}m")
+            lines.append("```")
+
+        # Memory table
+        if mem_ranked:
+            mem_rows = [(ns_v, pod_v, mean_v) for ns_v, pod_v, mean_v, _ in mem_ranked]
+            col_ns  = max(len("NAMESPACE"), max(len(r[0]) for r in mem_rows))
+            col_pod = max(len("POD"),       max(len(r[1]) for r in mem_rows))
+            lines += [
+                f"{direction.title()} {len(mem_rows)} pods by avg memory in {scope}{filter_note} — last {duration} ({from_str}–{to_str}).",
+                "```",
+                f"{'NAMESPACE':<{col_ns}}  {'POD':<{col_pod}}  {'AVG MEM(Mi)':>13}",
+                "-" * (col_ns + col_pod + 17),
+            ]
+            for ns_v, pod_v, mean_v in mem_rows:
+                lines.append(f"{ns_v:<{col_ns}}  {pod_v:<{col_pod}}  {mean_v:>11.1f}Mi")
+            lines.append("```")
+
+        graphs = []
+        if cpu_ranked:
+            graphs.append({"title": f"Top {len(cpu_ranked)} pods — avg CPU ({from_str}–{to_str})",
+                           "unit": "m", "duration": duration,
+                           "series": _make_series(cpu_ranked, "m")})
+        if mem_ranked:
+            graphs.append({"title": f"Top {len(mem_ranked)} pods — avg memory ({from_str}–{to_str})",
+                           "unit": "Mi", "duration": duration,
+                           "series": _make_series(mem_ranked, "Mi")})
+
+        graph_blocks = "".join(
+            f"\n§GRAPH§{_json.dumps(g, separators=(',', ':'))}§GRAPH§" for g in graphs)
+        return "\n".join(lines) + graph_blocks
+
+    # ── Single metric mode (original behaviour) ───────────────────────────────
+    promql = cpu_promql if sort_key_label == "CPU" else mem_promql
+    results, err = _run_query(promql)
+    if err: return err
+    if not results:
+        return f"No Prometheus data for metric '{sort_key_label}' over the last {duration}."
+
+    ranked = _rank(results, limit)
+    if not ranked:
+        return (f"No Prometheus data matching `{search}` over the last {duration}."
+                if search else f"No Prometheus data over the last {duration}.")
+
+    rows = [(ns_v, pod_v, mean_v) for ns_v, pod_v, mean_v, _ in ranked]
+    unit = "m" if sort_key_label == "CPU" else "Mi"
 
     header  = (f"{direction.title()} {len(rows)} pods by avg {sort_key_label} "
                f"in {scope}{filter_note} — last {duration} ({from_str}–{to_str}).")
@@ -1874,18 +1949,11 @@ def _get_top_pods_prometheus(namespace: str, limit: int, sort_by: str,
         lines.append(f"{ns_v:<{col_ns}}  {pod_v:<{col_pod}}  {mean_v:>12.1f}{unit}")
     lines.append("```")
 
-    series_out = [
-        {
-            "label":  f"{ns_v}/{pod_v}" if ns_v != "-" else pod_v,
-            "values": [[float(ts), float(v)] for ts, v in vals if v != "NaN"],
-        }
-        for ns_v, pod_v, _, vals in ranked
-    ]
+    series_out = _make_series(ranked, unit)
     title      = f"Top {len(rows)} pods — avg {sort_key_label} ({from_str}–{to_str})"
     graph_json = _json.dumps(
         {"title": title, "unit": unit, "duration": duration, "series": series_out},
         separators=(",", ":"))
-
     return "\n".join(lines) + f"\n§GRAPH§{graph_json}§GRAPH§"
 
 
@@ -1998,7 +2066,8 @@ def _get_top_nodes_prometheus(limit: int, ascending: bool, sort_by: str,
     import time as _time
     from kubernetes.stream import stream as _k8s_stream
 
-    sort_key_label = "memory" if sort_by.lower() == "memory" else "CPU"
+    disk_mode      = sort_by.lower() in ("disk", "disk_io", "io")
+    sort_key_label = "memory" if sort_by.lower() == "memory" else ("disk" if disk_mode else "CPU")
     direction      = "lowest" if ascending else "top"
     tz_label       = user_timezone if user_timezone != "UTC" else "UTC"
 
@@ -2098,6 +2167,81 @@ def _get_top_nodes_prometheus(limit: int, ascending: bool, sort_by: str,
         vals = [float(v[1]) for v in values if v[1] not in ("NaN", "Inf", "+Inf", "-Inf")]
         return sum(vals) / len(vals) if vals else 0.0
 
+    # ── Disk I/O mode ─────────────────────────────────────────────────────────
+    if disk_mode:
+        read_results,  read_err  = _query_range(
+            'sum by (instance) (rate(node_disk_read_bytes_total[5m]))')
+        if read_err:
+            return f"Disk read query failed: {read_err}"
+        write_results, write_err = _query_range(
+            'sum by (instance) (rate(node_disk_written_bytes_total[5m]))')
+        if write_err:
+            return f"Disk write query failed: {write_err}"
+
+        read_by_inst  = {r.get("metric", {}).get("instance", "?"): (_mean(r.get("values", [])), r.get("values", [])) for r in read_results}
+        write_by_inst = {r.get("metric", {}).get("instance", "?"): (_mean(r.get("values", [])), r.get("values", [])) for r in write_results}
+
+        all_instances = sorted(set(read_by_inst) | set(write_by_inst))
+        if not all_instances:
+            return (f"No disk I/O data found in Prometheus over the last {duration}. "
+                    f"Prometheus pod: {prom_pod} in {prom_ns}.")
+
+        rows = []
+        for inst in all_instances:
+            node_name              = _resolve(inst)
+            avg_read,  read_vals   = read_by_inst.get(inst,  (0.0, []))
+            avg_write, write_vals  = write_by_inst.get(inst, (0.0, []))
+            rows.append((node_name, avg_read, avg_write, read_vals, write_vals))
+
+        rows.sort(key=lambda x: x[1] + x[2], reverse=not ascending)
+        if limit > 0:
+            rows = rows[:limit]
+
+        end_ts   = int(_time.time())
+        start_ts = end_ts - dur_sec
+        try:
+            import zoneinfo
+            tz       = zoneinfo.ZoneInfo(user_timezone)
+            from_str = datetime.datetime.fromtimestamp(start_ts, tz=timezone.utc).astimezone(tz).strftime("%H:%M")
+            to_str   = datetime.datetime.fromtimestamp(end_ts,   tz=timezone.utc).astimezone(tz).strftime(f"%H:%M {tz_label}")
+        except Exception:
+            from_str = datetime.datetime.utcfromtimestamp(start_ts).strftime("%H:%M")
+            to_str   = datetime.datetime.utcfromtimestamp(end_ts).strftime("%H:%M UTC")
+
+        def _fmt_bytes(b: float) -> str:
+            if b >= 1024**3: return f"{b/1024**3:.2f} GB/s"
+            if b >= 1024**2: return f"{b/1024**2:.2f} MB/s"
+            if b >= 1024:    return f"{b/1024:.2f} KB/s"
+            return f"{b:.0f} B/s"
+
+        header   = (f"{direction.title()} {len(rows)} nodes by disk I/O "
+                    f"— last {duration} ({from_str}–{to_str}).")
+        col_node = max(len("NODE"), max(len(r[0]) for r in rows))
+        hdr_row  = f"{'NODE':<{col_node}}  {'AVG READ':>12}  {'AVG WRITE':>12}"
+        sep      = "-" * len(hdr_row)
+        lines    = [header, "```", hdr_row, sep]
+        for node_name, avg_read, avg_write, _, _ in rows:
+            lines.append(f"{node_name:<{col_node}}  {_fmt_bytes(avg_read):>12}  {_fmt_bytes(avg_write):>12}")
+        lines.append("```")
+
+        _NAN = ("NaN", "Inf", "+Inf", "-Inf")
+        read_series  = [{"label": node_name,
+                         "values": [[float(ts), float(v) / 1024**2]
+                                    for ts, v in read_vals if v not in _NAN]}
+                        for node_name, _, _, read_vals, _ in rows]
+        write_series = [{"label": node_name,
+                         "values": [[float(ts), float(v) / 1024**2]
+                                    for ts, v in write_vals if v not in _NAN]}
+                        for node_name, _, _, _, write_vals in rows]
+        graphs = [
+            {"title": f"Node disk read (MB/s) — {from_str}–{to_str}",  "unit": "MB/s", "duration": duration, "series": read_series},
+            {"title": f"Node disk write (MB/s) — {from_str}–{to_str}", "unit": "MB/s", "duration": duration, "series": write_series},
+        ]
+        graph_blocks = "".join(
+            f"\n§GRAPH§{_json.dumps(g, separators=(',', ':'))}§GRAPH§" for g in graphs)
+        return "\n".join(lines) + graph_blocks
+
+    # ── CPU / memory mode ─────────────────────────────────────────────────────
     cpu_results, cpu_err = _query_range(
         'sum by (instance) (rate(node_cpu_seconds_total{mode!="idle"}[5m]))')
     if cpu_err:
@@ -2158,33 +2302,39 @@ def _get_top_nodes_prometheus(limit: int, ascending: bool, sort_by: str,
         lines.append(f"{node_name:<{col_node}}  {avg_cpu:>14.2f}c  {avg_mem_gib:>11.2f}")
     lines.append("```")
 
+    cpu_series = [
+        {"label":  node_name,
+         "values": [[float(ts), float(v)]
+                    for ts, v in cpu_vals
+                    if v not in ("NaN", "Inf", "+Inf", "-Inf")]}
+        for node_name, _, _, cpu_vals, _ in rows
+    ]
+    mem_series = [
+        {"label":  node_name,
+         "values": [[float(ts), float(v) / (1024 ** 3)]
+                    for ts, v in mem_vals
+                    if v not in ("NaN", "Inf", "+Inf", "-Inf")]}
+        for node_name, _, _, _, mem_vals in rows
+    ]
+
     if sort_key_label == "memory":
-        series_out = [
-            {"label":  node_name,
-             "values": [[float(ts), float(v) / (1024 ** 3)]
-                        for ts, v in mem_vals
-                        if v not in ("NaN", "Inf", "+Inf", "-Inf")]}
-            for node_name, _, _, _, mem_vals in rows
+        # user explicitly asked for memory — memory graph first, then CPU
+        graphs = [
+            {"title": f"Node memory usage (GiB) — {from_str}–{to_str}",  "unit": "GiB",   "duration": duration, "series": mem_series},
+            {"title": f"Node CPU usage (cores) — {from_str}–{to_str}",   "unit": "cores",  "duration": duration, "series": cpu_series},
         ]
-        graph_title = f"Node memory usage (GiB) — {from_str}–{to_str}"
-        graph_unit  = "GiB"
     else:
-        series_out = [
-            {"label":  node_name,
-             "values": [[float(ts), float(v)]
-                        for ts, v in cpu_vals
-                        if v not in ("NaN", "Inf", "+Inf", "-Inf")]}
-            for node_name, _, _, cpu_vals, _ in rows
+        # default (cpu) or both — CPU graph first, then memory
+        graphs = [
+            {"title": f"Node CPU usage (cores) — {from_str}–{to_str}",   "unit": "cores",  "duration": duration, "series": cpu_series},
+            {"title": f"Node memory usage (GiB) — {from_str}–{to_str}",  "unit": "GiB",    "duration": duration, "series": mem_series},
         ]
-        graph_title = f"Node CPU usage (cores) — {from_str}–{to_str}"
-        graph_unit  = "cores"
 
-    graph_json = _json.dumps(
-        {"title": graph_title, "unit": graph_unit,
-         "duration": duration, "series": series_out},
-        separators=(",", ":"))
-
-    return "\n".join(lines) + f"\n§GRAPH§{graph_json}§GRAPH§"
+    graph_blocks = "".join(
+        f"\n§GRAPH§{_json.dumps(g, separators=(',', ':'))}§GRAPH§"
+        for g in graphs
+    )
+    return "\n".join(lines) + graph_blocks
 
 def get_node_taints(search: str = None, tainted_only: bool = False,
                     taint_search: str = None) -> str:

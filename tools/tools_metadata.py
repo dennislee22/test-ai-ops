@@ -947,10 +947,13 @@ K8S_TOOL_METADATA: dict = {
             "'top 5 pods in cdp namespace', "
             "'show cpu usage for grafana pods', "
             "'lowest cpu pods', "
-            "'which pods use the least memory over the last 6 hours'. "
+            "'which pods use the least memory over the last 6 hours', "
+            "'show top 3 pods by cpu and memory'. "
             "Do NOT use get_top_nodes for ranked pod lists — use this tool. "
             "IMPORTANT: When the user asks for a graph or chart of top pods, "
-            "ALWAYS set duration (e.g. '1h') to get the time-series data needed for the graph."
+            "ALWAYS set duration (e.g. '1h') to get the time-series data needed for the graph. "
+            "When the user asks for BOTH cpu and memory, set sort_by='both' to get two independent "
+            "ranked lists and two graphs — one for top pods by CPU, one for top pods by memory."
         ),
         "parameters":  {
             "namespace": _P_NS,
@@ -962,7 +965,13 @@ K8S_TOOL_METADATA: dict = {
             "sort_by":   {
                 "type":        "string",
                 "default":     "cpu",
-                "description": "Sort metric: 'cpu' (default) or 'memory'. Extract from user question.",
+                "description": (
+                    "Sort metric: 'cpu' (default), 'memory', or 'both'. "
+                    "Set 'both' when user asks for both CPU and memory together — "
+                    "e.g. 'top 3 pods by cpu and memory', 'show cpu and ram usage for top pods'. "
+                    "Extract from user question: 'cpu' → 'cpu', 'memory'/'ram' → 'memory', "
+                    "'cpu and memory'/'both' → 'both'."
+                ),
             },
             "ascending": {
                 "type":        "boolean",
@@ -1008,7 +1017,9 @@ K8S_TOOL_METADATA: dict = {
             "'which node has the least load', "
             "'lowest node cpu', "
             "'show cluster cpu usage', "
-            "'total cluster memory usage over the last 24 hours'. "
+            "'total cluster memory usage over the last 24 hours', "
+            "'show disk I/O for all nodes', "
+            "'node disk read write over the last hour'. "
             "Do NOT use get_node_capacity for live usage — that shows allocatable vs requested. "
             "IMPORTANT: When the user asks for a graph or chart of node usage, "
             "ALWAYS set duration (e.g. '1h') to get the time-series data needed for the graph."
@@ -1022,7 +1033,12 @@ K8S_TOOL_METADATA: dict = {
             "sort_by":   {
                 "type":        "string",
                 "default":     "cpu",
-                "description": "Sort metric: 'cpu' (default) or 'memory'. Extract from user question.",
+                "description": (
+                    "Sort/display metric: 'cpu' (default), 'memory', or 'disk'. "
+                    "Set 'disk' when user asks about disk I/O, read/write throughput, or storage usage on nodes. "
+                    "Extract from user question: 'cpu' → 'cpu', 'memory'/'ram' → 'memory', "
+                    "'disk'/'disk i/o'/'read'/'write'/'throughput' → 'disk'."
+                ),
             },
             "ascending": {
                 "type":        "boolean",
