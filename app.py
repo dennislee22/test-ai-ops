@@ -457,7 +457,7 @@ def build_agent():
             if name == "get_secret_list":
                 args["decode"] = _decode_secrets_ctx.get()
 
-            if name in ("query_prometheus_metrics", "get_top_pods", "get_top_nodes"):
+            if name in ("query_prometheus_metrics", "get_top_pods", "get_top_nodes", "get_node_metrics_prometheus"):
                 args["user_timezone"] = _timezone_ctx.get()
 
             tools_called.append(name)
