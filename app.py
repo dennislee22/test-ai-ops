@@ -330,6 +330,26 @@ def build_agent():
 
         _log_ag.info(f"[REQ:{req_id}] [prepare_msgs] combining {len(tool_results)} tool result(s) ({len(combined)} chars) for LLM synthesis")
 
+        # ── Guard: if the same tool was called more than once, the LLM is
+        # looping. Force it to answer directly from the existing result. ──────
+        tool_call_counts: dict[str, int] = {}
+        for m in msgs:
+            for tc in (getattr(m, "tool_calls", None) or []):
+                n = tc.get("name", "")
+                tool_call_counts[n] = tool_call_counts.get(n, 0) + 1
+        repeated = [n for n, c in tool_call_counts.items() if c > 1]
+        if repeated:
+            first_result = tool_results[0].content if tool_results else ""
+            body = first_result if len(first_result) <= _tool_char_limit else first_result[:_tool_char_limit] + "\n...[truncated]"
+            _log_ag.info(f"[REQ:{req_id}] [prepare_msgs] duplicate tool call detected {repeated} — forcing direct answer")
+            synthesis_prompt = (
+                f"Question: {original_question}\n\n"
+                f"Tool Result:\n{body}\n"
+                "The data above is the complete result. Write the final answer to the user's question right now "
+                "based solely on this data. Do NOT call any tools. Do NOT add preamble."
+            )
+            return [HumanMessage(content=_ns_prefix + synthesis_prompt)]
+
         _TOOL_FORMATS = { # Unique prompt for individual tool
             "get_gpu_info": (
                 "Available is not equivalent to being used or in use."
