@@ -2416,13 +2416,15 @@ def get_node_taints(search: str = None, tainted_only: bool = False,
 def get_node_info(node_name: str = None) -> str:
     headers = ["NODE","ROLES","STATUS","CPU","MEMORY","GPU"]
     def _build_row(node) -> str:
-        roles = (",".join(k.split("/")[-1] for k in (node.metadata.labels or {})
-                          if "node-role.kubernetes.io" in k) or "worker")
+        roles  = (",".join(k.split("/")[-1] for k in (node.metadata.labels or {})
+                           if "node-role.kubernetes.io" in k) or "worker")
         conds  = {c.type: c.status for c in (node.status.conditions or [])}
         alloc  = node.status.allocatable or {}
         gpu    = next((alloc[k] for k in alloc if "nvidia.com/gpu" in k or "amd.com/gpu" in k), "0")
+        ready  = "Ready" if conds.get("Ready") == "True" else "NotReady"
+        status = f"{ready},SchedulingDisabled" if node.spec.unschedulable else ready
         return (f"| {node.metadata.name} | {roles} "
-                f"| {'Ready' if conds.get('Ready')=='True' else 'NotReady'} "
+                f"| {status} "
                 f"| {alloc.get('cpu','?')} | {alloc.get('memory','?')} | {gpu} |")
     try:
         nodes = _core.list_node().items
