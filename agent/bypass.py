@@ -31,10 +31,8 @@ BYPASSABLE_TOOLS = {
     "describe_pv",
     "describe_sc",
     "get_events",
-    "query_prometheus_metrics",
     "get_top_pods",
     "get_top_nodes",
-    "get_node_metrics_prometheus",
     "find_resource",
 }
 
@@ -49,10 +47,8 @@ UNCONDITIONAL_BYPASS = {
     "describe_pv",
     "describe_sc",
     "get_events",
-    "query_prometheus_metrics",
     "get_top_pods",
     "get_top_nodes",
-    "get_node_metrics_prometheus",
     "find_resource",
 }
 
