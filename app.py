@@ -305,7 +305,7 @@ def build_agent():
 
         _EXEMPT_TOOLS = {
             "get_coredns_health", "get_node_info", "get_gpu_info", "get_node_capacity", "run_cluster_health",
-            "get_pv_usage", "get_persistent_volumes", "query_prometheus_metrics", "find_resource",
+            "get_pv_usage", "get_persistent_volumes", "find_resource",
             "get_node_resource_requests", "rag_search", "exec_db_query", "kubectl_exec",
             "get_node_labels", "get_node_taints", "get_storage_classes", "get_cluster_version"
         }
@@ -331,10 +331,6 @@ def build_agent():
         _log_ag.info(f"[REQ:{req_id}] [prepare_msgs] combining {len(tool_results)} tool result(s) ({len(combined)} chars) for LLM synthesis")
 
         _TOOL_FORMATS = { # Unique prompt for individual tool
-            "query_prometheus_metrics": (
-                "Present the metrics exactly as returned. "
-                "List each series with its last value. Do not round or omit any series."
-            ),
             "get_gpu_info": (
                 "Available is not equivalent to being used or in use."
                 "If the table does not specify which pod is attached to the GPU, it means the GPU is available to be used, it is not currently in use"
@@ -457,7 +453,7 @@ def build_agent():
             if name == "get_secret_list":
                 args["decode"] = _decode_secrets_ctx.get()
 
-            if name in ("query_prometheus_metrics", "get_top_pods", "get_top_nodes", "get_node_metrics_prometheus"):
+            if name in ("get_top_pods", "get_top_nodes"):
                 args["user_timezone"] = _timezone_ctx.get()
 
             tools_called.append(name)
