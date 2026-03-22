@@ -1914,6 +1914,235 @@ def get_top_nodes(limit: int = 0, ascending: bool = False,
     lines.append("```")
     return "\n".join(lines)
 
+def _find_node_exporter_prometheus_pod() -> tuple[str | None, str | None, str]:
+    """Locate the operator-managed Prometheus pod that scrapes node-exporter.
+    Targets statefulset pods matching 'prometheus-operator-prometheus-' pattern.
+    Completely separate from _find_prometheus_pod() — do NOT merge these.
+    Returns (pod_name, namespace, container_name) or (None, None, 'prometheus').
+    """
+    try:
+        pods = _core.list_pod_for_all_namespaces().items
+    except Exception:
+        return None, None, "prometheus"
+    for p in pods:
+        if p.status.phase != "Running":
+            continue
+        n = p.metadata.name.lower()
+        if "prometheus-operator" in n and n.endswith("-prometheus-0"):
+            cnames    = [c.name for c in (p.spec.containers or [])]
+            container = "prometheus" if "prometheus" in cnames else (cnames[0] if cnames else "prometheus")
+            return p.metadata.name, p.metadata.namespace, container
+    return None, None, "prometheus"
+
+
+def get_node_metrics_prometheus(duration: str = "1h", step: str = "60s",
+                                ascending: bool = False, limit: int = 0,
+                                user_timezone: str = "UTC") -> str:
+    """
+    Show per-node CPU and memory usage over a time window using node-exporter
+    metrics scraped by the operator-managed Prometheus (infra-prometheus).
+
+    CPU  : sum by (instance) of rate(node_cpu_seconds_total{mode!="idle"}[5m])
+           expressed as cores (float, 2 d.p.)
+    Memory: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / GiB
+    Node name resolved via kube_node_info{internal_ip} → FQDN.
+    Emits a ranked table + §GRAPH§ time-series block (same contract as get_top_pods).
+    """
+    import time as _time
+    from kubernetes.stream import stream as _k8s_stream
+
+    tz_label = user_timezone if user_timezone != "UTC" else "UTC"
+    dur_map  = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    try:
+        dur_sec = int(duration[:-1]) * dur_map.get(duration[-1], 1)
+    except Exception:
+        dur_sec = 3600
+
+    prom_pod, prom_ns, prom_container = _find_node_exporter_prometheus_pod()
+    if not prom_pod:
+        return (
+            "No operator-managed Prometheus pod found "
+            "(expected a Running pod matching 'prometheus-operator-prometheus-0'). "
+            "Is infra-prometheus deployed?"
+        )
+
+    api_base = "http://localhost:9090/api/v1"
+
+    def _exec(cmd: str, large: bool = False) -> str:
+        try:
+            if large:
+                ws = _k8s_stream(
+                    _core.connect_get_namespaced_pod_exec,
+                    prom_pod, prom_ns,
+                    command=["/bin/sh", "-c", cmd],
+                    container=prom_container,
+                    stderr=False, stdin=False, stdout=True, tty=False,
+                    _preload_content=False)
+                chunks = []
+                while ws.is_open():
+                    ws.update(timeout=60)
+                    if ws.peek_stdout():
+                        chunks.append(ws.read_stdout())
+                ws.close()
+                resp = "".join(chunks)
+            else:
+                resp = _k8s_stream(
+                    _core.connect_get_namespaced_pod_exec,
+                    prom_pod, prom_ns,
+                    command=["/bin/sh", "-c", cmd],
+                    container=prom_container,
+                    stderr=False, stdin=False, stdout=True, tty=False,
+                    _preload_content=True)
+            if isinstance(resp, bytes):
+                resp = resp.decode("utf-8", errors="replace")
+            elif not isinstance(resp, str):
+                resp = str(resp)
+            return resp.strip()
+        except Exception as exc:
+            return f"[exec error: {exc}]"
+
+    def _query_range(promql: str) -> tuple[list, str | None]:
+        end_ts   = int(_time.time())
+        start_ts = end_ts - dur_sec
+        enc      = urllib.parse.quote(promql, safe="")
+        url      = f"{api_base}/query_range?query={enc}&start={start_ts}&end={end_ts}&step={step}"
+        raw      = _exec(f"curl -s --max-time 60 '{url}'", large=True)
+        if not raw or raw.startswith("[exec error"):
+            return [], raw or "Empty response from Prometheus"
+        try:
+            data = _json.loads(raw)
+        except Exception:
+            return [], f"Prometheus returned non-JSON: {raw[:300]}"
+        if data.get("status") != "success":
+            return [], f"Prometheus query failed: {data.get('error', data)}"
+        return data.get("data", {}).get("result", []), None
+
+    def _query_instant(promql: str) -> list:
+        enc = urllib.parse.quote(promql, safe="")
+        url = f"{api_base}/query?query={enc}"
+        raw = _exec(f"curl -s --max-time 15 '{url}'")
+        if not raw or raw.startswith("[exec error"):
+            return []
+        try:
+            data = _json.loads(raw)
+            if data.get("status") == "success":
+                return data.get("data", {}).get("result", [])
+        except Exception:
+            pass
+        return []
+
+    # --- Build IP → node FQDN map from kube_node_info ---
+    ip_to_node: dict[str, str] = {}
+    for r in _query_instant("kube_node_info"):
+        m  = r.get("metric", {})
+        ip = m.get("internal_ip", "").strip()
+        nd = m.get("node", "").strip()
+        if ip and nd:
+            ip_to_node[ip] = nd
+
+    def _resolve(instance: str) -> str:
+        ip = instance.split(":")[0]
+        return ip_to_node.get(ip, ip)   # fall back to bare IP if not in map
+
+    def _mean(values: list) -> float:
+        vals = [float(v[1]) for v in values if v[1] not in ("NaN", "Inf", "+Inf", "-Inf")]
+        return sum(vals) / len(vals) if vals else 0.0
+
+    # --- CPU: cores used (all modes except idle), range query for graph ---
+    cpu_promql = (
+        'sum by (instance) ('
+        'rate(node_cpu_seconds_total{mode!="idle"}[5m])'
+        ')'
+    )
+    cpu_results, cpu_err = _query_range(cpu_promql)
+    if cpu_err:
+        return f"CPU query failed: {cpu_err}"
+
+    # --- Memory: used bytes range query for graph ---
+    mem_promql = (
+        'sum by (instance) ('
+        'node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes'
+        ')'
+    )
+    mem_results, mem_err = _query_range(mem_promql)
+    if mem_err:
+        return f"Memory query failed: {mem_err}"
+
+    # --- Merge by instance ---
+    cpu_by_instance: dict[str, tuple[float, list]] = {}
+    for r in cpu_results:
+        inst = r.get("metric", {}).get("instance", "?")
+        cpu_by_instance[inst] = (_mean(r.get("values", [])), r.get("values", []))
+
+    mem_by_instance: dict[str, tuple[float, list]] = {}
+    for r in mem_results:
+        inst = r.get("metric", {}).get("instance", "?")
+        mem_by_instance[inst] = (_mean(r.get("values", [])), r.get("values", []))
+
+    all_instances = sorted(set(cpu_by_instance) | set(mem_by_instance))
+    if not all_instances:
+        return (
+            f"No node-exporter data found in Prometheus over the last {duration}. "
+            f"Prometheus pod: {prom_pod} in {prom_ns}."
+        )
+
+    rows = []
+    for inst in all_instances:
+        node_name               = _resolve(inst)
+        avg_cpu_cores, cpu_vals = cpu_by_instance.get(inst, (0.0, []))
+        avg_mem_bytes, mem_vals = mem_by_instance.get(inst, (0.0, []))
+        avg_mem_gib             = avg_mem_bytes / (1024 ** 3)
+        rows.append((node_name, inst, avg_cpu_cores, avg_mem_gib, cpu_vals, mem_vals))
+
+    rows.sort(key=lambda x: x[2], reverse=not ascending)
+    if limit > 0:
+        rows = rows[:limit]
+
+    # --- Time window labels ---
+    end_ts   = int(_time.time())
+    start_ts = end_ts - dur_sec
+    try:
+        import zoneinfo
+        tz       = zoneinfo.ZoneInfo(user_timezone)
+        from_str = datetime.datetime.fromtimestamp(start_ts, tz=timezone.utc).astimezone(tz).strftime("%H:%M")
+        to_str   = datetime.datetime.fromtimestamp(end_ts,   tz=timezone.utc).astimezone(tz).strftime(f"%H:%M {tz_label}")
+    except Exception:
+        from_str = datetime.datetime.utcfromtimestamp(start_ts).strftime("%H:%M")
+        to_str   = datetime.datetime.utcfromtimestamp(end_ts).strftime("%H:%M UTC")
+
+    direction = "lowest" if ascending else "top"
+    header    = (
+        f"Node CPU & memory usage — {direction} {len(rows)} node(s) "
+        f"— avg over last {duration} ({from_str}–{to_str})."
+    )
+    col_node = max(len("NODE"), max(len(r[0]) for r in rows))
+    hdr_row  = f"{'NODE':<{col_node}}  {'AVG CPU(cores)':>14}  {'AVG MEM(GiB)':>12}"
+    sep      = "-" * len(hdr_row)
+    lines    = [header, "```", hdr_row, sep]
+    for node_name, _, avg_cpu, avg_mem_gib, _, _ in rows:
+        lines.append(f"{node_name:<{col_node}}  {avg_cpu:>14.2f}  {avg_mem_gib:>11.2f}")
+    lines.append("```")
+
+    # --- Graph payload (CPU cores series) ---
+    series_out = [
+        {
+            "label":  node_name,
+            "values": [[float(ts), float(v)] for ts, v in cpu_vals if v not in ("NaN", "Inf", "+Inf", "-Inf")],
+        }
+        for node_name, _, _, _, cpu_vals, _ in rows
+    ]
+    graph_json = _json.dumps(
+        {
+            "title":    f"Node CPU usage (cores) — {from_str}–{to_str}",
+            "unit":     "cores",
+            "duration": duration,
+            "series":   series_out,
+        },
+        separators=(",", ":"))
+
+    return "\n".join(lines) + f"\n§GRAPH§{graph_json}§GRAPH§"
+
+
 def get_node_taints(search: str = None, tainted_only: bool = False,
                     taint_search: str = None) -> str:
     """
