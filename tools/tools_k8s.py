@@ -142,20 +142,37 @@ def _find_prometheus_pod() -> tuple[str | None, str | None, str]:
     """Locate the Prometheus server pod across all namespaces.
     Returns (pod_name, namespace, container_name) or (None, None, 'prometheus-server').
     Avoids field_selector which triggers WebSocket errors on RKE2.
+
+    Priority:
+      1. Standalone prometheus-server pod (helm chart: prometheus-server-xxx)
+      2. Operator-managed statefulset pod (prometheus-operator-prometheus-0)
+         — used as fallback when no standalone pod exists
     """
     try:
         pods = _core.list_pod_for_all_namespaces().items
     except Exception:
         return None, None, "prometheus-server"
+
+    operator_candidate = None
     for p in pods:
         if p.status.phase != "Running":
             continue
         n = p.metadata.name.lower()
+        # Priority 1: standalone helm-installed prometheus-server
         if "prometheus-server" in n and "operator" not in n:
             cnames    = [c.name for c in (p.spec.containers or [])]
             container = ("prometheus-server" if "prometheus-server" in cnames
                          else (cnames[0] if cnames else "prometheus-server"))
             return p.metadata.name, p.metadata.namespace, container
+        # Priority 2: operator-managed statefulset (keep first match as candidate)
+        if operator_candidate is None and "prometheus-operator" in n and n.endswith("-prometheus-0"):
+            cnames = [c.name for c in (p.spec.containers or [])]
+            container = "prometheus" if "prometheus" in cnames else (cnames[0] if cnames else "prometheus")
+            operator_candidate = (p.metadata.name, p.metadata.namespace, container)
+
+    if operator_candidate:
+        return operator_candidate
+
     return None, None, "prometheus-server"
 
 def _filter_pods(pods: list, search: str | None) -> list:
