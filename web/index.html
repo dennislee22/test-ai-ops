@@ -2495,12 +2495,14 @@ function renderGraphBlock(payload, container) {
   // ── Legend — vertical list on the right ──────────────────────────────────
   const legend = series.slice(0, 8).map((s, i) => {
     const col      = GRAPH_COLORS[i % GRAPH_COLORS.length];
-    const lastVal  = s.values.length ? fmt(s.values[s.values.length - 1][1]) : '—';
+    const avgVal   = s.values.length
+      ? s.values.reduce((sum,[,v])=>sum+v, 0) / s.values.length : 0;
+    const avgStr   = s.values.length ? `avg: ${fmt(avgVal)}` : '—';
     const shortLbl = truncLabel(s.label, 22);
     return `<span class="graph-legend-item" title="${esc(s.label)}">`
          + `<span class="graph-legend-dot" style="background:${col}"></span>`
          + `<span class="graph-legend-label">${esc(shortLbl)}</span>`
-         + `<span class="graph-legend-val" style="color:${col}">${lastVal}</span>`
+         + `<span class="graph-legend-val" style="color:${col}">${avgStr}</span>`
          + `</span>`;
   }).join('');
 
@@ -3020,12 +3022,13 @@ inpEl.addEventListener('keydown', e=>{
         });
         const legend=series.map((s,i)=>{
           const col=CHART_COLORS[i%CHART_COLORS.length];
-          const lastV=s.values.length?fmt(s.values[s.values.length-1][1]):'—';
+          const avg=s.values.length?s.values.reduce((sum,[,v])=>sum+v,0)/s.values.length:0;
+          const avgStr=s.values.length?`avg: ${fmt(avg)}`:'—';
           const lbl=s.label.length>30?s.label.slice(0,28)+'…':s.label;
           return `<div style="display:flex;align-items:center;gap:4px;font-size:8.5px;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">`+
                  `<span style="width:8px;height:8px;border-radius:50%;background:${col};flex-shrink:0"></span>`+
                  `<span style="flex:1;overflow:hidden;text-overflow:ellipsis">${lbl}</span>`+
-                 `<span style="font-weight:700;color:${col};flex-shrink:0">${lastV}</span></div>`;
+                 `<span style="font-weight:700;color:${col};flex-shrink:0">${avgStr}</span></div>`;
         }).join('');
         return `<div style="margin-bottom:6px">`+
           `<div style="font-size:10px;font-weight:700;color:#075985;margin-bottom:3px">${title}</div>`+
