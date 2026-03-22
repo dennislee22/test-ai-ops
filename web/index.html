@@ -85,7 +85,7 @@ button{cursor:pointer;font-family:inherit}
 #ttl{font-size:19px;font-weight:700;font-family:'IBM Plex Sans',sans-serif;letter-spacing:-.02em;line-height:1}
 #subtitle{font-size:11px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;display:flex;align-items:center;gap:8px;max-width:600px;overflow:hidden}
 #hdr-right{margin-left:auto;display:flex;align-items:center;gap:14px}
-#email-link{font-size:11px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;text-decoration:none;transition:color .2s}
+#email-link{font-size:11px;color:var(--dimText);font-family:'IBM Plex Mono',monospace;text-decoration:none;transition:color .2s;background:none;border:none;padding:0;cursor:pointer;}
 #email-link:hover{color:var(--accent2)}
 
 /* Theme dots */
@@ -766,7 +766,7 @@ button{cursor:pointer;font-family:inherit}
       </div>
     </div>
     <div id="hdr-right">
-      <a id="email-link" href="/cdn-cgi/l/email-protection#e286878c8c8b918e8787a2818e8d9786879083cc818d8f">&#9993; dennislee&#64;cloudera.com</a>
+      <button id="email-link" onclick="(function(btn){navigator.clipboard.writeText('dennislee@cloudera.com').then(function(){var o=btn.textContent;btn.textContent='✓ copied!';btn.style.color='#86efac';setTimeout(function(){btn.textContent=o;btn.style.color='';},1800);});  })(this)">&#9993; dennislee&#64;cloudera.com</button>
       <div id="theme-row">
         <span id="theme-label">THEME</span>
         <button class="tdot active" data-theme="midnight"
