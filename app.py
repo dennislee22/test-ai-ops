@@ -707,9 +707,8 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
     async def _heartbeat_task():
         tick = 0
         while not _hb_stop.is_set():
-            try: await asyncio.wait_for(_hb_stop.wait(), timeout=15)
-            except asyncio.TimeoutError: pass
-            else: break  # stop event fired — exit cleanly without putting a tick
+            try: await asyncio.wait_for(asyncio.shield(asyncio.sleep(15)), timeout=15)
+            except Exception: pass
             tick += 15
             if not _hb_stop.is_set(): await _hb_queue.put(tick)
     _hb_task = asyncio.ensure_future(_heartbeat_task())
@@ -984,9 +983,7 @@ async def chat_stream(req: ChatRequest):
             while True:
                 try: item = await asyncio.wait_for(queue.get(), timeout=10)
                 except asyncio.TimeoutError: yield ": keep-alive\n\n"; continue
-                if item is _SENTINEL:
-                    await asyncio.sleep(0)  # yield to event loop so uvicorn flushes the last SSE chunk
-                    break
+                if item is _SENTINEL: break
                 yield item
         finally: task.cancel()
     return StreamingResponse(_keepalive_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -1174,15 +1171,8 @@ def _fetch_report_charts() -> dict:
 
     prom_pod = prom_ns = prom_container = None
     try:
-        try:
-            all_pods = _tk._core.list_pod_for_all_namespaces(
-                    field_selector="status.phase=Running").items
-        except Exception:
-            # Some clusters (e.g. RKE2) raise WebSocket errors on field_selector
-            all_pods = _tk._core.list_pod_for_all_namespaces().items
-        for p in all_pods:
-            if p.status.phase != "Running":
-                continue
+        for p in _tk._core.list_pod_for_all_namespaces(
+                field_selector="status.phase=Running").items:
             n = p.metadata.name.lower()
             if "prometheus-server" in n and "operator" not in n:
                 cnames         = [c.name for c in (p.spec.containers or [])]
