@@ -88,7 +88,7 @@ IGNORE_NS = {
 }
 
 def _sse(payload: dict) -> str:
-    return f"data: {json.dumps(payload)}\n\n"
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 _SHEET_KEYWORDS = [
     (["past learning", "incident"],     "Past Learnings"),
