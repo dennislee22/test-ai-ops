@@ -34,6 +34,7 @@ BYPASSABLE_TOOLS = {
     "query_prometheus_metrics",
     "get_top_pods",
     "get_top_nodes",
+    "get_node_metrics_prometheus",
     "find_resource",
 }
 
@@ -51,6 +52,7 @@ UNCONDITIONAL_BYPASS = {
     "query_prometheus_metrics",
     "get_top_pods",
     "get_top_nodes",
+    "get_node_metrics_prometheus",
     "find_resource",
 }
 
