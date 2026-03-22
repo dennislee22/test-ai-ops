@@ -3361,6 +3361,8 @@ def generate_healthcheck_report() -> str:
                 status = ('<span style="color:#16a34a;font-weight:600">&#10003; Ready</span>'
                           if conds.get("Ready") == "True" else
                           '<span style="color:#dc2626;font-weight:600">&#10007; NotReady</span>')
+                if node.spec.unschedulable:
+                    status += ' <span style="color:#d97706;font-weight:600">[SchedulingDisabled]</span>'
                 alloc  = node.status.allocatable or {}
                 cpu    = alloc.get("cpu", "?")
                 mem_ki = alloc.get("memory", "0Ki")
