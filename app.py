@@ -707,8 +707,9 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
     async def _heartbeat_task():
         tick = 0
         while not _hb_stop.is_set():
-            try: await asyncio.wait_for(asyncio.shield(asyncio.sleep(15)), timeout=15)
-            except Exception: pass
+            try: await asyncio.wait_for(_hb_stop.wait(), timeout=15)
+            except asyncio.TimeoutError: pass
+            else: break  # stop event fired — exit cleanly without putting a tick
             tick += 15
             if not _hb_stop.is_set(): await _hb_queue.put(tick)
     _hb_task = asyncio.ensure_future(_heartbeat_task())
@@ -797,6 +798,7 @@ async def run_agent_streaming(user_message: str, history: list = None, max_new_t
             "elapsed_seconds": elapsed,
             "clarification_needed": False
         })
+        yield ": flush\n\n"  # empty SSE comment — forces uvicorn to flush result frame before SENTINEL closes connection
 
     except Exception as exc:
         _hb_stop.set(); _hb_task.cancel()
@@ -1171,8 +1173,15 @@ def _fetch_report_charts() -> dict:
 
     prom_pod = prom_ns = prom_container = None
     try:
-        for p in _tk._core.list_pod_for_all_namespaces(
-                field_selector="status.phase=Running").items:
+        try:
+            all_pods = _tk._core.list_pod_for_all_namespaces(
+                    field_selector="status.phase=Running").items
+        except Exception:
+            # Some clusters (e.g. RKE2) raise WebSocket errors on field_selector
+            all_pods = _tk._core.list_pod_for_all_namespaces().items
+        for p in all_pods:
+            if p.status.phase != "Running":
+                continue
             n = p.metadata.name.lower()
             if "prometheus-server" in n and "operator" not in n:
                 cnames         = [c.name for c in (p.spec.containers or [])]
