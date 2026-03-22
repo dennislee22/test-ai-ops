@@ -1402,17 +1402,21 @@ def _fetch_report_charts() -> dict:
         }
 
         for win, (start, end, step) in node_windows.items():
-            result[f"node_cpu_{win}"]       = _query_range_node(node_cpu_pql, start, end, step)
-            result[f"node_mem_{win}"]       = _query_range_node(
-                node_mem_pql, start, end, step,
-                label_fn=lambda r: _resolve_node(r.get("metric", {}).get("instance", "?")))
-            # Disk: convert bytes/s → MB/s in values
+            result[f"node_cpu_{win}"] = _query_range_node(node_cpu_pql, start, end, step)
+            # Memory: convert bytes → GiB
+            def _mem_series(s, e, st):
+                raw_s = _query_range_node(node_mem_pql, s, e, st)
+                for ser in raw_s:
+                    ser["values"] = [[ts, v / (1024 ** 3)] for ts, v in ser["values"]]
+                return raw_s
+            result[f"node_mem_{win}"] = _mem_series(start, end, step)
+            # Disk: convert bytes/s → MB/s
             def _disk_series(pql, s, e, st):
                 raw_s = _query_range_node(pql, s, e, st)
                 for ser in raw_s:
                     ser["values"] = [[ts, v / (1024 ** 2)] for ts, v in ser["values"]]
                 return raw_s
-            result[f"disk_read_{win}"] = _disk_series(disk_read_pql, start, end, step)
+            result[f"disk_read_{win}"]  = _disk_series(disk_read_pql, start, end, step)
             result[f"disk_write_{win}"] = _disk_series(disk_writ_pql, start, end, step)
 
     return result
