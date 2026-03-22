@@ -2989,6 +2989,9 @@ inpEl.addEventListener('keydown', e=>{
         const yS=v=>MT+PH-((v-yLo)/(yHi-yLo||1))*PH;
         const fmt=v=>unit==='m'?(v>=1000?`${(v/1000).toFixed(1)}C`:`${Math.round(v)}m`)
                     :unit==='MiB'?(v>=1024?`${(v/1024).toFixed(1)}Gi`:`${Math.round(v)}Mi`)
+                    :unit==='GiB'?`${v.toFixed(1)}Gi`
+                    :unit==='cores'?`${v.toFixed(2)}c`
+                    :unit==='MB/s'?`${v.toFixed(1)}MB/s`
                     :v.toFixed(1);
         const TICKS=4;
         let grid='',xAxis='';
@@ -3040,6 +3043,20 @@ inpEl.addEventListener('keydown', e=>{
       const chartsMem1w=buildLineChart(charts.mem_1w,'MiB','Memory Usage — Last 7 Days (top 10 pods)');
       const chartsCpu1m=buildLineChart(charts.cpu_1m,'m',  'CPU Usage — Last 30 Days (top 10 pods)');
       const chartsMem1m=buildLineChart(charts.mem_1m,'MiB','Memory Usage — Last 30 Days (top 10 pods)');
+
+      const chartsNodeCpu1d=buildLineChart(charts.node_cpu_1d,'cores','Node CPU Usage — Last 24 Hours');
+      const chartsNodeMem1d=buildLineChart(charts.node_mem_1d,'GiB',  'Node Memory Usage — Last 24 Hours');
+      const chartsNodeCpu1w=buildLineChart(charts.node_cpu_1w,'cores','Node CPU Usage — Last 7 Days');
+      const chartsNodeMem1w=buildLineChart(charts.node_mem_1w,'GiB',  'Node Memory Usage — Last 7 Days');
+      const chartsNodeCpu1m=buildLineChart(charts.node_cpu_1m,'cores','Node CPU Usage — Last 30 Days');
+      const chartsNodeMem1m=buildLineChart(charts.node_mem_1m,'GiB',  'Node Memory Usage — Last 30 Days');
+
+      const chartsDiskRead1d =buildLineChart(charts.disk_read_1d, 'MB/s','Node Disk Read — Last 24 Hours');
+      const chartsDiskWrite1d=buildLineChart(charts.disk_write_1d,'MB/s','Node Disk Write — Last 24 Hours');
+      const chartsDiskRead1w =buildLineChart(charts.disk_read_1w, 'MB/s','Node Disk Read — Last 7 Days');
+      const chartsDiskWrite1w=buildLineChart(charts.disk_write_1w,'MB/s','Node Disk Write — Last 7 Days');
+      const chartsDiskRead1m =buildLineChart(charts.disk_read_1m, 'MB/s','Node Disk Read — Last 30 Days');
+      const chartsDiskWrite1m=buildLineChart(charts.disk_write_1m,'MB/s','Node Disk Write — Last 30 Days');
 
       const now      = new Date();
       const datePart = now.toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'});
@@ -3098,6 +3115,18 @@ ${reportText}
 <div class="chart-grid chart-section">${chartsCpu1w}${chartsMem1w}</div>
 <h2>Pod Resource Usage &mdash; Last 30 Days</h2>
 <div class="chart-grid chart-section">${chartsCpu1m}${chartsMem1m}</div>
+<h2>Node CPU &amp; Memory Usage &mdash; Last 24 Hours</h2>
+<div class="chart-grid chart-section">${chartsNodeCpu1d}${chartsNodeMem1d}</div>
+<h2>Node CPU &amp; Memory Usage &mdash; Last 7 Days</h2>
+<div class="chart-grid chart-section">${chartsNodeCpu1w}${chartsNodeMem1w}</div>
+<h2>Node CPU &amp; Memory Usage &mdash; Last 30 Days</h2>
+<div class="chart-grid chart-section">${chartsNodeCpu1m}${chartsNodeMem1m}</div>
+<h2>Node Disk I/O &mdash; Last 24 Hours</h2>
+<div class="chart-grid chart-section">${chartsDiskRead1d}${chartsDiskWrite1d}</div>
+<h2>Node Disk I/O &mdash; Last 7 Days</h2>
+<div class="chart-grid chart-section">${chartsDiskRead1w}${chartsDiskWrite1w}</div>
+<h2>Node Disk I/O &mdash; Last 30 Days</h2>
+<div class="chart-grid chart-section">${chartsDiskRead1m}${chartsDiskWrite1m}</div>
 <div class="end-of-report">&mdash; End of Report &mdash;</div>
 </body></html>`;
 
