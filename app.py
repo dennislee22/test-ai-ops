@@ -1300,6 +1300,121 @@ def _fetch_report_charts() -> dict:
     for win, (start, end, step) in windows.items():
         result[f"cpu_{win}"] = _query_range(cpu_pql, start, end, step)
         result[f"mem_{win}"] = _query_range(mem_pql, start, end, step)
+
+    # ── Node metrics via operator Prometheus (node-exporter) ─────────────────
+    node_prom_pod = node_prom_ns = node_prom_container = None
+    try:
+        all_pods_node = _tk._core.list_pod_for_all_namespaces().items
+        for p in all_pods_node:
+            if p.status.phase != "Running":
+                continue
+            n = p.metadata.name.lower()
+            if "prometheus-operator" in n and n.endswith("-prometheus-0"):
+                cnames             = [c.name for c in (p.spec.containers or [])]
+                node_prom_pod      = p.metadata.name
+                node_prom_ns       = p.metadata.namespace
+                node_prom_container = "prometheus" if "prometheus" in cnames else (cnames[0] if cnames else "prometheus")
+                break
+    except Exception:
+        pass
+
+    if node_prom_pod:
+        def _exec_node(cmd):
+            try:
+                ws = _k8s_stream(
+                    _tk._core.connect_get_namespaced_pod_exec,
+                    node_prom_pod, node_prom_ns,
+                    command=["/bin/sh", "-c", cmd],
+                    container=node_prom_container,
+                    stderr=False, stdin=False, stdout=True, tty=False,
+                    _preload_content=False)
+                chunks = []
+                while ws.is_open():
+                    ws.update(timeout=120)
+                    if ws.peek_stdout():
+                        chunks.append(ws.read_stdout())
+                ws.close()
+                return "".join(chunks).strip()
+            except Exception as exc:
+                return f"[exec error: {exc}]"
+
+        node_api_base = "http://localhost:9090/api/v1"
+
+        # Build IP→node FQDN map from kube_node_info
+        ip_to_node: dict[str, str] = {}
+        try:
+            enc  = urllib.parse.quote("kube_node_info", safe="")
+            raw  = _exec_node(f"curl -s --max-time 15 '{node_api_base}/query?query={enc}'")
+            data = _json.loads(raw)
+            if data.get("status") == "success":
+                for r in data.get("data", {}).get("result", []):
+                    m  = r.get("metric", {})
+                    ip = m.get("internal_ip", "").strip()
+                    nd = m.get("node", "").strip()
+                    if ip and nd:
+                        ip_to_node[ip] = nd
+        except Exception:
+            pass
+
+        def _resolve_node(instance: str) -> str:
+            ip = instance.split(":")[0]
+            return ip_to_node.get(ip, ip)
+
+        def _query_range_node(pql, start, end, step, label_fn=None):
+            enc = urllib.parse.quote(pql, safe="")
+            url = f"{node_api_base}/query_range?query={enc}&start={start}&end={end}&step={step}"
+            raw = _exec_node(f"curl -s --max-time 120 '{url}'")
+            if not raw or raw.startswith("[exec error"):
+                return []
+            try:
+                data = _json.loads(raw)
+            except Exception:
+                return []
+            if data.get("status") != "success":
+                return []
+            results = data.get("data", {}).get("result", [])
+
+            def _mean(r):
+                vals = [float(v[1]) for v in r.get("values", []) if v[1] not in ("NaN", "Inf", "+Inf", "-Inf")]
+                return sum(vals) / len(vals) if vals else 0.0
+
+            results.sort(key=_mean, reverse=True)
+            series = []
+            for r in results:
+                inst  = r.get("metric", {}).get("instance", "?")
+                label = label_fn(r) if label_fn else _resolve_node(inst)
+                vals  = [[float(ts), float(v)]
+                         for ts, v in r.get("values", [])
+                         if v not in ("NaN", "Inf", "+Inf", "-Inf")]
+                if vals:
+                    series.append({"label": label, "values": vals})
+            return series
+
+        node_cpu_pql  = 'sum by (instance) (rate(node_cpu_seconds_total{mode!="idle"}[5m]))'
+        node_mem_pql  = 'sum by (instance) (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes)'
+        disk_read_pql = 'sum by (instance) (rate(node_disk_read_bytes_total[5m]))'
+        disk_writ_pql = 'sum by (instance) (rate(node_disk_written_bytes_total[5m]))'
+
+        node_windows = {
+            "1d": (now_ts - 86400,      now_ts, "5m"),
+            "1w": (now_ts - 86400 * 7,  now_ts, "30m"),
+            "1m": (now_ts - 86400 * 30, now_ts, "2h"),
+        }
+
+        for win, (start, end, step) in node_windows.items():
+            result[f"node_cpu_{win}"]       = _query_range_node(node_cpu_pql, start, end, step)
+            result[f"node_mem_{win}"]       = _query_range_node(
+                node_mem_pql, start, end, step,
+                label_fn=lambda r: _resolve_node(r.get("metric", {}).get("instance", "?")))
+            # Disk: convert bytes/s → MB/s in values
+            def _disk_series(pql, s, e, st):
+                raw_s = _query_range_node(pql, s, e, st)
+                for ser in raw_s:
+                    ser["values"] = [[ts, v / (1024 ** 2)] for ts, v in ser["values"]]
+                return raw_s
+            result[f"disk_read_{win}"] = _disk_series(disk_read_pql, start, end, step)
+            result[f"disk_write_{win}"] = _disk_series(disk_writ_pql, start, end, step)
+
     return result
 
 @app.post("/api/tool")
