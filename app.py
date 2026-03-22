@@ -330,30 +330,13 @@ def build_agent():
 
         _log_ag.info(f"[REQ:{req_id}] [prepare_msgs] combining {len(tool_results)} tool result(s) ({len(combined)} chars) for LLM synthesis")
 
-        # ── Guard: if the same tool was called more than once, the LLM is
-        # looping. Force it to answer directly from the existing result. ──────
-        tool_call_counts: dict[str, int] = {}
-        for m in msgs:
-            for tc in (getattr(m, "tool_calls", None) or []):
-                n = tc.get("name", "")
-                tool_call_counts[n] = tool_call_counts.get(n, 0) + 1
-        repeated = [n for n, c in tool_call_counts.items() if c > 1]
-        if repeated:
-            first_result = tool_results[0].content if tool_results else ""
-            body = first_result if len(first_result) <= _tool_char_limit else first_result[:_tool_char_limit] + "\n...[truncated]"
-            _log_ag.info(f"[REQ:{req_id}] [prepare_msgs] duplicate tool call detected {repeated} — forcing direct answer")
-            synthesis_prompt = (
-                f"Question: {original_question}\n\n"
-                f"Tool Result:\n{body}\n"
-                "The data above is the complete result. Write the final answer to the user's question right now "
-                "based solely on this data. Do NOT call any tools. Do NOT add preamble."
-            )
-            return [HumanMessage(content=_ns_prefix + synthesis_prompt)]
-
         _TOOL_FORMATS = { # Unique prompt for individual tool
             "get_gpu_info": (
-                "Available is not equivalent to being used or in use."
-                "If the table does not specify which pod is attached to the GPU, it means the GPU is available to be used, it is not currently in use"
+                "The table above is the complete and final GPU data. Do NOT call any tool. "
+                "Answer the user's question directly from this table. "
+                "A '-' in ATTACHED PODS means no pod is currently using that GPU — it is available. "
+                "Available is not equivalent to being used or in use. "
+                "If the table does not specify which pod is attached to the GPU, it means the GPU is available."
             ),
             "find_resource": (
                 "Reproduce the command output VERBATIM. "
@@ -366,22 +349,17 @@ def build_agent():
                 "Do NOT just list the pods—the total is the answer to a calculate question."
             ),
             "get_node_capacity": (
-                "EVALUATE the tool results. IF the user is asking to fit a specific pod with requested CPU/Memory,"
-                "You MUST evaluate node capacity using STRICT BOOLEAN logic and use this EXACT output format:"
-                "Node: [Node Name]"
-                "--------------------------------------------------"
-                "CPU: [Available] >= [Requested] -> [TRUE/FALSE],"
-                "RAM: [Available] >= [Requested] -> [TRUE/FALSE],"
-                "Available on node?: [TRUE/FALSE]"
-                "(Repeat the block above for each node evaluated)"
-                "Explanation: [Briefly explain the math results in plain English.]"
-                "Conclusion: [Write your final statement on whether the pod can be scheduled and where.]"
-                "For example if user asks if a pod with 100CPU and 500GB"
-                "CPU: [50] >= [100] -> FALSE"
-                "RAM: [50] >= [500] -> FALSE"
-                "Fits on node: FALSE"
-                "IF the user is just asking a general question about capacity (e.g., how much capacity is available):"
-                "Do NOT use the boolean format. Just provide a helpful summary of the current capacity based on the table."
+                "The table above is the complete and final node capacity data. Do NOT call any tool. "
+                "Answer the user's question directly from this table. "
+                "IF the user is asking to fit a specific pod with requested CPU/Memory, "
+                "evaluate using STRICT BOOLEAN logic with this EXACT format:\n"
+                "Node: [Node Name]\n"
+                "CPU: [Available] >= [Requested] -> [TRUE/FALSE]\n"
+                "RAM: [Available] >= [Requested] -> [TRUE/FALSE]\n"
+                "Available on node?: [TRUE/FALSE]\n"
+                "Conclusion: [Brief explanation]\n"
+                "IF the user is just asking a general question about capacity: "
+                "provide a plain summary of the table. Do NOT use boolean format."
             ),
             "kubectl_exec": (
                 "Reproduce the command output VERBATIM. "
@@ -460,6 +438,23 @@ def build_agent():
         for tc in tcs:
             name, args = tc["name"], dict(tc.get("args", {}) or {})
 
+            # ── Guard: LLM is re-calling a tool it already used this session ──
+            # Skip execution and force a direct answer from the previous result.
+            prev_calls = state.get("tool_calls_made", [])
+            if name in prev_calls:
+                prev_result = next(
+                    (m.content for m in reversed(state["messages"])
+                     if isinstance(m, ToolMessage) and getattr(m, "name", "") == name),
+                    None)
+                if prev_result:
+                    _log_ag.info(
+                        f"[REQ:{state.get('req_id', '')}] [tool_node] "
+                        f"duplicate call to {name!r} detected — skipping execution, forcing direct answer")
+                    updates.append(f"⚡ {name} already called — using previous result")
+                    direct_answer = prev_result
+                    results.append(ToolMessage(content=prev_result, tool_call_id=tc["id"], name=name))
+                    continue
+
             bad_ns = ["cluster", "across the cluster", "entire cluster", "any", "none"]
             safe_ns = str(args.get("namespace") or "").lower()
 
@@ -483,6 +478,23 @@ def build_agent():
                 if name == "kubectl_exec" and "command" in args
                 else f"⚙️ {name}"
             )
+
+            # ── Guard: if this tool was already called earlier in this
+            # conversation, skip re-execution and use the previous result. ────
+            _prev_calls = state.get("tool_calls_made", [])
+            if name in _prev_calls:
+                _log_ag.info(f"[REQ:{state.get('req_id', '')}] [tool_node] duplicate call to {name!r} detected — skipping, forcing direct answer from prior result")
+                # find the most recent ToolMessage for this tool in state messages
+                _prior = next(
+                    (m.content for m in reversed(state.get("messages", []))
+                     if isinstance(m, ToolMessage) and getattr(m, "name", "") == name),
+                    None
+                )
+                if _prior:
+                    direct_answer = _prior
+                    updates.append(f"⚡ Duplicate tool call blocked — using prior result")
+                    break
+                # no prior result found — fall through to normal execution
 
             out = _call_tool(name, args, all_tools)
             _out_str = str(out)
