@@ -1891,17 +1891,14 @@ def _get_top_pods_prometheus(namespace: str, limit: int, sort_by: str,
 
 def get_top_nodes(limit: int = 0, ascending: bool = False,
                   sort_by: str = "cpu", duration: str = "",
-                  scope: str = "node",
                   user_timezone: str = "UTC") -> str:
     """
     Show top (or bottom) nodes by CPU or memory.
 
-    scope="node"    : per-node breakdown (default)
-    scope="cluster" : single cluster-wide aggregate (sum of all nodes)
-
     When duration is empty : live snapshot from metrics-server (like kubectl top nodes).
     When duration is set   : average usage from Prometheus (node-exporter) over that
                              period — always emits §GRAPH§ for the UI chart.
+    'cluster' queries are simply all nodes with limit=0.
     """
     import time as _time
 
@@ -1913,7 +1910,6 @@ def get_top_nodes(limit: int = 0, ascending: bool = False,
     sort_key_label = "memory" if sort_by.lower() == "memory" else "CPU"
     direction      = "lowest" if ascending else "top"
     tz_label       = user_timezone if user_timezone != "UTC" else "UTC"
-    cluster_mode   = scope.strip().lower() == "cluster"
 
     # ── Live snapshot (metrics-server) ────────────────────────────────────────
     if not duration:
@@ -1941,24 +1937,16 @@ def get_top_nodes(limit: int = 0, ascending: bool = False,
             mem_m = _parse_mem_to_mib(        item["usage"].get("memory", "0"))
             rows.append((name, cpu_m, mem_m))
 
-        if cluster_mode:
-            total_cpu = sum(r[1] for r in rows)
-            total_mem = sum(r[2] for r in rows)
-            rows = [("Cluster (all nodes)", total_cpu, total_mem)]
-        else:
-            sort_idx = 2 if sort_key_label == "memory" else 1
-            rows.sort(key=lambda x: x[sort_idx], reverse=not ascending)
-            if limit > 0:
-                rows = rows[:limit]
+        sort_idx = 2 if sort_key_label == "memory" else 1
+        rows.sort(key=lambda x: x[sort_idx], reverse=not ascending)
+        if limit > 0:
+            rows = rows[:limit]
 
         col_node = max(len("NODE"), max(len(r[0]) for r in rows))
         hdr_row  = f"{'NODE':<{col_node}}  {'CPU(m)':>9}  {'MEMORY(MiB)':>12}"
         sep      = "-" * len(hdr_row)
-        title    = (
-            f"Cluster resource usage — live at {now_str}." if cluster_mode else
-            f"Node resource usage — {direction} {len(rows)} node(s) "
-            f"by {sort_key_label} — live at {now_str}."
-        )
+        title    = (f"Node resource usage — {direction} {len(rows)} node(s) "
+                    f"by {sort_key_label} — live at {now_str}.")
         lines    = [title, "```", hdr_row, sep]
         for name, cpu_m, mem_mib in rows:
             lines.append(f"{name:<{col_node}}  {cpu_m:>8}m  {mem_mib:>10.0f}Mi")
@@ -1967,14 +1955,12 @@ def get_top_nodes(limit: int = 0, ascending: bool = False,
         now_ts     = int(_time.time())
         sk_label   = "CPU(m)" if sort_key_label == "CPU" else "Memory(MiB)"
         series_out = [
-            {
-                "label":  name,
-                "values": [[now_ts, float(cpu_m if sort_key_label == "CPU" else mem_mib)]],
-            }
+            {"label": name,
+             "values": [[now_ts, float(cpu_m if sort_key_label == "CPU" else mem_mib)]]}
             for name, cpu_m, mem_mib in rows
         ]
         graph_json = _json.dumps(
-            {"title": f"{'Cluster' if cluster_mode else direction.title()+' '+str(len(rows))+' nodes'} — {sk_label} live",
+            {"title": f"{direction.title()} {len(rows)} nodes — {sk_label} live",
              "unit":  "m" if sort_key_label == "CPU" else "MiB",
              "duration": "live", "series": series_out},
             separators=(",", ":"))
@@ -1983,7 +1969,7 @@ def get_top_nodes(limit: int = 0, ascending: bool = False,
     # ── Historical (Prometheus / node-exporter) ───────────────────────────────
     return _get_top_nodes_prometheus(
         limit=limit, ascending=ascending, sort_by=sort_by,
-        duration=duration, scope=scope, user_timezone=user_timezone)
+        duration=duration, user_timezone=user_timezone)
 
 
 def _find_node_exporter_prometheus_pod() -> tuple[str | None, str | None, str]:
@@ -2008,14 +1994,13 @@ def _find_node_exporter_prometheus_pod() -> tuple[str | None, str | None, str]:
 
 
 def _get_top_nodes_prometheus(limit: int, ascending: bool, sort_by: str,
-                               duration: str, scope: str, user_timezone: str) -> str:
+                               duration: str, user_timezone: str) -> str:
     import time as _time
     from kubernetes.stream import stream as _k8s_stream
 
     sort_key_label = "memory" if sort_by.lower() == "memory" else "CPU"
     direction      = "lowest" if ascending else "top"
     tz_label       = user_timezone if user_timezone != "UTC" else "UTC"
-    cluster_mode   = scope.strip().lower() == "cluster"
 
     dur_map = {"s": 1, "m": 60, "h": 3600, "d": 86400}
     try:
@@ -2113,62 +2098,6 @@ def _get_top_nodes_prometheus(limit: int, ascending: bool, sort_by: str,
         vals = [float(v[1]) for v in values if v[1] not in ("NaN", "Inf", "+Inf", "-Inf")]
         return sum(vals) / len(vals) if vals else 0.0
 
-    # ── PromQL: cluster mode uses no `by` clause → single scalar series ──────
-    if cluster_mode:
-        cpu_results, cpu_err = _query_range(
-            'sum(rate(node_cpu_seconds_total{mode!="idle"}[5m]))')
-        if cpu_err:
-            return f"CPU query failed: {cpu_err}"
-        mem_results, mem_err = _query_range(
-            'sum(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes)')
-        if mem_err:
-            return f"Memory query failed: {mem_err}"
-
-        if not cpu_results and not mem_results:
-            return (f"No node-exporter data found in Prometheus over the last {duration}. "
-                    f"Prometheus pod: {prom_pod} in {prom_ns}.")
-
-        cpu_vals = cpu_results[0].get("values", []) if cpu_results else []
-        mem_vals = mem_results[0].get("values", []) if mem_results else []
-        avg_cpu  = _mean(cpu_vals)
-        avg_mem_gib = _mean(mem_vals) / (1024 ** 3)
-
-        end_ts   = int(_time.time())
-        start_ts = end_ts - dur_sec
-        try:
-            import zoneinfo
-            tz       = zoneinfo.ZoneInfo(user_timezone)
-            from_str = datetime.datetime.fromtimestamp(start_ts, tz=timezone.utc).astimezone(tz).strftime("%H:%M")
-            to_str   = datetime.datetime.fromtimestamp(end_ts,   tz=timezone.utc).astimezone(tz).strftime(f"%H:%M {tz_label}")
-        except Exception:
-            from_str = datetime.datetime.utcfromtimestamp(start_ts).strftime("%H:%M")
-            to_str   = datetime.datetime.utcfromtimestamp(end_ts).strftime("%H:%M UTC")
-
-        header  = f"Cluster resource usage — avg over last {duration} ({from_str}–{to_str})."
-        lines   = [header, "```",
-                   f"  AVG CPU (cores) : {avg_cpu:.2f}",
-                   f"  AVG MEM (GiB)   : {avg_mem_gib:.2f}",
-                   "```"]
-
-        if sort_key_label == "memory":
-            graph_vals  = [[float(ts), float(v) / (1024 ** 3)]
-                           for ts, v in mem_vals if v not in ("NaN", "Inf", "+Inf", "-Inf")]
-            graph_title = f"Cluster memory usage (GiB) — {from_str}–{to_str}"
-            graph_unit  = "GiB"
-        else:
-            graph_vals  = [[float(ts), float(v)]
-                           for ts, v in cpu_vals if v not in ("NaN", "Inf", "+Inf", "-Inf")]
-            graph_title = f"Cluster CPU usage (cores) — {from_str}–{to_str}"
-            graph_unit  = "cores"
-
-        series_out = [{"label": "Cluster", "values": graph_vals}]
-        graph_json = _json.dumps(
-            {"title": graph_title, "unit": graph_unit,
-             "duration": duration, "series": series_out},
-            separators=(",", ":"))
-        return "\n".join(lines) + f"\n§GRAPH§{graph_json}§GRAPH§"
-
-    # ── PromQL: per-node breakdown ────────────────────────────────────────────
     cpu_results, cpu_err = _query_range(
         'sum by (instance) (rate(node_cpu_seconds_total{mode!="idle"}[5m]))')
     if cpu_err:

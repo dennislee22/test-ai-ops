@@ -998,8 +998,7 @@ K8S_TOOL_METADATA: dict = {
             "When duration is empty: uses metrics-server for a live snapshot (instant, like kubectl top nodes). "
             "When duration is set: queries Prometheus (node-exporter) for average usage over that period — "
             "use this when the user mentions a time window OR asks for a graph/chart of node metrics. "
-            "Supports scope='cluster' to show total cluster-wide CPU and memory as a single aggregate "
-            "instead of per-node breakdown. "
+            "When the user asks about 'cluster' CPU or memory, treat it as all nodes (limit=0). "
             "Use for queries like: "
             "'top nodes by cpu', "
             "'which node uses the most memory', "
@@ -1009,8 +1008,7 @@ K8S_TOOL_METADATA: dict = {
             "'which node has the least load', "
             "'lowest node cpu', "
             "'show cluster cpu usage', "
-            "'total cluster memory usage over the last 24 hours', "
-            "'cluster-wide cpu trend'. "
+            "'total cluster memory usage over the last 24 hours'. "
             "Do NOT use get_node_capacity for live usage — that shows allocatable vs requested. "
             "IMPORTANT: When the user asks for a graph or chart of node usage, "
             "ALWAYS set duration (e.g. '1h') to get the time-series data needed for the graph."
@@ -1019,7 +1017,7 @@ K8S_TOOL_METADATA: dict = {
             "limit":     {
                 "type":        "integer",
                 "default":     0,
-                "description": "Max nodes to return. 0 (default) means all nodes. Ignored when scope='cluster'.",
+                "description": "Max nodes to return. 0 (default) means all nodes.",
             },
             "sort_by":   {
                 "type":        "string",
@@ -1030,16 +1028,6 @@ K8S_TOOL_METADATA: dict = {
                 "type":        "boolean",
                 "default":     False,
                 "description": "When True, show lowest nodes first. Set True for: 'lowest node', 'least load', 'which node has most headroom'.",
-            },
-            "scope":     {
-                "type":        "string",
-                "default":     "node",
-                "description": (
-                    "Aggregation scope. "
-                    "'node' (default): per-node breakdown. "
-                    "'cluster': single cluster-wide aggregate — use when user asks about "
-                    "total cluster CPU/memory, cluster-wide usage, or overall cluster load."
-                ),
             },
             "duration":  {
                 "type":        "string",
