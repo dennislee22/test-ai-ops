@@ -39,7 +39,7 @@ BYPASSABLE_TOOLS = {
 # Note: They must ALSO be listed in BYPASSABLE_TOOLS above.
 UNCONDITIONAL_BYPASS = {
     "run_cluster_health",
-    "get_node_info",
+    #"get_node_info", --> test cordon 
     "get_node_taints",
     "get_pod_logs",
     "describe_pod",
