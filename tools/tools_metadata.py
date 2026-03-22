@@ -11,7 +11,7 @@ from tools.tools_k8s import (
     get_coredns_health, get_pv_usage, find_resource, get_pod_containers_resources, get_cronjob_status,
     query_prometheus_metrics, kubectl_exec, exec_db_query, get_pod_storage, get_pdb_status,
     get_certificate_status, get_control_plane_status, get_network_policy_status, get_webhook_health,
-    get_top_pods, get_top_nodes,
+    get_top_pods, get_top_nodes, get_node_metrics_prometheus,
 )
 
 _P_NS = {
@@ -1071,6 +1071,56 @@ K8S_TOOL_METADATA: dict = {
                 "type":        "boolean",
                 "default":     False,
                 "description": "When True, show least-loaded nodes first. Set True for: 'lowest node', 'least load', 'which node has most headroom'.",
+            },
+            "user_timezone": {
+                "type":        "string",
+                "default":     "UTC",
+                "description": "User's IANA timezone. Auto-injected from browser — do not set manually.",
+            },
+        },
+    },
+
+    "get_node_metrics_prometheus": {
+        "fn":          get_node_metrics_prometheus,
+        "description": (
+            "Show per-node CPU and memory usage over a time window using node-exporter metrics "
+            "scraped by the operator-managed Prometheus (infra-prometheus namespace). "
+            "CPU is reported in cores (float), memory in GiB. "
+            "Node instances are resolved to human-readable FQDNs via kube_node_info. "
+            "ALWAYS emits both a ranked table AND a time-series graph in the output. "
+            "Use for queries like: "
+            "'show node cpu usage', "
+            "'node resource graph over the last hour', "
+            "'which node uses the most cpu', "
+            "'node memory usage past 6 hours', "
+            "'show me a graph of node cpu'. "
+            "Do NOT use get_top_nodes for historical or graph data — that tool is live/snapshot only. "
+            "Use this tool whenever the user asks for a time window or graph of node-level metrics."
+        ),
+        "parameters": {
+            "duration": {
+                "type":        "string",
+                "default":     "1h",
+                "description": (
+                    "Time window for historical data. "
+                    "'1h' (default), '6h', '24h', '7d'. "
+                    "ALWAYS set when the user mentions a time period or asks for a graph."
+                ),
+            },
+            "step": {
+                "type":        "string",
+                "default":     "60s",
+                "description": "Prometheus query resolution step. Default '60s'. Use '300s' for windows > 12h.",
+            },
+            "ascending": {
+                "type":        "boolean",
+                "default":     False,
+                "description": "When True, show lowest CPU nodes first.",
+            },
+            "limit": {
+                "type":        "integer",
+                "default":     0,
+                "description": "Max nodes to return. 0 means all nodes.",
             },
             "user_timezone": {
                 "type":        "string",
