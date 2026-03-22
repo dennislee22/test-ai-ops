@@ -3037,26 +3037,87 @@ inpEl.addEventListener('keydown', e=>{
           `</svg><div style="display:flex;flex-direction:column;gap:2px;margin-top:4px">${legend}</div></div>`;
       }
 
+      function buildStatsTable(series, unit, title) {
+        if (!series || !series.length)
+          return '<div style="font-size:10px;color:#94a3b8;padding:4px 0">No data.</div>';
+        const fmt=v=>unit==='m'?(v>=1000?`${(v/1000).toFixed(2)}C`:`${v.toFixed(1)}m`)
+                    :unit==='MiB'?(v>=1024?`${(v/1024).toFixed(2)}Gi`:`${v.toFixed(1)}Mi`)
+                    :unit==='GiB'?`${v.toFixed(2)}Gi`
+                    :unit==='cores'?`${v.toFixed(2)}c`
+                    :unit==='MB/s'?`${v.toFixed(2)}MB/s`
+                    :v.toFixed(2);
+        const stats = series.map(s => {
+          const vals = s.values.map(([,v])=>v);
+          const avg  = vals.reduce((a,b)=>a+b,0)/vals.length;
+          const hi   = Math.max(...vals);
+          const lo   = Math.min(...vals);
+          return { label: s.label, avg, hi, lo };
+        });
+        stats.sort((a,b)=>b.avg-a.avg);
+        const topAvg = stats[0], lowAvg = stats[stats.length-1];
+        const topHi  = [...stats].sort((a,b)=>b.hi-a.hi)[0];
+        const topLo  = [...stats].sort((a,b)=>a.lo-b.lo)[0];
+        const rows = stats.map((s,i) => {
+          const bg = i===0?'background:#fef9c3':'';
+          return `<tr style="${bg}"><td>${s.label}</td><td style="text-align:right">${fmt(s.avg)}</td>`+
+                 `<td style="text-align:right;color:#dc2626">${fmt(s.hi)}</td>`+
+                 `<td style="text-align:right;color:#16a34a">${fmt(s.lo)}</td></tr>`;
+        }).join('');
+        return `<div style="margin-bottom:6px">`+
+          `<div style="font-size:9.5px;font-weight:700;color:#075985;margin-bottom:3px">${title} — Summary</div>`+
+          `<table style="font-size:8.5px;width:100%;border-collapse:collapse;margin-bottom:4px">`+
+          `<thead><tr>`+
+          `<th style="background:#0369a1;color:#fff;padding:3px 5px;text-align:left">Name</th>`+
+          `<th style="background:#0369a1;color:#fff;padding:3px 5px;text-align:right">Avg</th>`+
+          `<th style="background:#dc2626;color:#fff;padding:3px 5px;text-align:right">Peak</th>`+
+          `<th style="background:#16a34a;color:#fff;padding:3px 5px;text-align:right">Lowest</th>`+
+          `</tr></thead><tbody>${rows}</tbody></table>`+
+          `<div style="font-size:8px;color:#64748b">` +
+          `Highest avg: <b>${topAvg.label}</b> (${fmt(topAvg.avg)}) &nbsp;|&nbsp; `+
+          `Lowest avg: <b>${lowAvg.label}</b> (${fmt(lowAvg.avg)}) &nbsp;|&nbsp; `+
+          `Peak: <b>${topHi.label}</b> (${fmt(topHi.hi)}) &nbsp;|&nbsp; `+
+          `Most stable low: <b>${topLo.label}</b> (${fmt(topLo.lo)})`+
+          `</div></div>`;
+      }
+
       const chartsCpu1d=buildLineChart(charts.cpu_1d,'m',  'CPU Usage — Last 24 Hours (top 10 pods)');
+      const statsCpu1d =buildStatsTable(charts.cpu_1d,'m', 'Pod CPU — Last 24 Hours');
       const chartsMem1d=buildLineChart(charts.mem_1d,'MiB','Memory Usage — Last 24 Hours (top 10 pods)');
+      const statsMem1d =buildStatsTable(charts.mem_1d,'MiB','Pod Memory — Last 24 Hours');
       const chartsCpu1w=buildLineChart(charts.cpu_1w,'m',  'CPU Usage — Last 7 Days (top 10 pods)');
+      const statsCpu1w =buildStatsTable(charts.cpu_1w,'m', 'Pod CPU — Last 7 Days');
       const chartsMem1w=buildLineChart(charts.mem_1w,'MiB','Memory Usage — Last 7 Days (top 10 pods)');
+      const statsMem1w =buildStatsTable(charts.mem_1w,'MiB','Pod Memory — Last 7 Days');
       const chartsCpu1m=buildLineChart(charts.cpu_1m,'m',  'CPU Usage — Last 30 Days (top 10 pods)');
+      const statsCpu1m =buildStatsTable(charts.cpu_1m,'m', 'Pod CPU — Last 30 Days');
       const chartsMem1m=buildLineChart(charts.mem_1m,'MiB','Memory Usage — Last 30 Days (top 10 pods)');
+      const statsMem1m =buildStatsTable(charts.mem_1m,'MiB','Pod Memory — Last 30 Days');
 
       const chartsNodeCpu1d=buildLineChart(charts.node_cpu_1d,'cores','Node CPU Usage — Last 24 Hours');
+      const statsNodeCpu1d =buildStatsTable(charts.node_cpu_1d,'cores','Node CPU — Last 24 Hours');
       const chartsNodeMem1d=buildLineChart(charts.node_mem_1d,'GiB',  'Node Memory Usage — Last 24 Hours');
+      const statsNodeMem1d =buildStatsTable(charts.node_mem_1d,'GiB', 'Node Memory — Last 24 Hours');
       const chartsNodeCpu1w=buildLineChart(charts.node_cpu_1w,'cores','Node CPU Usage — Last 7 Days');
+      const statsNodeCpu1w =buildStatsTable(charts.node_cpu_1w,'cores','Node CPU — Last 7 Days');
       const chartsNodeMem1w=buildLineChart(charts.node_mem_1w,'GiB',  'Node Memory Usage — Last 7 Days');
+      const statsNodeMem1w =buildStatsTable(charts.node_mem_1w,'GiB', 'Node Memory — Last 7 Days');
       const chartsNodeCpu1m=buildLineChart(charts.node_cpu_1m,'cores','Node CPU Usage — Last 30 Days');
+      const statsNodeCpu1m =buildStatsTable(charts.node_cpu_1m,'cores','Node CPU — Last 30 Days');
       const chartsNodeMem1m=buildLineChart(charts.node_mem_1m,'GiB',  'Node Memory Usage — Last 30 Days');
+      const statsNodeMem1m =buildStatsTable(charts.node_mem_1m,'GiB', 'Node Memory — Last 30 Days');
 
       const chartsDiskRead1d =buildLineChart(charts.disk_read_1d, 'MB/s','Node Disk Read — Last 24 Hours');
+      const statsDiskRead1d  =buildStatsTable(charts.disk_read_1d,'MB/s','Node Disk Read — Last 24 Hours');
       const chartsDiskWrite1d=buildLineChart(charts.disk_write_1d,'MB/s','Node Disk Write — Last 24 Hours');
+      const statsDiskWrite1d =buildStatsTable(charts.disk_write_1d,'MB/s','Node Disk Write — Last 24 Hours');
       const chartsDiskRead1w =buildLineChart(charts.disk_read_1w, 'MB/s','Node Disk Read — Last 7 Days');
+      const statsDiskRead1w  =buildStatsTable(charts.disk_read_1w,'MB/s','Node Disk Read — Last 7 Days');
       const chartsDiskWrite1w=buildLineChart(charts.disk_write_1w,'MB/s','Node Disk Write — Last 7 Days');
+      const statsDiskWrite1w =buildStatsTable(charts.disk_write_1w,'MB/s','Node Disk Write — Last 7 Days');
       const chartsDiskRead1m =buildLineChart(charts.disk_read_1m, 'MB/s','Node Disk Read — Last 30 Days');
+      const statsDiskRead1m  =buildStatsTable(charts.disk_read_1m,'MB/s','Node Disk Read — Last 30 Days');
       const chartsDiskWrite1m=buildLineChart(charts.disk_write_1m,'MB/s','Node Disk Write — Last 30 Days');
+      const statsDiskWrite1m =buildStatsTable(charts.disk_write_1m,'MB/s','Node Disk Write — Last 30 Days');
 
       const now      = new Date();
       const datePart = now.toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'});
@@ -3111,22 +3172,31 @@ ${reportText}
 <hr/>
 <h2>Pod Resource Usage &mdash; Last 24 Hours</h2>
 <div class="chart-grid chart-section">${chartsCpu1d}${chartsMem1d}</div>
+<div class="chart-grid chart-section">${statsCpu1d}${statsMem1d}</div>
 <h2>Pod Resource Usage &mdash; Last 7 Days</h2>
 <div class="chart-grid chart-section">${chartsCpu1w}${chartsMem1w}</div>
+<div class="chart-grid chart-section">${statsCpu1w}${statsMem1w}</div>
 <h2>Pod Resource Usage &mdash; Last 30 Days</h2>
 <div class="chart-grid chart-section">${chartsCpu1m}${chartsMem1m}</div>
+<div class="chart-grid chart-section">${statsCpu1m}${statsMem1m}</div>
 <h2>Node CPU &amp; Memory Usage &mdash; Last 24 Hours</h2>
 <div class="chart-grid chart-section">${chartsNodeCpu1d}${chartsNodeMem1d}</div>
+<div class="chart-grid chart-section">${statsNodeCpu1d}${statsNodeMem1d}</div>
 <h2>Node CPU &amp; Memory Usage &mdash; Last 7 Days</h2>
 <div class="chart-grid chart-section">${chartsNodeCpu1w}${chartsNodeMem1w}</div>
+<div class="chart-grid chart-section">${statsNodeCpu1w}${statsNodeMem1w}</div>
 <h2>Node CPU &amp; Memory Usage &mdash; Last 30 Days</h2>
 <div class="chart-grid chart-section">${chartsNodeCpu1m}${chartsNodeMem1m}</div>
+<div class="chart-grid chart-section">${statsNodeCpu1m}${statsNodeMem1m}</div>
 <h2>Node Disk I/O &mdash; Last 24 Hours</h2>
 <div class="chart-grid chart-section">${chartsDiskRead1d}${chartsDiskWrite1d}</div>
+<div class="chart-grid chart-section">${statsDiskRead1d}${statsDiskWrite1d}</div>
 <h2>Node Disk I/O &mdash; Last 7 Days</h2>
 <div class="chart-grid chart-section">${chartsDiskRead1w}${chartsDiskWrite1w}</div>
+<div class="chart-grid chart-section">${statsDiskRead1w}${statsDiskWrite1w}</div>
 <h2>Node Disk I/O &mdash; Last 30 Days</h2>
 <div class="chart-grid chart-section">${chartsDiskRead1m}${chartsDiskWrite1m}</div>
+<div class="chart-grid chart-section">${statsDiskRead1m}${statsDiskWrite1m}</div>
 <div class="end-of-report">&mdash; End of Report &mdash;</div>
 </body></html>`;
 
